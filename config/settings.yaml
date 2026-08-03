@@ -1,0 +1,19 @@
+app:
+  name: ra-agent
+  host: 0.0.0.0  # 监听所有网卡，外部可访问
+  port: 8000
+  data_dir: ./data  # 本地文件（Chroma 向量库等）统一放这里
+
+database:
+  url: postgresql+psycopg://ra:ra@localhost:5432/ra_agent
+
+redis:
+  url: redis://localhost:6379/0
+
+vector_store:
+  provider: chroma
+  chroma:
+    persist_dir: ./data/chroma
+
+tracing:
+  max_logs: 1000
