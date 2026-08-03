@@ -1,0 +1,88 @@
+from email.policy import default
+import uuid
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, session
+
+from app.models.base import Base, utcnow
+
+def _uuid() -> str:
+    return uuid.uuid4().hex    # 32 位十六进制字符串，作为主键
+
+class User(Base):
+    """用户： 所有资源（KB/会话/记忆/LLM配置）都归属于某个用户。"""
+    __talename__ == "users"
+
+    id: Mapped[str] = mapped_column(String(36), Primary_key=True, default=_uuid)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(256))
+    role: Mapped[str] = mapped_column(String(16), default="user")   # user | admin
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class UserSession(Base):
+    """会话：LangGraph 的 thread_id 落库，便于追踪与续聊。"""
+    __tablename__ = "sessions"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class KnowledgeBase(Base):
+    """知识库：固化[所用嵌入模型]标注，重建时保留旧库"""
+    __tablename__ = "kbs"
+
+    kb_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128))
+    scope: Mapped[str] = mapped_column(String(16), default="public")    # public | private
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True           # 私人库属主
+    )
+    embedding_provider: Mapped[str] = mapped_column(String(32), default="default")
+    embedding_model_id: Mapped[str] = mapped_column(String(64))
+    embedding_dim: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="indexing")  # ready | indexing | reembedding | failed   状态
+    source_doc_id: Mapped[list] = mapped_column(JSON, default=list)  # 原文档引用
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class UserLLMConfig(Base):
+    """用户自定义 LLM 配置。"""
+    __tablename__ = "user_llm_config"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    api_key: Mapped[str] = mapped_column(String(512))
+    base_url: Mapped[str] = mapped_column(String(256))
+    model_id: Mapped[str] = mapped_column(String(64))
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class ToolCallLog(Base):
+    """调用追踪：记录 LLM/工具/检索每次调用，parent 成树。"""
+    __tablename__ = "tool_call_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(16))    # llm | tool | retrieve | kb
+    name: Mapped[str] = mapped_column(String(64))
+    session_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    args: Mapped[dict] = mapped_column(JSON, default=dict)
+    output: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class Memory(Base):
+    """长记忆：用户级命名空间，跨会话读取。"""
+    __tablename__ = "memories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    key: Mapped[str] = mapped_column(String(64))         # 记忆条目名，如 research_topic
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)
