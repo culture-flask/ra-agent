@@ -19,5 +19,5 @@ def setup_logging(level: int = logging.INFO, log_file: str | None = "logs/app.lo
         fh.setFormatter(fmt)
         root.addHandler(fh)
     
-def get_loger(name: str) -> logging.Logger:
+def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
