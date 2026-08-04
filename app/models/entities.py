@@ -12,11 +12,11 @@ def _uuid() -> str:
 
 class User(Base):
     """用户： 所有资源（KB/会话/记忆/LLM配置）都归属于某个用户。"""
-    __talename__ == "users"
+    __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(String(36), Primary_key=True, default=_uuid)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(256))
+    password_hash: Mapped[str] = mapped_column(String(256))   # 第 2 天存哈希而非明文
     role: Mapped[str] = mapped_column(String(16), default="user")   # user | admin
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -36,15 +36,16 @@ class KnowledgeBase(Base):
 
     kb_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(128))
-    scope: Mapped[str] = mapped_column(String(16), default="public")    # public | private
+    scope: Mapped[str] = mapped_column(String(16), default="public")   # public | private
     owner_user_id: Mapped[str | None] = mapped_column(
-        ForeignKey("users.id"), nullable=True, index=True           # 私人库属主
-    )
-    embedding_provider: Mapped[str] = mapped_column(String(32), default="default")
+        ForeignKey("users.id"), nullable=True, index=True)              # 私人库属主
+    category_id: Mapped[str] = mapped_column(String(64), default="default")
+    embedding_provider: Mapped[str] = mapped_column(String(32))        # local | doubao | ...
     embedding_model_id: Mapped[str] = mapped_column(String(64))
     embedding_dim: Mapped[int] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(16), default="indexing")  # ready | indexing | reembedding | failed   状态
-    source_doc_id: Mapped[list] = mapped_column(JSON, default=list)  # 原文档引用
+    status: Mapped[str] = mapped_column(String(16), default="indexing")
+    #                       ↑ ready | indexing | reembedding | failed（状态机）
+    source_doc_ids: Mapped[list] = mapped_column(JSON, default=list)   # 原文档引用
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 class UserLLMConfig(Base):
@@ -53,8 +54,8 @@ class UserLLMConfig(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    provider: Mapped[str] = mapped_column(String(32))
-    api_key: Mapped[str] = mapped_column(String(512))
+    provider: Mapped[str] = mapped_column(String(32))                  # openai/qwen/...
+    api_key: Mapped[str] = mapped_column(String(512))                  # AES-256 加密后
     base_url: Mapped[str] = mapped_column(String(256))
     model_id: Mapped[str] = mapped_column(String(64))
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -65,7 +66,7 @@ class ToolCallLog(Base):
     __tablename__ = "tool_call_log"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    kind: Mapped[str] = mapped_column(String(16))    # llm | tool | retrieve | kb
+    kind: Mapped[str] = mapped_column(String(16))       # llm | tool | retrieve | kb
     name: Mapped[str] = mapped_column(String(64))
     session_id: Mapped[str] = mapped_column(String(36), index=True)
     user_id: Mapped[str] = mapped_column(String(36), index=True)
