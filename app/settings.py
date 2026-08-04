@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     vector_store_provider: str = "chroma"
     chroma_persist_dir: Path = Path("./data/chroma")
     max_logs: int = 1000
+    jwt_secret: str = "dev-secret-change-me-to-32+bytes!!"
 
     @classmethod
     def load(cls) -> "Settings":
@@ -47,3 +48,5 @@ class Settings(BaseSettings):
                 if key not in merged.model_fields_set:
                     setattr(merged, key, value)        # 环境已设置的字段，yaml不再覆盖
         return merged
+
+settings = Settings.load()
