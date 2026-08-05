@@ -3,6 +3,7 @@
 import yaml
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -20,6 +21,12 @@ class Settings(BaseSettings):
     chroma_persist_dir: Path = Path("./data/chroma")
     max_logs: int = 1000
     jwt_secret: str = "dev-secret-change-me-to-32+bytes!!"
+    llm_system_default: dict = Field(default_factory=dict)
+    llm_api_key: str = ""
+    embedding_default_model: str = "doubao"
+    embedding_cloud: dict = Field(default_factory=dict)
+    embedding_local_default_dim: int = 384
+    embedding_api_key: str = ""
 
     @classmethod
     def load(cls) -> "Settings":
@@ -43,6 +50,11 @@ class Settings(BaseSettings):
                 "vector_store_provider": raw["vector_store"]["provider"],
                 "chroma_persist_dir": raw["vector_store"]["chroma"]["persist_dir"],
                 "max_logs": raw["tracing"]["max_logs"],
+                "llm_system_default": raw["llm"]["system_default"],
+                "embedding_default_provider": raw["embedding"]["default_provider"],
+                "embedding_default_model": raw["embedding"]["default_model"],
+                "embedding_cloud": raw["embedding"]["cloud"],
+                "embedding_local_default_dim": raw["embedding"]["local"]["default_dim"],
             }
             for key, value in yaml_values.items():
                 if key not in merged.model_fields_set:

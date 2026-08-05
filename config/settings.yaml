@@ -17,3 +17,20 @@ vector_store:
 
 tracing:
   max_logs: 1000
+
+llm:
+  system_default:
+    provider: sensenova
+    base_url: https://token.sensenova.cn/v1
+    model_id: deepseek-v4-flash
+
+embedding:
+  default_provider: doubao
+  default_model: doubao-embedding-vision
+  cloud:
+    doubao:
+      base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+      model_id: doubao-embedding-vision
+      dim: 2048
+  local:
+    default_dim: 384
