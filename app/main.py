@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.core.errors import register_exception_handlers
 from app.core.logging import get_logger, setup_logging
 from app.settings import Settings
+from app.api.auth import router as auth_router
 
 logger = get_logger("main")
 
@@ -22,7 +23,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ra-agent", version="0.1.0", lifespan=lifespan)
 register_exception_handlers(app)           # 第 10 节实现
-
+app.include_router(auth_router)
 
 @app.get("/health")
 async def health():
