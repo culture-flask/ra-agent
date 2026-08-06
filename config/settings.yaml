@@ -32,5 +32,9 @@ embedding:
       base_url: https://ark.cn-beijing.volces.com/api/coding/v3
       model_id: doubao-embedding-vision
       dim: 2048
+    ollama:
+      base_url: http://100.85.4.71:11434/v1
+      model_id: qwen3-embedding:8b
+      dim: 4096
   local:
     default_dim: 384

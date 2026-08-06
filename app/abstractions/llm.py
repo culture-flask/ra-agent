@@ -23,6 +23,7 @@ class LLMFactory:
             base_url=cfg.base_url,
             temperature=0.3,
             streaming=True,
+            request_timeout=120,
         )
 
 

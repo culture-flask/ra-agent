@@ -7,6 +7,7 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import get_logger, setup_logging
 from app.settings import Settings
 from app.api.auth import router as auth_router
+from app.core.net import apply_proxy
 
 logger = get_logger("main")
 
@@ -15,6 +16,7 @@ logger = get_logger("main")
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时/关闭时执行。"""
     settings = Settings.load()
+    apply_proxy(settings)          # 外部网络代理
     app.state.settings = settings          # 挂到 app 上，路由里用 request.app.state.settings 取
     logger.info("starting %s", settings.app_name)
     yield

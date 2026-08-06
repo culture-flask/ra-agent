@@ -7,3 +7,4 @@ logs/
 .pytest_cache/
 PLAN.md
 tutorials/
+manual_test.py

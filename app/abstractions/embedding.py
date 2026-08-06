@@ -36,8 +36,29 @@ class EmbeddingModel(ABC):
         outer = self
 
         class _Fn(ChromaFn):
+            def __init__(self):
+                pass
+
             def __call__(self, inputs):
                 return outer.embed_texts(list(inputs))
+
+            @staticmethod
+            def name():
+                """Chroma 在类级别调用 name()（官方实现同款签名）。"""
+                return f"ra_{outer.meta.provider}_{outer.meta.model_id}"
+
+            def get_config(self):
+                """Chroma 序列化配置：记录所用模型，便于回溯 collection 绑定的模型。"""
+                return {
+                    "provider": outer.meta.provider,
+                    "model_id": outer.meta.model_id,
+                    "dim": outer.meta.dim,
+                }
+
+            @classmethod
+            def build_from_config(cls, config):
+                """Chroma 反序列化（未来版本从配置重建嵌入函数）。"""
+                return cls()
 
         return _Fn()
 

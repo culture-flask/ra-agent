@@ -23,10 +23,14 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me-to-32+bytes!!"
     llm_system_default: dict = Field(default_factory=dict)
     llm_api_key: str = ""
-    embedding_default_model: str = "doubao"
+    embedding_default_provider: str = "doubao"
+    embedding_default_model: str = "doubao-embedding-vision"
     embedding_cloud: dict = Field(default_factory=dict)
     embedding_local_default_dim: int = 384
     embedding_api_key: str = ""
+    http_proxy: str = ""
+    https_proxy: str = ""
+    no_proxy: str = "localhost,127.0.0.1"
 
     @classmethod
     def load(cls) -> "Settings":
