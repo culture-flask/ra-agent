@@ -1,0 +1,15 @@
+from typing import Annotated, TypedDict
+
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+
+
+class AgentState(TypedDict, total=False):
+    """LangGraph 图状态"""
+    user_id: str
+    session_id: str
+    query: str                              # 用户本次提问
+    messages: Annotated[list[BaseMessage], add_messages]   # 对话历史（自动追加）
+    retrievals: list[dict]                  # 两级 KB 检索结果（带 scope 标签）
+    needs_retrieval: bool                   # supervisor 的路由决策
+    answer: str                             # 最终答复

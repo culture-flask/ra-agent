@@ -1,4 +1,3 @@
-# 嵌入模型抽象
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -7,14 +6,14 @@ from openai import OpenAI
 
 @dataclass
 class EmbeddingMeta:
-    provider: str        # "local" | "openai" | "qwen" ...
+    provider: str        # "local" | "doubao" | "openai" | "qwen" ...
     model_id: str
     dim: int
     base_url: str | None = None
 
 
 class EmbeddingModel(ABC):
-    """嵌入模型抽象接口：本地/云端两类实现，业务不感知来源。"""
+    """嵌入模型抽象接口（架构文档 §11.1）：本地/云端两类实现，业务不感知来源。"""
 
     def __init__(self, meta: EmbeddingMeta):
         self.meta = meta
@@ -66,13 +65,41 @@ class EmbeddingModel(ABC):
 class CloudEmbeddingModel(EmbeddingModel):
     """云端 API：api_key + base_url + model_id（OpenAI 兼容协议）。"""
 
+    BATCH_SIZE = 10      # doubao 单次 input 上限 10 条（实测；各家不同，保守取 10）
+    BATCH_DELAY = 5.0    # 批次间隔秒数：防 429 限流（测试密钥 RPM 低，实测 0.5s 仍触发）
+    MAX_RETRIES = 10      # 429 重试次数（指数退避）
+
     def __init__(self, meta: EmbeddingMeta, api_key: str):
         super().__init__(meta)
         self._client = OpenAI(api_key=api_key, base_url=meta.base_url)
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        resp = self._client.embeddings.create(model=self.meta.model_id, input=texts)
-        return [d.embedding for d in resp.data]
+        """分批嵌入：一次最多 BATCH_SIZE 条，超出自动切片并间隔发送（防限流）。"""
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self.BATCH_SIZE):
+            batch = texts[i:i + self.BATCH_SIZE]
+            out.extend(self._embed_batch_with_retry(batch))
+            if i + self.BATCH_SIZE < len(texts):
+                import time
+                time.sleep(self.BATCH_DELAY)
+        return out
+
+    def _embed_batch_with_retry(self, batch: list[str]) -> list[list[float]]:
+        """单批嵌入：429 限流时按指数退避重试，其他错误直接抛。"""
+        import time
+
+        from openai import RateLimitError
+
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                resp = self._client.embeddings.create(
+                    model=self.meta.model_id, input=batch)
+                return [d.embedding for d in resp.data]
+            except RateLimitError:
+                if attempt == self.MAX_RETRIES - 1:
+                    raise
+                time.sleep(2 ** attempt)      # 退避：1s → 2s
+        raise RuntimeError("unreachable")
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_texts([text])[0]
@@ -106,7 +133,7 @@ class LocalEmbeddingModel(EmbeddingModel):
 
 
 class EmbeddingFactory:
-    """按 KB 标注的 EmbeddingMeta 构建模型。"""
+    """按 KB 标注的 EmbeddingMeta 构建模型（架构文档 §11.1）。"""
 
     @staticmethod
     def build(meta: EmbeddingMeta, secrets: dict[str, str]) -> EmbeddingModel:

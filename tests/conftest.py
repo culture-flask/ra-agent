@@ -18,5 +18,6 @@ def clean_users():
     这是"测试可重复"的最简单方案；更完整的"每个测试事务回滚"技术在第 7 天讲。
     """
     with engine.begin() as conn:          # 事务：DELETE 执行后自动提交
+        conn.execute(text("DELETE FROM kbs"))       # 先删子表(有外键指向 users)
         conn.execute(text("DELETE FROM users"))
     yield
