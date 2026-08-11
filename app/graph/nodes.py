@@ -1,6 +1,7 @@
 from dataclasses import dataclass
+import json
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage,ToolMessage
 
 from app.core.events import emit
 from app.graph.state import AgentState
@@ -12,6 +13,8 @@ class WorkflowContext:
     settings: object
     llm_service: object
     kb_service: object
+    mcp_adapter: object = None     
+    tracer: object = None          
 
 
 def _build_system_prompt(state: AgentState) -> str:
@@ -35,6 +38,23 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
 def route_supervisor(state: AgentState) -> str:
     return "retrieve" if state.get("needs_retrieval") else "generate"
 
+def route_after_generate(state: AgentState) -> str:
+    """LLM 要调工具 → 走 tool_executor；否则结束。"""
+    last = state["messages"][-1]
+    return "tool_executor" if getattr(last, "tool_calls", None) else "done"
+
+
+async def tool_executor_node(ctx: WorkflowContext, state: AgentState) -> dict:
+    """执行 LLM 请求的工具：经 MCPToolAdapter → MCP tools/call，结果回灌（§7.6）。"""
+    last = state["messages"][-1]
+    results = []
+    for call in last.tool_calls:
+        emit("tool_start", {"name": call["name"], "args": call["args"]})
+        out = await ctx.mcp_adapter.call(call["name"], call["args"],
+                                         state["session_id"], state["user_id"])
+        results.append(ToolMessage(content=json.dumps(out, ensure_ascii=False),
+                                   tool_call_id=call["id"]))
+    return {"messages": results}
 
 async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """两级 KB 合并检索：public + 本人 private，结果带 scope 标签（引用溯源）。"""
@@ -50,6 +70,15 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
 async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """用（用户级）LLM 生成答复：系统提示词带记忆/检索结果 + 用户消息。"""
     model = ctx.llm_service.get_chat_model(state["user_id"])
+    if ctx.mcp_adapter is not None:
+        schemas = await ctx.mcp_adapter.schemas_for_llm()
+        if schemas:
+            model = model.bind_tools(schemas)      # 告诉 LLM"你有这些工具可用"
     system = SystemMessage(content=_build_system_prompt(state))
+    if ctx.tracer is not None:
+        log_id = ctx.tracer.start("llm", getattr(model, "model_name", "chat"),
+                                  state["session_id"], state["user_id"])
     resp = await model.ainvoke([system] + state["messages"])
+    if ctx.tracer is not None:
+        ctx.tracer.success(log_id, str(resp.content or "")[:2000])
     return {"messages": [resp], "answer": str(resp.content) if resp.content else ""}

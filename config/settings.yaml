@@ -38,3 +38,9 @@ embedding:
       dim: 4096
   local:
     default_dim: 384
+
+mcp_servers:
+  research:
+    transport: stdio
+    command: python
+    args: ["servers/research_server.py"]

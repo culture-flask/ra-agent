@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     http_proxy: str = ""
     https_proxy: str = ""
     no_proxy: str = "localhost,127.0.0.1"
+    mcp_servers: dict = Field(default_factory=dict)
 
     @classmethod
     def load(cls) -> "Settings":
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
                 "embedding_default_model": raw["embedding"]["default_model"],
                 "embedding_cloud": raw["embedding"]["cloud"],
                 "embedding_local_default_dim": raw["embedding"]["local"]["default_dim"],
+                "mcp_servers": raw.get("mcp_servers", {}),
             }
             for key, value in yaml_values.items():
                 if key not in merged.model_fields_set:

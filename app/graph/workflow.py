@@ -6,8 +6,10 @@ from app.graph.nodes import (
     WorkflowContext,
     generate_node,
     retrieve_node,
+    route_after_generate,
     route_supervisor,
     supervisor_node,
+    tool_executor_node,
 )
 from app.graph.state import AgentState
 
@@ -28,16 +30,20 @@ async def build_graph(ctx: WorkflowContext) -> StateGraph:
     async def _supervisor(s): return await supervisor_node(ctx, s)
     async def _retrieve(s): return await retrieve_node(ctx, s)
     async def _generate(s): return await generate_node(ctx, s)
+    async def _tool_executor(s): return await tool_executor_node(ctx, s)
 
     builder.add_node("supervisor", _supervisor)
     builder.add_node("retrieve", _retrieve)
     builder.add_node("generate", _generate)
+    builder.add_node("tool_executor", _tool_executor)
 
     builder.add_edge(START, "supervisor")
     builder.add_conditional_edges("supervisor", route_supervisor,
                                   {"retrieve": "retrieve", "generate": "generate"})
     builder.add_edge("retrieve", "generate")
-    builder.add_edge("generate", END)
+    builder.add_conditional_edges("generate", route_after_generate,
+                                  {"tool_executor": "tool_executor", "done": END})
+    builder.add_edge("tool_executor", "generate") 
 
     saver = await _build_checkpointer(ctx.settings.database_url)
     return builder.compile(checkpointer=saver)

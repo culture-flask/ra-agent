@@ -1,19 +1,24 @@
 import uvicorn
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
-from app.core.errors import register_exception_handlers
-from app.core.logging import get_logger, setup_logging
-from app.settings import Settings
-from app.api.auth import router as auth_router
-from app.core.net import apply_proxy
 from app.abstractions.llm import LLMService
+from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.kbs import router as kbs_router
+from app.api.traces import router as traces_router
+from app.core.errors import register_exception_handlers
+from app.core.logging import get_logger, setup_logging
+from app.core.net import apply_proxy
+from app.core.tracing import Tracer
 from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
+from app.mcp.adapter import MCPToolAdapter
+from app.mcp.host import MCPHost
 from app.services.kb_service import KBService
+from app.settings import BASE_DIR, Settings
 
 logger = get_logger("main")
 
@@ -22,15 +27,24 @@ logger = get_logger("main")
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时/关闭时执行。"""
     settings = Settings.load()
-    apply_proxy(settings)          # 外部网络代理
-    app.state.settings = settings          # 挂到 app 上，路由里用 request.app.state.settings 取
+    apply_proxy(settings)          # 外部网络代理（无代理环境也能出网）
+    app.state.settings = settings
 
+    # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)
     llm_service = LLMService(system_default=settings.llm_system_default,
                              system_api_key=settings.llm_api_key)
-    ctx = WorkflowContext(settings, llm_service, kb_service)
+    # --- MCP 工具框架 + 调用追踪 ---
+    tracer = Tracer()
+    mcp_host = MCPHost(settings.mcp_servers, base_dir=BASE_DIR)
+    mcp_adapter = MCPToolAdapter(mcp_host, tracer)
+    await mcp_adapter.ensure_catalog()         # 启动时 tools/list 动态发现
+    logger.info("发现 %d 个 MCP 工具", len(mcp_host.tools or []))
+
+    ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer)
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver
     app.state.kb_service = kb_service
+    app.state.tracer = tracer
 
     logger.info("starting %s", settings.app_name)
     yield
@@ -42,6 +56,7 @@ register_exception_handlers(app)           # 第 10 节实现
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(kbs_router)
+app.include_router(traces_router)
 
 @app.get("/health")
 async def health():
