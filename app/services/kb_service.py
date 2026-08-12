@@ -49,15 +49,23 @@ class KBService:
             "system": settings.embedding_api_key,
         }
 
-    # ---------- 模型解析（与 Day 4 相同） ----------
-    def resolve_embedding_meta(self) -> EmbeddingMeta:
-        provider = self._settings.embedding_default_provider
+    # ---------- 模型解析 ----------
+    def resolve_embedding_meta(self, provider: str | None = None,
+                               model_id: str | None = None,
+                               dim: int | None = None) -> EmbeddingMeta:
+        """解析嵌入模型：缺省用配置默认；可显式指定 provider/model_id/dim（每库标注）。"""
+        provider = provider or self._settings.embedding_default_provider
         if provider == "local":
-            return EmbeddingMeta(provider="local", model_id="mini",
-                                 dim=self._settings.embedding_local_default_dim)
-        cloud = self._settings.embedding_cloud[provider]
-        return EmbeddingMeta(provider=provider, model_id=cloud["model_id"],
-                             dim=cloud["dim"], base_url=cloud["base_url"])
+            return EmbeddingMeta(provider="local", model_id=model_id or "mini",
+                                 dim=dim or self._settings.embedding_local_default_dim)
+        cloud = self._settings.embedding_cloud.get(provider)
+        if not cloud:
+            raise ValueError(f"unknown embedding provider: {provider} "
+                             f"(可用: {', '.join(self._settings.embedding_cloud)})")
+        return EmbeddingMeta(provider=provider,
+                             model_id=model_id or cloud["model_id"],
+                             dim=dim or cloud["dim"],
+                             base_url=cloud["base_url"])
 
     def _vector_store(self, kb: KnowledgeBase):
         meta = EmbeddingMeta(
@@ -68,9 +76,13 @@ class KBService:
 
     # ---------- CRUD（Postgres） ----------
     def create_kb(self, name: str, scope: str, user_id: str | None,
-                  texts: list[str] | None = None) -> KnowledgeBase:
-        """建库：写 Postgres（固化嵌入模型标注），有文本则同步入库。"""
-        meta = self.resolve_embedding_meta()
+                  texts: list[str] | None = None,
+                  provider: str | None = None,
+                  model_id: str | None = None,
+                  dim: int | None = None) -> KnowledgeBase:
+        """建库：写 Postgres（固化嵌入模型标注），有文本则同步入库。
+        可显式指定嵌入模型（provider/model_id/dim），缺省用配置默认。"""
+        meta = self.resolve_embedding_meta(provider, model_id, dim)
         with SessionLocal() as db:
             kb = KnowledgeBase(
                 kb_id=uuid.uuid4().hex[:12], name=name, scope=scope,
@@ -179,3 +191,55 @@ class KBService:
             h["kb_name"] = kb.name
         emit("retrieve", {"kb_id": kb_id, "hits": len(hits), "scope": kb.scope})
         return hits
+
+    # ---------- 知识库重建 ----------
+    def rebuild(self, src_kb_id: str, provider: str | None = None,
+                model_id: str | None = None, dim: int | None = None) -> KnowledgeBase:
+        """复制原 chunk + 新嵌入模型重新向量化 → 新 KB（新 collection），旧库保留。
+
+        免重新解析：chunk 已落盘，直接读盘重向量化。
+        状态机：reembedding → ready | failed。
+        """
+        src = self.get_kb(src_kb_id)
+        meta = self.resolve_embedding_meta(provider, model_id, dim)
+        new_kb = KnowledgeBase(
+            kb_id=uuid.uuid4().hex[:12], name=f"{src.name}{model_id or ''}(重建)",
+            scope=src.scope, owner_user_id=src.owner_user_id,
+            category_id=src.category_id,
+            embedding_provider=meta.provider, embedding_model_id=meta.model_id,
+            embedding_dim=meta.dim, status="reembedding",
+            source_doc_ids=list(src.source_doc_ids or []),
+        )
+        with SessionLocal() as db:
+            db.add(new_kb)
+            db.commit()
+        try:
+            chunks = self._read_chunks(src_kb_id, new_kb)     # 复用已存 chunk
+            self._vector_store(new_kb).add(chunks)            # 新 collection 重向量化
+            with SessionLocal() as db:
+                row = db.get(KnowledgeBase, new_kb.kb_id)
+                row.status = "ready"
+                db.commit()
+            emit("rebuild", {"src_kb_id": src_kb_id, "new_kb_id": new_kb.kb_id,
+                             "chunks": len(chunks), "status": "ready"})
+        except Exception as e:
+            logger.error("rebuild failed src=%s: %s", src_kb_id, e)
+            with SessionLocal() as db:
+                row = db.get(KnowledgeBase, new_kb.kb_id)
+                row.status = "failed"
+                db.commit()
+            raise
+        return self.get_kb(new_kb.kb_id)      # 返回 DB 最新状态（含 ready）
+
+    def _read_chunks(self, kb_id: str, kb: KnowledgeBase) -> list[ChunkRecord]:
+        """从磁盘读回该库的 chunk。"""
+        kb_dir = self._chunk_dir / kb_id
+        chunks: list[ChunkRecord] = []
+        for f in sorted(kb_dir.glob("*.txt")):
+            parts = f.stem.split("_")
+            digest = parts[1] if len(parts) > 2 else "doc"
+            chunks.append(ChunkRecord(
+                id=f.stem, text=f.read_text(encoding="utf-8"),
+                payload={"scope": kb.scope, "user_id": kb.owner_user_id or "",
+                         "doc_id": digest, "category_id": kb.category_id}))
+        return chunks

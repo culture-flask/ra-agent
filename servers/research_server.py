@@ -37,15 +37,15 @@ def web_search(query: str, top_k: int = 5) -> list[dict]:
         for item in data.get("results", [])[:top_k]
     ]
 
-@mcp.tool()
-def search_public_papers(query: str, top_k: int = 5) -> list[dict]:
-    """在公共学术文献库中语义检索论文（骨架返回模拟结果）。"""
-    return [
-        {"title": f"《{query}》综述研究", "authors": ["Zhang, L."],
-         "year": 2026, "abstract": f"围绕 {query} 的综述性研究。", "link": "https://doi.org/example"},
-        {"title": f"{query} 的关键技术分析", "authors": ["Wang, X."],
-         "year": 2025, "abstract": f"{query} 核心技术路线与对比。", "link": "https://doi.org/example2"},
-    ][:top_k]
+# @mcp.tool()
+# def search_public_papers(query: str, top_k: int = 5) -> list[dict]:
+#     """在公共学术文献库中语义检索论文（骨架返回模拟结果）。"""
+#     return [
+#         {"title": f"《{query}》综述研究", "authors": ["Zhang, L."],
+#          "year": 2026, "abstract": f"围绕 {query} 的综述性研究。", "link": "https://doi.org/example"},
+#         {"title": f"{query} 的关键技术分析", "authors": ["Wang, X."],
+#          "year": 2025, "abstract": f"{query} 核心技术路线与对比。", "link": "https://doi.org/example2"},
+#     ][:top_k]
 
 
 if __name__ == "__main__":

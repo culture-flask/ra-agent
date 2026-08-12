@@ -11,7 +11,14 @@ class KBCreateRequest(BaseModel):
     scope: str = "public"          # public | private
     user_id: str = "u1"
     texts: list[str] = []
+    embedding_provider: str | None = None      # 每库可选嵌入模型
+    embedding_model_id: str | None = None
+    embedding_dim: int | None = None
 
+class KBRebuildRequest(BaseModel):
+    embedding_provider: str | None = None      
+    embedding_model_id: str | None = None
+    embedding_dim: int | None = None
 
 def _kb_dict(kb) -> dict:
     return {
@@ -34,8 +41,13 @@ def _get_kb(request: Request, kb_id: str):
 
 @router.post("/kbs")
 async def create_kb(req: KBCreateRequest, request: Request):
-    kb = request.app.state.kb_service.create_kb(
-        name=req.name, scope=req.scope, user_id=req.user_id, texts=req.texts)
+    try:
+        kb = request.app.state.kb_service.create_kb(
+            name=req.name, scope=req.scope, user_id=req.user_id, texts=req.texts,
+            provider=req.embedding_provider, model_id=req.embedding_model_id,
+            dim=req.embedding_dim)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))   # 未知 provider 等
     return _kb_dict(kb)
 
 
@@ -76,3 +88,15 @@ async def upload_document(kb_id: str, request: Request,
     background.add_task(kb_service.ingest_file, kb.kb_id,
                         file.filename or "upload.bin", content)
     return {"kb_id": kb.kb_id, "status": "indexing", "filename": file.filename}
+
+@router.post("/kbs/{kb_id}/rebuild")
+async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):
+    """复制原 chunk + 新嵌入模型重新向量化 → 新 KB，旧 KB 保留。"""
+    kb = _get_kb(request, kb_id)
+    try:
+        new_kb = request.app.state.kb_service.rebuild(
+            kb.kb_id, provider=req.embedding_provider,
+            model_id=req.embedding_model_id, dim=req.embedding_dim)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _kb_dict(new_kb)
