@@ -18,6 +18,8 @@ from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter
 from app.mcp.host import MCPHost
 from app.services.kb_service import KBService
+from app.services.memory_service import MemoryService
+from app.api.memories import router as memories_router
 from app.settings import BASE_DIR, Settings
 
 logger = get_logger("main")
@@ -41,10 +43,12 @@ async def lifespan(app: FastAPI):
     await mcp_adapter.ensure_catalog()         # 启动时 tools/list 动态发现
     logger.info("发现 %d 个 MCP 工具", len(mcp_host.tools or []))
 
-    ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer)
+    memory_service = MemoryService()
+    ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer, memory_service)
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver
     app.state.kb_service = kb_service
     app.state.tracer = tracer
+    app.state.memory_service = memory_service
 
     logger.info("starting %s", settings.app_name)
     yield
@@ -57,6 +61,7 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(kbs_router)
 app.include_router(traces_router)
+app.include_router(memories_router)
 
 @app.get("/health")
 async def health():

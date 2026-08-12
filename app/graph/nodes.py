@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 import json
+import re
 
 from langchain_core.messages import SystemMessage,ToolMessage
 
 from app.core.events import emit
+from app.services.memory_service import MAX_MEMORIES_PER_USER
 from app.graph.state import AgentState
 
 
@@ -14,12 +16,90 @@ class WorkflowContext:
     llm_service: object
     kb_service: object
     mcp_adapter: object = None     
-    tracer: object = None          
+    tracer: object = None
+    memory_service: object = None  
 
+# ---------- 长记忆----------
+EXTRACT_PROMPT = """从这段对话中提取值得长期记住的用户信息（研究主题、偏好、
+项目背景等），输出 JSON：{"memories":[{"key":"snake_case键名","value":"简短值"}]}
+如果没有值得记住的信息，输出 {"memories":[]}。只输出 JSON，不要其他文字。"""
+
+KEY_RE = re.compile(r"^[a-z0-9_]{2,32}$")     # 键名白名单：小写/数字/下划线
+
+
+def _parse_memories(text: str) -> list[dict]:
+    """解析 LLM 返回的记忆 JSON（容忍围栏/夹带文字）。解析失败返回空列表。"""
+    text = text.strip()
+    if "```" in text:                            # 去掉 markdown 围栏
+        text = re.sub(r"```(?:json)?", "", text).strip("` \n")
+    try:
+        data = json.loads(text)                  # 直接解析
+    except json.JSONDecodeError:
+        # 兜底：从文本里抠出第一个 { ... } 子串再解析（LLM 常夹带说明文字）
+        m = re.search(r"\{[^{}]*\}", text, re.S) if False else re.search(r"\{.*\}", text, re.S)
+        if not m:
+            return []
+        try:
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return []
+    return data.get("memories", []) if isinstance(data, dict) else []
+
+
+def _review(memory: dict) -> bool:
+    """写入前审核（规则版）：键名合法 + 值非空且够长 + 单条长度上限。"""
+    key, value = memory.get("key", ""), memory.get("value", "")
+    if not KEY_RE.match(key):
+        return False
+    if not isinstance(value, str) or len(value.strip()) < 4:
+        return False
+    return len(value) <= 200
+
+
+async def load_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
+    """跨会话读取：把该用户的长记忆载入状态（图的第一站）。"""
+    if ctx.memory_service is None:
+        return {"memory": {}}
+    memory = ctx.memory_service.get_all(state["user_id"])
+    emit("memory_load", {"count": len(memory)})
+    return {"memory": memory}
+
+
+async def extract_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
+    """对话结束后抽取值得记住的信息：交给 LLM 从对话中提炼。"""
+    if ctx.memory_service is None:
+        return {"new_memories": []}
+    model = ctx.llm_service.get_chat_model(state["user_id"])
+    system = SystemMessage(content=EXTRACT_PROMPT)
+    resp = await model.ainvoke([system] + state["messages"][-4:])   # 只看最近几轮
+    memories = _parse_memories(str(resp.content or ""))
+    emit("memory_extract", {"candidates": len(memories)})
+    return {"new_memories": memories}
+
+
+async def save_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
+    """写入前审核 → 落库：审核不过的丢弃，超上限的丢弃。"""
+    if ctx.memory_service is None:
+        return {}
+    saved = 0
+    for m in state.get("new_memories", []):
+        if not _review(m):
+            continue                                   # 审核不通过，丢弃
+        if ctx.memory_service.count(state["user_id"]) >= MAX_MEMORIES_PER_USER:
+            break                                      # 达到上限，停止
+        try:
+            ctx.memory_service.set(state["user_id"], m["key"], {"v": m["value"]})
+            saved += 1
+        except Exception:
+            pass          # 记忆写入失败绝不影响主对话（锦上添花原则）
+    emit("memory_save", {"saved": saved})
+    return {}
 
 def _build_system_prompt(state: AgentState) -> str:
     """把检索结果拼进系统提示词——RAG 的核心：知识先进 prompt，LLM 才能引用。"""
     parts = ["你是科研助手，基于知识库检索结果回答用户问题，引用时标明来源（public/private）。"]
+    if state.get("memory"):
+        parts.append(f"[用户记忆] {json.dumps(state['memory'], ensure_ascii=False)}")
     if state.get("retrievals"):
         lines = [f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}"
                  for r in state["retrievals"]]

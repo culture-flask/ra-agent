@@ -13,3 +13,5 @@ class AgentState(TypedDict, total=False):
     retrievals: list[dict]                  # 两级 KB 检索结果（带 scope 标签）
     needs_retrieval: bool                   # supervisor 的路由决策
     answer: str                             # 最终答复
+    memory: dict                            # 长期记忆（用户级，跨会话）
+    new_memories: list[dict]                # 本次抽取待审核的记忆
