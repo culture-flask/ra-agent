@@ -97,6 +97,16 @@ class LLMService:
             db.commit()
             return row.id
 
+    def delete_config(self, user_id: str, config_id: str) -> bool:
+        """删除一条配置：仅允许删本人的，返回是否删除成功。"""
+        with SessionLocal() as db:
+            row = db.get(UserLLMConfig, config_id)
+            if row is None or row.user_id != user_id:
+                return False
+            db.delete(row)
+            db.commit()
+            return True
+
     def list_configs(self, user_id: str) -> list[dict]:
         """该用户的配置列表：api_key 只回显掩码（用户级隔离，永不明文）。"""
         with SessionLocal() as db:

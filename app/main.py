@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.abstractions.llm import LLMService
 from app.api.auth import router as auth_router
@@ -60,6 +62,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ra-agent", version="0.1.0", lifespan=lifespan)
+# 前端（浏览器跨域访问）需要 CORS；本地/私有化场景放开即可
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
+                   allow_methods=["*"], allow_headers=["*"])
 register_exception_handlers(app)           # 第 10 节实现
 app.include_router(auth_router)
 app.include_router(chat_router)
@@ -72,6 +77,13 @@ app.include_router(llm_config_router)
 async def health():
     """健康检查：K8s/Compose 用它判断服务是否存活。"""
     return {"status": "ok", "app": "ra-agent"}
+
+
+# 托管前端（ra-web）：前后端同源，浏览器不再跨域，规避本地网络拦截。
+# 挂载在 API 路由之后——Starlette 按注册顺序匹配，/api/* 与 /health 优先命中。
+WEB_DIR = BASE_DIR.parent / "ra-web"
+if WEB_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 
 
 if __name__ == "__main__":

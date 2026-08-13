@@ -45,34 +45,43 @@ async def chat(req: ChatRequest, request: Request):
 
 @router.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request):
-    """SSE 流式：token 实时推送 + 图内事件（supervisor/retrieve）实时推送。"""
+    """SSE 流式：图在后台任务里跑，端点持续 drain 事件队列实时推送。
+
+    token（generate 节点逐字 emit）与图内事件（supervisor/retrieve/memory/trace）
+    都经同一队列流出——不依赖 LangGraph messages 模式的 token 转发（节点未接
+    config，该模式拿不到逐 token 回调），因此用事件总线更可靠。
+    """
     graph = request.app.state.graph
     sink: asyncio.Queue = asyncio.Queue()
 
-    async def event_gen():
-        set_event_sink(sink)
+    async def run_graph():
+        set_event_sink(sink)                     # 在本任务上下文里挂队列，节点 emit 可见
         try:
-            async for ev in graph.astream(
-                    _initial_state(req),
-                    config={"configurable": {"thread_id": req.session_id}},
-                    stream_mode="messages"):                     # 消息级流式
-                while not sink.empty():                          # 先把图内事件发出去
-                    yield _sse(sink.get_nowait())
-                msg, meta = ev
-                if meta.get("langgraph_node") != "generate":
-                    continue                                     # 只流 generate 的 token
-                text = msg.content
-                if isinstance(text, str):
-                    tokens = [text]
-                elif isinstance(text, list):
-                    tokens = [p.get("text", "") for p in text if isinstance(p, dict)]
-                else:
-                    tokens = []
-                for t in tokens:
-                    if t:
-                        yield _sse({"type": "token", "content": t})
-            yield _sse({"type": "done"})
+            await graph.ainvoke(
+                _initial_state(req),
+                config={"configurable": {"thread_id": req.session_id}},   # 会话级隔离
+            )
+            await sink.put({"type": "__done__"})
+        except Exception as e:
+            await sink.put({"type": "__error__", "error": str(e)})
         finally:
             clear_event_sink()
+
+    async def event_gen():
+        task = asyncio.create_task(run_graph())
+        try:
+            while True:
+                ev = await sink.get()            # 持续取事件：来一个发一个，实时
+                t = ev.get("type")
+                if t == "__done__":
+                    break
+                if t == "__error__":
+                    yield _sse({"type": "error", "error": ev.get("error", "")})
+                    break
+                yield _sse(ev)
+            yield _sse({"type": "done"})
+        finally:
+            if not task.done():
+                task.cancel()
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")

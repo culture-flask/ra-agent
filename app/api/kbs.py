@@ -14,11 +14,13 @@ class KBCreateRequest(BaseModel):
     embedding_provider: str | None = None      # 每库可选嵌入模型
     embedding_model_id: str | None = None
     embedding_dim: int | None = None
+    embedding_api_key: str | None = None       # 该库专用嵌入密钥（可选，加密存储）
 
 class KBRebuildRequest(BaseModel):
     embedding_provider: str | None = None      
     embedding_model_id: str | None = None
     embedding_dim: int | None = None
+    embedding_api_key: str | None = None       # 不传则沿用原库密钥
 
 def _kb_dict(kb) -> dict:
     return {
@@ -27,6 +29,7 @@ def _kb_dict(kb) -> dict:
         "embedding_provider": kb.embedding_provider,
         "embedding_model_id": kb.embedding_model_id,
         "embedding_dim": kb.embedding_dim, "status": kb.status,
+        "has_embedding_key": bool(kb.embedding_api_key),   # 不下发明文，只告知是否设了专用密钥
         "source_doc_ids": kb.source_doc_ids or [],
         "created_at": kb.created_at.isoformat() if hasattr(kb.created_at, "isoformat") else str(kb.created_at),
     }
@@ -45,7 +48,7 @@ async def create_kb(req: KBCreateRequest, request: Request):
         kb = request.app.state.kb_service.create_kb(
             name=req.name, scope=req.scope, user_id=req.user_id, texts=req.texts,
             provider=req.embedding_provider, model_id=req.embedding_model_id,
-            dim=req.embedding_dim)
+            dim=req.embedding_dim, api_key=req.embedding_api_key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))   # 未知 provider 等
     return _kb_dict(kb)
@@ -96,7 +99,18 @@ async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):
     try:
         new_kb = request.app.state.kb_service.rebuild(
             kb.kb_id, provider=req.embedding_provider,
-            model_id=req.embedding_model_id, dim=req.embedding_dim)
+            model_id=req.embedding_model_id, dim=req.embedding_dim,
+            api_key=req.embedding_api_key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _kb_dict(new_kb)
+
+
+@router.delete("/kbs/{kb_id}")
+async def delete_kb(kb_id: str, request: Request, user_id: str = "u1"):
+    """删除知识库：私人库仅属主可删；清理向量库 / 磁盘 chunk / 元数据。"""
+    kb = _get_kb(request, kb_id)
+    if kb.scope == "private" and kb.owner_user_id and kb.owner_user_id != user_id:
+        raise HTTPException(status_code=403, detail="forbidden: not kb owner")
+    request.app.state.kb_service.delete_kb(kb_id)
+    return {"deleted": kb_id}

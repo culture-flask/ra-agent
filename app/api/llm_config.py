@@ -53,6 +53,15 @@ def _mask(key: str) -> str:
     return f"{key[:4]}...{key[-4:]}"
 
 
+@router.delete("/configs/{config_id}")
+async def delete_config(config_id: str, request: Request, user_id: str):
+    """删除一条配置：仅本人可删。"""
+    ok = request.app.state.llm_service.delete_config(user_id, config_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="config not found")
+    return {"deleted": config_id}
+
+
 @router.post("/models")
 async def list_models(req: LLMModelsRequest, request: Request):
     """一键获取模型列表：OpenAI 兼容 provider 调 {base_url}/models；

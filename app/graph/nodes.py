@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import json
 import re
 
-from langchain_core.messages import SystemMessage,ToolMessage
+from langchain_core.messages import AIMessage, SystemMessage,ToolMessage
 
 from app.core.events import emit
 from app.services.memory_service import MAX_MEMORIES_PER_USER
@@ -144,11 +144,22 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
         hits.extend(ctx.kb_service.search(kb.kb_id, state["query"], k=3,
                                           user_id=state["user_id"]))
     hits.sort(key=lambda h: h.get("distance", 0))
-    return {"retrievals": hits[:5]}
+    top = hits[:5]
+    # 引用溯源推流：前端据此展示检索来源面板（text 截断，避免事件过大）
+    emit("retrievals", {"results": [
+        {"kb_name": h.get("kb_name"), "scope": h.get("scope"),
+         "distance": h.get("distance"), "text": str(h.get("text", ""))[:300]}
+        for h in top]})
+    return {"retrievals": top}
 
 
 async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """用（用户级）LLM 生成答复：系统提示词带记忆/检索结果 + 用户消息。"""
+    """用（用户级）LLM 生成答复：系统提示词带记忆/检索结果 + 用户消息。
+
+    用 astream 逐 token 生成：LangGraph 以 stream_mode="messages" 把每个 token
+    实时推给 SSE 端点（前端打字机效果）；聚合后的完整 message 仍写入 state，
+    tool_calls 也随之聚合，不影响 generate ⇄ tool_executor 循环。
+    """
     model = ctx.llm_service.get_chat_model(state["user_id"])
     if ctx.mcp_adapter is not None:
         schemas = await ctx.mcp_adapter.schemas_for_llm()
@@ -158,7 +169,21 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     if ctx.tracer is not None:
         log_id = ctx.tracer.start("llm", getattr(model, "model_name", "chat"),
                                   state["session_id"], state["user_id"])
-    resp = await model.ainvoke([system] + state["messages"])
+    resp = None
+    async for chunk in model.astream([system] + state["messages"]):
+        resp = chunk if resp is None else resp + chunk     # 逐 token 聚合为完整消息
+        # 每个 token 实时推给事件总线（SSE 端点持续 drain → 前端打字机效果）
+        text = chunk.content
+        if isinstance(text, str):
+            if text:
+                emit("token", {"content": text})
+        elif isinstance(text, list):
+            for p in text:
+                if isinstance(p, dict) and p.get("text"):
+                    emit("token", {"content": p["text"]})
+    if resp is None:
+        resp = AIMessage(content="")
+    answer = str(resp.content) if resp.content else ""
     if ctx.tracer is not None:
-        ctx.tracer.success(log_id, str(resp.content or "")[:2000])
-    return {"messages": [resp], "answer": str(resp.content) if resp.content else ""}
+        ctx.tracer.success(log_id, answer[:2000])
+    return {"messages": [resp], "answer": answer}

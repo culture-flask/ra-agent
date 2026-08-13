@@ -7,13 +7,16 @@
 """
 
 import hashlib
+import shutil
 import uuid
 from pathlib import Path
 
+import chromadb
 from sqlalchemy import select
 
 from app.abstractions.embedding import EmbeddingFactory, EmbeddingMeta
 from app.abstractions.vectorstore import ChunkRecord, VectorStoreFactory
+from app.core.crypto import SecretCrypto
 from app.core.db import SessionLocal
 from app.core.events import emit
 from app.core.logging import get_logger
@@ -44,6 +47,7 @@ class KBService:
         self._settings = settings
         self._chunk_dir = Path(settings.data_dir) / "chunks"
         self._chunk_dir.mkdir(parents=True, exist_ok=True)
+        self._crypto = SecretCrypto(settings.jwt_secret)      # 库级嵌入密钥加解密
         self._embedding_secrets = {
             **{p: settings.embedding_api_key for p in settings.embedding_cloud},
             "system": settings.embedding_api_key,
@@ -71,17 +75,28 @@ class KBService:
         meta = EmbeddingMeta(
             kb.embedding_provider, kb.embedding_model_id, kb.embedding_dim,
             self._settings.embedding_cloud.get(kb.embedding_provider, {}).get("base_url"))
-        emb = EmbeddingFactory.build(meta, self._embedding_secrets)
+        emb = EmbeddingFactory.build(meta, self._secrets_for(kb))
         return VectorStoreFactory.build(self._settings, kb.kb_id, emb)
+
+    def _secrets_for(self, kb: KnowledgeBase) -> dict:
+        """该库的嵌入密钥集：库级专用 key 优先（解密），缺省回退系统/Provider 默认。"""
+        secrets = dict(self._embedding_secrets)
+        if kb.embedding_api_key:
+            try:
+                secrets[kb.embedding_provider] = self._crypto.decrypt(kb.embedding_api_key)
+            except Exception as e:
+                logger.warning("decrypt embedding key failed kb=%s: %s", kb.kb_id, e)
+        return secrets
 
     # ---------- CRUD（Postgres） ----------
     def create_kb(self, name: str, scope: str, user_id: str | None,
                   texts: list[str] | None = None,
                   provider: str | None = None,
                   model_id: str | None = None,
-                  dim: int | None = None) -> KnowledgeBase:
+                  dim: int | None = None,
+                  api_key: str | None = None) -> KnowledgeBase:
         """建库：写 Postgres（固化嵌入模型标注），有文本则同步入库。
-        可显式指定嵌入模型（provider/model_id/dim），缺省用配置默认。"""
+        可显式指定嵌入模型（provider/model_id/dim）与专用 api_key（加密存储），缺省用配置默认。"""
         meta = self.resolve_embedding_meta(provider, model_id, dim)
         with SessionLocal() as db:
             kb = KnowledgeBase(
@@ -91,6 +106,7 @@ class KBService:
                 embedding_provider=meta.provider,
                 embedding_model_id=meta.model_id,
                 embedding_dim=meta.dim,
+                embedding_api_key=self._crypto.encrypt(api_key) if api_key else None,
                 status="ready",                     # 空库即 ready；有文本走入库后也是 ready
                 source_doc_ids=[],
             )
@@ -116,6 +132,25 @@ class KBService:
                 | ((KnowledgeBase.scope == "private")
                    & (KnowledgeBase.owner_user_id == user_id)))
             return list(db.scalars(stmt))
+
+    def delete_kb(self, kb_id: str) -> None:
+        """删除知识库：Chroma collection + 磁盘 chunk + Postgres 元数据，三段都清理。"""
+        kb = self.get_kb(kb_id)                          # 不存在抛 KeyError
+        # 1) 向量 collection（可能从未写入过，容错）
+        try:
+            client = chromadb.PersistentClient(
+                path=str(self._settings.chroma_persist_dir))
+            client.delete_collection(f"kb_{kb_id}")
+        except Exception as e:
+            logger.warning("delete collection failed kb=%s: %s", kb_id, e)
+        # 2) 磁盘 chunk 目录
+        shutil.rmtree(self._chunk_dir / kb_id, ignore_errors=True)
+        # 3) Postgres 元数据
+        with SessionLocal() as db:
+            row = db.get(KnowledgeBase, kb_id)
+            if row:
+                db.delete(row)
+                db.commit()
 
     # ---------- 入库流水线 ----------
     def add_documents(self, kb_id: str, texts: list[str]) -> int:
@@ -171,7 +206,9 @@ class KBService:
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
             row.status = "ready"
-            existing = row.source_doc_ids or []
+            # 关键：list(...) 拷贝成新对象再改。若直接对加载出的 list 就地 append，
+            # SQLAlchemy JSON 列检测不到"原地突变"，第二次入库的 doc_id 会丢。
+            existing = list(row.source_doc_ids or [])
             for doc_id in doc_ids:
                 if doc_id not in existing:
                     existing.append(doc_id)
@@ -194,10 +231,12 @@ class KBService:
 
     # ---------- 知识库重建 ----------
     def rebuild(self, src_kb_id: str, provider: str | None = None,
-                model_id: str | None = None, dim: int | None = None) -> KnowledgeBase:
+                model_id: str | None = None, dim: int | None = None,
+                api_key: str | None = None) -> KnowledgeBase:
         """复制原 chunk + 新嵌入模型重新向量化 → 新 KB（新 collection），旧库保留。
 
         免重新解析：chunk 已落盘，直接读盘重向量化。
+        api_key 缺省继承原库的专用密钥。
         状态机：reembedding → ready | failed。
         """
         src = self.get_kb(src_kb_id)
@@ -208,6 +247,7 @@ class KBService:
             category_id=src.category_id,
             embedding_provider=meta.provider, embedding_model_id=meta.model_id,
             embedding_dim=meta.dim, status="reembedding",
+            embedding_api_key=self._crypto.encrypt(api_key) if api_key else src.embedding_api_key,
             source_doc_ids=list(src.source_doc_ids or []),
         )
         with SessionLocal() as db:
