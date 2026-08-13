@@ -9,6 +9,8 @@ from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.kbs import router as kbs_router
 from app.api.traces import router as traces_router
+from app.api.llm_config import router as llm_config_router
+from app.core.crypto import SecretCrypto
 from app.core.errors import register_exception_handlers
 from app.core.logging import get_logger, setup_logging
 from app.core.net import apply_proxy
@@ -35,7 +37,8 @@ async def lifespan(app: FastAPI):
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)
     llm_service = LLMService(system_default=settings.llm_system_default,
-                             system_api_key=settings.llm_api_key)
+                             system_api_key=settings.llm_api_key,
+                             crypto=SecretCrypto(settings.jwt_secret))
     # --- MCP 工具框架 + 调用追踪 ---
     tracer = Tracer()
     mcp_host = MCPHost(settings.mcp_servers, base_dir=BASE_DIR)
@@ -49,6 +52,7 @@ async def lifespan(app: FastAPI):
     app.state.kb_service = kb_service
     app.state.tracer = tracer
     app.state.memory_service = memory_service
+    app.state.llm_service = llm_service
 
     logger.info("starting %s", settings.app_name)
     yield
@@ -62,6 +66,7 @@ app.include_router(chat_router)
 app.include_router(kbs_router)
 app.include_router(traces_router)
 app.include_router(memories_router)
+app.include_router(llm_config_router)
 
 @app.get("/health")
 async def health():

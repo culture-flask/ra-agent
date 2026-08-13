@@ -23,6 +23,11 @@ llm:
     provider: sensenova
     base_url: https://token.sensenova.cn/v1
     model_id: deepseek-v4-flash
+  providers:
+    sensenova: { base_url: https://token.sensenova.cn/v1, listable: true }
+    openai:    { base_url: https://api.openai.com/v1, listable: true }
+    qwen:      { base_url: https://dashscope.aliyuncs.com/compatible-mode/v1, listable: true }
+    deepseek:  { base_url: https://api.deepseek.com/v1, listable: true }
 
 embedding:
   default_provider: doubao

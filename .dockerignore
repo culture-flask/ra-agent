@@ -1,0 +1,12 @@
+data/
+logs/
+.pytest_cache/
+.git/
+tests/
+.env
+__pycache__/
+*.pyc
+.venv/
+PLAN.md
+tutorials/
+manual_test.py
