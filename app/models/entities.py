@@ -43,6 +43,8 @@ class KnowledgeBase(Base):
     embedding_provider: Mapped[str] = mapped_column(String(32))        # local | doubao | ...
     embedding_model_id: Mapped[str] = mapped_column(String(64))
     embedding_dim: Mapped[int] = mapped_column(Integer)
+    embedding_base_url: Mapped[str | None] = mapped_column(
+        String(256), nullable=True)          # 该库自定义嵌入端点，空则用 provider 默认
     embedding_api_key: Mapped[str | None] = mapped_column(
         String(512), nullable=True)          # 该库专用嵌入密钥（AES 加密），空则用系统默认
     status: Mapped[str] = mapped_column(String(16), default="indexing")

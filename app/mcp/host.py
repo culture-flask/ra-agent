@@ -1,10 +1,16 @@
 """MCP Host/Client（架构文档 §7.3）：连接多 Server，动态发现并聚合工具目录。"""
 
+import asyncio
+import logging
 import sys
 from pathlib import Path
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+
+logger = logging.getLogger("ra-agent.mcp")
+
+DISCOVER_TIMEOUT = 10.0   # 秒：tools/list 动态发现超时。MCP 是可选能力，失败不阻塞服务启动
 
 
 class MCPHost:
@@ -30,8 +36,23 @@ class MCPHost:
         return arg    # 普通参数原样返回
 
     async def discover(self) -> list[BaseTool]:
-        """动态发现：聚合所有 Server 的 tools/list，支持运行时刷新。"""
-        self._tools = await self._client.get_tools()
+        """动态发现：聚合所有 Server 的 tools/list，支持运行时刷新。
+
+        超时/失败不抛异常——MCP 连不上只降级为「空工具目录」，
+        绝不能卡死应用启动（服务可用性优先于可选能力）。
+        """
+        try:
+            self._tools = await asyncio.wait_for(
+                self._client.get_tools(), timeout=DISCOVER_TIMEOUT)
+        except Exception as e:                      # noqa: BLE001
+            logger.warning("MCP 工具发现失败（%.0fs 内未完成）：%s —— 本次启动禁用 MCP 工具",
+                           DISCOVER_TIMEOUT, e)
+            self._tools = []
+            # 尽力关闭 client，回收可能残留的子进程，不阻塞主流程
+            try:
+                await asyncio.wait_for(self._client.__aexit__(None, None, None), timeout=3)
+            except Exception:                       # noqa: BLE001
+                pass
         return self._tools
 
     @property

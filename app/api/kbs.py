@@ -14,12 +14,14 @@ class KBCreateRequest(BaseModel):
     embedding_provider: str | None = None      # 每库可选嵌入模型
     embedding_model_id: str | None = None
     embedding_dim: int | None = None
+    embedding_base_url: str | None = None      # 该库自定义嵌入端点（可选）
     embedding_api_key: str | None = None       # 该库专用嵌入密钥（可选，加密存储）
 
 class KBRebuildRequest(BaseModel):
     embedding_provider: str | None = None      
     embedding_model_id: str | None = None
     embedding_dim: int | None = None
+    embedding_base_url: str | None = None      # 不传则按 provider 继承/默认
     embedding_api_key: str | None = None       # 不传则沿用原库密钥
 
 def _kb_dict(kb) -> dict:
@@ -29,6 +31,7 @@ def _kb_dict(kb) -> dict:
         "embedding_provider": kb.embedding_provider,
         "embedding_model_id": kb.embedding_model_id,
         "embedding_dim": kb.embedding_dim, "status": kb.status,
+        "embedding_base_url": kb.embedding_base_url,       # 端点非敏感，可回显便于编辑
         "has_embedding_key": bool(kb.embedding_api_key),   # 不下发明文，只告知是否设了专用密钥
         "source_doc_ids": kb.source_doc_ids or [],
         "created_at": kb.created_at.isoformat() if hasattr(kb.created_at, "isoformat") else str(kb.created_at),
@@ -48,7 +51,8 @@ async def create_kb(req: KBCreateRequest, request: Request):
         kb = request.app.state.kb_service.create_kb(
             name=req.name, scope=req.scope, user_id=req.user_id, texts=req.texts,
             provider=req.embedding_provider, model_id=req.embedding_model_id,
-            dim=req.embedding_dim, api_key=req.embedding_api_key)
+            dim=req.embedding_dim, api_key=req.embedding_api_key,
+            base_url=req.embedding_base_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))   # 未知 provider 等
     return _kb_dict(kb)
@@ -100,7 +104,7 @@ async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):
         new_kb = request.app.state.kb_service.rebuild(
             kb.kb_id, provider=req.embedding_provider,
             model_id=req.embedding_model_id, dim=req.embedding_dim,
-            api_key=req.embedding_api_key)
+            api_key=req.embedding_api_key, base_url=req.embedding_base_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _kb_dict(new_kb)

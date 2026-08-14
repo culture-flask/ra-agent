@@ -74,7 +74,9 @@ class KBService:
     def _vector_store(self, kb: KnowledgeBase):
         meta = EmbeddingMeta(
             kb.embedding_provider, kb.embedding_model_id, kb.embedding_dim,
-            self._settings.embedding_cloud.get(kb.embedding_provider, {}).get("base_url"))
+            # 库级自定义端点优先，缺省回退该 provider 在配置里的默认 base_url
+            kb.embedding_base_url
+            or self._settings.embedding_cloud.get(kb.embedding_provider, {}).get("base_url"))
         emb = EmbeddingFactory.build(meta, self._secrets_for(kb))
         return VectorStoreFactory.build(self._settings, kb.kb_id, emb)
 
@@ -94,9 +96,10 @@ class KBService:
                   provider: str | None = None,
                   model_id: str | None = None,
                   dim: int | None = None,
-                  api_key: str | None = None) -> KnowledgeBase:
+                  api_key: str | None = None,
+                  base_url: str | None = None) -> KnowledgeBase:
         """建库：写 Postgres（固化嵌入模型标注），有文本则同步入库。
-        可显式指定嵌入模型（provider/model_id/dim）与专用 api_key（加密存储），缺省用配置默认。"""
+        可显式指定嵌入模型（provider/model_id/dim）与专用 base_url/api_key，缺省用配置默认。"""
         meta = self.resolve_embedding_meta(provider, model_id, dim)
         with SessionLocal() as db:
             kb = KnowledgeBase(
@@ -106,6 +109,7 @@ class KBService:
                 embedding_provider=meta.provider,
                 embedding_model_id=meta.model_id,
                 embedding_dim=meta.dim,
+                embedding_base_url=base_url or None,
                 embedding_api_key=self._crypto.encrypt(api_key) if api_key else None,
                 status="ready",                     # 空库即 ready；有文本走入库后也是 ready
                 source_doc_ids=[],
@@ -232,21 +236,26 @@ class KBService:
     # ---------- 知识库重建 ----------
     def rebuild(self, src_kb_id: str, provider: str | None = None,
                 model_id: str | None = None, dim: int | None = None,
-                api_key: str | None = None) -> KnowledgeBase:
+                api_key: str | None = None,
+                base_url: str | None = None) -> KnowledgeBase:
         """复制原 chunk + 新嵌入模型重新向量化 → 新 KB（新 collection），旧库保留。
 
         免重新解析：chunk 已落盘，直接读盘重向量化。
-        api_key 缺省继承原库的专用密钥。
+        api_key / base_url 缺省继承原库；但 base_url 仅在 provider 未变时才继承
+        （换了 provider 还沿用旧端点是错的，此时回退新 provider 的默认端点）。
         状态机：reembedding → ready | failed。
         """
         src = self.get_kb(src_kb_id)
         meta = self.resolve_embedding_meta(provider, model_id, dim)
+        new_base_url = base_url if base_url is not None else (
+            src.embedding_base_url if meta.provider == src.embedding_provider else None)
         new_kb = KnowledgeBase(
             kb_id=uuid.uuid4().hex[:12], name=f"{src.name}{model_id or ''}(重建)",
             scope=src.scope, owner_user_id=src.owner_user_id,
             category_id=src.category_id,
             embedding_provider=meta.provider, embedding_model_id=meta.model_id,
             embedding_dim=meta.dim, status="reembedding",
+            embedding_base_url=new_base_url,
             embedding_api_key=self._crypto.encrypt(api_key) if api_key else src.embedding_api_key,
             source_doc_ids=list(src.source_doc_ids or []),
         )
