@@ -23,6 +23,9 @@ llm:
     provider: sensenova
     base_url: https://token.sensenova.cn/v1
     model_id: deepseek-v4-flash
+  retry:             # 调用失败退避重试：限流/5xx/网络错误指数退避重试
+    max_retries: 3
+    base_delay: 1.0 # 首次重试等 1s，之后 2s / 4s（含随机抖动）
   providers:
     sensenova: { base_url: https://token.sensenova.cn/v1, listable: true }
     openai:    { base_url: https://api.openai.com/v1, listable: true }

@@ -32,6 +32,10 @@ class KBEmbeddingUpdateRequest(BaseModel):
     embedding_base_url: str | None = None      # 空串=清空回退 provider 默认端点
     embedding_api_key: str | None = None       # 空串=清除专用密钥
 
+class KBRetrievalUpdateRequest(BaseModel):
+    """允许/禁止该库被对话检索。"""
+    enabled: bool
+
 def _kb_dict(kb) -> dict:
     return {
         "kb_id": kb.kb_id, "name": kb.name, "scope": kb.scope,
@@ -43,6 +47,7 @@ def _kb_dict(kb) -> dict:
         "has_embedding_key": bool(kb.embedding_api_key),   # 不下发明文，只告知是否设了专用密钥
         "embedded_model": kb.embedded_model,               # 向量实际由谁嵌入
         "embedding_mismatch": _kb_mismatch(kb),            # 查询模型 ≠ 嵌入模型时的提醒
+        "retrieval_enabled": kb.retrieval_enabled,         # 是否允许被对话检索
         "source_doc_ids": kb.source_doc_ids or [],
         "created_at": kb.created_at.isoformat() if hasattr(kb.created_at, "isoformat") else str(kb.created_at),
     }
@@ -147,6 +152,15 @@ async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,
             base_url=req.embedding_base_url, api_key=req.embedding_api_key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    return _kb_dict(kb)
+
+
+@router.patch("/kbs/{kb_id}/retrieval")
+async def update_kb_retrieval(kb_id: str, req: KBRetrievalUpdateRequest,
+                              request: Request):
+    """允许/禁止该库被对话检索（库本身保留，可随时恢复）。"""
+    _get_kb(request, kb_id)
+    kb = request.app.state.kb_service.set_retrieval(kb_id, req.enabled)
     return _kb_dict(kb)
 
 

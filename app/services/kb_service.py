@@ -163,6 +163,20 @@ class KBService:
                    & (KnowledgeBase.owner_user_id == user_id)))
             return list(db.scalars(stmt))
 
+    def list_queryable_kbs(self, user_id: str | None) -> list[KnowledgeBase]:
+        """对话可检索的库：可见性基础上排除用户主动禁用的（retrieval_enabled=False）。"""
+        return [kb for kb in self.list_kbs(user_id) if kb.retrieval_enabled]
+
+    def set_retrieval(self, kb_id: str, enabled: bool) -> KnowledgeBase:
+        """允许/禁止该库被对话检索（库本身保留，随时可恢复）。"""
+        self.get_kb(kb_id)                        # 不存在抛 KeyError
+        with SessionLocal() as db:
+            row = db.get(KnowledgeBase, kb_id)
+            row.retrieval_enabled = bool(enabled)
+            db.commit()
+        logger.info("kb=%s retrieval_enabled -> %s", kb_id, enabled)
+        return self.get_kb(kb_id)
+
     def delete_kb(self, kb_id: str) -> None:
         """删除知识库：Chroma collection + 磁盘 chunk + Postgres 元数据，三段都清理。"""
         kb = self.get_kb(kb_id)                          # 不存在抛 KeyError
@@ -381,6 +395,12 @@ class KBService:
             with SessionLocal() as db:
                 row = db.get(KnowledgeBase, new_kb.kb_id)
                 row.status = "ready"
+                row.embedded_model = {                       # 新库向量由重建配置写入
+                    "provider": new_kb.embedding_provider,
+                    "model_id": new_kb.embedding_model_id,
+                    "dim": new_kb.embedding_dim,
+                    "base_url": new_kb.embedding_base_url,
+                }
                 db.commit()
             emit("rebuild", {"src_kb_id": src_kb_id, "new_kb_id": new_kb.kb_id,
                              "chunks": len(chunks), "status": "ready"})

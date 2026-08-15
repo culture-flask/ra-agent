@@ -40,7 +40,9 @@ async def chat(req: ChatRequest, request: Request):
     graph = request.app.state.graph
     result = await graph.ainvoke(
         _initial_state(req),
-        config={"configurable": {"thread_id": req.session_id}},   # 会话级隔离
+        config={"configurable": {"thread_id": req.session_id}, # 会话级隔离
+        "recursion_limit": 100
+        },   
     )
     return {
         "answer": result.get("answer", ""),
@@ -64,11 +66,18 @@ async def chat_stream(req: ChatRequest, request: Request):
         try:
             await graph.ainvoke(
                 _initial_state(req),
-                config={"configurable": {"thread_id": req.session_id}},   # 会话级隔离
+                config={"configurable": {"thread_id": req.session_id},
+                "recursion_limit": 100
+                },   # 会话级隔离
             )
             await sink.put({"type": "__done__"})
         except Exception as e:
-            await sink.put({"type": "__error__", "error": str(e)})
+            from app.abstractions.llm import _is_quota_exhausted
+            msg = str(e)
+            if _is_quota_exhausted(e):
+                # 额度用尽不是限流，重试无效——直接告诉用户去平台解决
+                msg = "模型账户额度已用尽（insufficient_quota），请在模型平台提升工作区额度后重试。原始错误：" + msg
+            await sink.put({"type": "__error__", "error": msg})
         finally:
             clear_event_sink()
 

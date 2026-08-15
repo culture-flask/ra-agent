@@ -193,3 +193,40 @@ def test_api_update_embedding():
         assert r2.status_code == 400
         d2 = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()
         assert d2["embedding_provider"] == "llama.cpp"
+
+
+def test_set_retrieval_excludes_from_queryable():
+    """禁用检索：库保留可见，但不再进入对话可检索列表；可随时恢复。"""
+    ks = _make_ks()
+    kb_a = ks.create_kb("可检索库", "public", None)
+    kb_b = ks.create_kb("被禁库", "public", None)
+
+    assert {k.kb_id for k in ks.list_queryable_kbs("u1")} == {kb_a.kb_id, kb_b.kb_id}
+
+    ks.set_retrieval(kb_b.kb_id, enabled=False)
+    queryable = {k.kb_id for k in ks.list_queryable_kbs("u1")}
+    assert kb_b.kb_id not in queryable                 # 被排除
+    assert kb_a.kb_id in queryable
+    visible = {k.kb_id for k in ks.list_kbs("u1")}     # 列表仍可见（可管理）
+    assert kb_b.kb_id in visible
+
+    ks.set_retrieval(kb_b.kb_id, enabled=True)
+    assert kb_b.kb_id in {k.kb_id for k in ks.list_queryable_kbs("u1")}
+
+
+def test_api_retrieval_toggle():
+    """API：PATCH /kbs/{id}/retrieval 开关对话检索；缺 enabled → 422。"""
+    with TestClient(app) as c:
+        kb = c.post("/api/v1/kbs", json={
+            "name": "API开关库", "scope": "public", "user_id": "u1"}).json()
+        assert kb["retrieval_enabled"] is True
+
+        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval", json={"enabled": False})
+        assert r.status_code == 200
+        assert r.json()["retrieval_enabled"] is False
+
+        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval", json={"enabled": True})
+        assert r2.json()["retrieval_enabled"] is True
+
+        r3 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval", json={})
+        assert r3.status_code == 422

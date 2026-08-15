@@ -40,7 +40,9 @@ async def lifespan(app: FastAPI):
     kb_service = KBService(settings)
     llm_service = LLMService(system_default=settings.llm_system_default,
                              system_api_key=settings.llm_api_key,
-                             crypto=SecretCrypto(settings.jwt_secret))
+                             crypto=SecretCrypto(settings.jwt_secret),
+                             retry_max_retries=settings.llm_retry_max_retries,
+                             retry_base_delay=settings.llm_retry_base_delay)
     # --- MCP 工具框架 + 调用追踪 ---
     tracer = Tracer()
     mcp_host = MCPHost(settings.mcp_servers, base_dir=BASE_DIR)

@@ -1,4 +1,7 @@
-from app.abstractions.llm import LLMConfig, LLMService
+from app.abstractions.llm import (
+    LLMConfig, LLMService,
+    _is_quota_exhausted, _is_retryable, _is_rate_limited,
+)
 from app.core.crypto import SecretCrypto
 from app.settings import Settings
 
@@ -82,3 +85,37 @@ def test_crypto_roundtrip_and_mask():
     assert c.decrypt(ct) == "sk-abcdefgh1234"
     assert mask_secret("sk-abcdefgh1234") == "sk-a...1234"
     assert mask_secret("short") == "***"
+
+
+class _Fake429:
+    """模拟 openai 风格的 429 异常。"""
+
+    def __init__(self, body_text: str, status_code: int = 429):
+        self.status_code = status_code
+        self.body = body_text
+        self.response = type("R", (), {"text": body_text, "headers": {}})()
+
+
+def test_429_quota_exhausted_not_retryable():
+    """额度用尽（insufficient_quota）→ 重试无意义，不重试。"""
+    exc = _Fake429('{"error": {"message": "Workspace allocated quota exceeded, '
+                   'please increase your quota limit.", "code": "insufficient_quota"}}')
+    assert _is_quota_exhausted(exc)
+    assert not _is_rate_limited(exc)
+    assert not _is_retryable(exc)
+
+
+def test_429_rpm_exhausted_is_retryable():
+    """真正的限流（rpm exhausted）→ 可重试。"""
+    exc = _Fake429('{"error": {"message": "rpm exhausted", "code": "8"}}')
+    assert not _is_quota_exhausted(exc)
+    assert _is_rate_limited(exc)
+    assert _is_retryable(exc)
+
+
+def test_5xx_and_network_retryable_4xx_not():
+    """5xx/网络错误可重试；普通 4xx 不重试。"""
+    assert _is_retryable(_Fake429("", 500))
+    assert _is_retryable(_Fake429("", 502))
+    assert not _is_retryable(_Fake429("", 400))
+    assert not _is_retryable(_Fake429("", 401))

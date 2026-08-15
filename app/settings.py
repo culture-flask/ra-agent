@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me-to-32+bytes!!"
     llm_system_default: dict = Field(default_factory=dict)
     llm_api_key: str = ""
+    llm_retry_max_retries: int = 3          # LLM 调用失败重试次数（指数退避）
+    llm_retry_base_delay: float = 1.0       # 首次重试基础等待秒数，之后 2 倍递增
     embedding_default_provider: str = "doubao"
     embedding_default_model: str = "doubao-embedding-vision"
     embedding_cloud: dict = Field(default_factory=dict)
@@ -57,6 +59,8 @@ class Settings(BaseSettings):
                 "chroma_persist_dir": raw["vector_store"]["chroma"]["persist_dir"],
                 "max_logs": raw["tracing"]["max_logs"],
                 "llm_system_default": raw["llm"]["system_default"],
+                "llm_retry_max_retries": raw.get("llm", {}).get("retry", {}).get("max_retries", 3),
+                "llm_retry_base_delay": raw.get("llm", {}).get("retry", {}).get("base_delay", 1.0),
                 "embedding_default_provider": raw["embedding"]["default_provider"],
                 "embedding_default_model": raw["embedding"]["default_model"],
                 "embedding_cloud": raw["embedding"]["cloud"],

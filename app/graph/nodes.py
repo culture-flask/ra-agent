@@ -129,13 +129,20 @@ async def load_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
 
 
 async def extract_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """对话结束后抽取值得记住的信息：交给 LLM 从对话中提炼。"""
+    """对话结束后抽取值得记住的信息：交给 LLM 从对话中提炼。
+
+    重试耗尽仍失败时静默跳过——记忆抽取是锦上添花，绝不能打挂主对话。
+    """
     if ctx.memory_service is None:
         return {"new_memories": []}
-    model = ctx.llm_service.get_chat_model(state["user_id"])
-    system = SystemMessage(content=EXTRACT_PROMPT)
-    resp = await model.ainvoke([system] + state["messages"][-4:])   # 只看最近几轮
-    memories = _parse_memories(str(resp.content or ""))
+    try:
+        model = ctx.llm_service.get_chat_model(state["user_id"])
+        system = SystemMessage(content=EXTRACT_PROMPT)
+        resp = await model.ainvoke([system] + state["messages"][-4:])   # 只看最近几轮
+        memories = _parse_memories(str(resp.content or ""))
+    except Exception as e:
+        logger.warning("memory extract failed, skip: %s", e)
+        memories = []
     emit("memory_extract", {"candidates": len(memories)})
     return {"new_memories": memories}
 
@@ -180,7 +187,8 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
       是否需要检索、以及选哪几个库（按名称），再做可见性校验后落 state
     - LLM 判断异常/解析失败 → 降级为全部可见库检索（保持 RAG 兜底）
     """
-    kbs = ctx.kb_service.list_kbs(state["user_id"])
+    # 只用"可检索"的库（用户可自行禁用某库参与对话检索）
+    kbs = ctx.kb_service.list_queryable_kbs(state["user_id"])
     if not kbs:
         emit("supervisor", {"needs_retrieval": False, "kb_count": 0, "selected": []})
         return {"needs_retrieval": False, "selected_kb_ids": []}
@@ -236,7 +244,9 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """按 LLM 选定的知识库检索（仅限可见库），结果带 scope 标签（引用溯源）。"""
     kbs = ctx.kb_service.list_kbs(state["user_id"])
     selected_ids = set(state.get("selected_kb_ids") or [])
-    targets = [kb for kb in kbs if kb.kb_id in selected_ids]
+    # 双保险：即使 selected_ids 携带被禁用的库（路由与检索之间用户改了开关），也跳过
+    targets = [kb for kb in kbs
+               if kb.kb_id in selected_ids and kb.retrieval_enabled]
     hits = []
     for kb in targets:
         hits.extend(ctx.kb_service.search(kb.kb_id, state["query"], k=3,

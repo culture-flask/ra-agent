@@ -4,16 +4,138 @@
 - get_chat_model：该用户默认配置（解密）→ 工厂构建；未配置回退系统默认；
 - set_user_config：api_key 加密落库，is_default 互斥；
 - list_configs：只回显掩码（永不下发明文）。
+- RetryableChatModel：统一给 LLM 调用包一层指数退避重试（限流/5xx/网络错误）。
 """
 
+import asyncio
 from dataclasses import dataclass
 
+import httpx
 from langchain_openai import ChatOpenAI
 from sqlalchemy import select
 
 from app.core.crypto import SecretCrypto, mask_secret
 from app.core.db import SessionLocal
+from app.core.logging import get_logger
 from app.models import UserLLMConfig
+
+logger = get_logger("llm_retry")
+
+
+_QUOTA_MARKERS = (
+    "insufficient_quota", "quota exceeded", "quota exhausted",
+    "workspace allocated quota", "out of quota", "no quota",
+)
+
+
+def _is_quota_exhausted(exc: BaseException) -> bool:
+    """429 里区分"账户/工作区额度用尽"（重试无意义）与"限流"（可重试）。
+
+    glm/doubao 等平台额度用尽时返回的 message 形如
+    "Workspace allocated quota exceeded, please increase your quota limit"，
+    属于计费问题，退避重试多少次都一样，必须让用户去平台提升额度。
+    """
+    text = str(exc)
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            text += " " + (resp.text or "")
+        except Exception:
+            pass
+    lowered = text.lower()
+    return any(m in lowered for m in _QUOTA_MARKERS)
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    """真正的限流 429（rpm/tpm 超限），区别于额度用尽。"""
+    return getattr(exc, "status_code", None) == 429 and not _is_quota_exhausted(exc)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """是否值得重试：限流(429)/服务端错误(5xx)/传输层(超时、断连、读写出错)。
+
+    - 429 限流（rpm/tpm）→ 重试
+    - 429 额度用尽（insufficient_quota）→ 重试无意义，直接抛
+    - 参数错误、鉴权失败等 4xx 重试无意义，直接抛
+    """
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        if status == 429:
+            return not _is_quota_exhausted(exc)
+        return status >= 500
+    if isinstance(exc, httpx.TransportError):
+        return True
+    # 兜底：异常名含超时/连接/网络/协议字样（部分 SDK 会包一层自定义异常）
+    name = type(exc).__name__.lower()
+    return any(k in name for k in ("timeout", "connect", "network", "protocol"))
+
+
+class RetryableChatModel:
+    """给 ChatModel 包一层指数退避重试（每次重试记日志，可观测）。
+
+    - 重试条件：429 限流 / 5xx / 网络超时与断连；其余异常直接抛
+      （429 额度用尽 insufficient_quota 除外——重试无意义，直接抛）
+    - 退避：1s → 2s → 4s → 8s → 16s → 32s → 64s → 128s → 256s（共 9 次）
+    - astream：整轮重试——流中断后从开头重新完整生成
+      （已推给前端的半截内容会短暂重复，属预期行为）
+    """
+
+    def __init__(self, model, max_retries: int = 9, base_delay: float = 1.0,
+                 label: str = ""):
+        self._model = model
+        self._max_retries = max_retries
+        self._base_delay = base_delay
+        self._label = label or getattr(model, "model_name", None) or "chat"
+
+    @property
+    def model_name(self) -> str:
+        """透传底层模型名（追踪/日志用）。"""
+        return self._label
+
+    def bind_tools(self, schemas):
+        """绑定 MCP 工具后仍保留重试能力（generate ⇄ tool 循环的第二次生成）。"""
+        bound = self._model.bind_tools(schemas)
+        return RetryableChatModel(bound, self._max_retries, self._base_delay,
+                                  self._label)
+
+    def _backoff(self, attempt: int) -> float:
+        """指数退避：1s → 2s → 4s → 8s → 16s → 32s → 64s → 128s → 256s。"""
+        return self._base_delay * (2 ** (attempt - 1))
+
+    async def _retry(self, call):
+        attempt = 0
+        while True:
+            try:
+                return await call()
+            except Exception as e:
+                attempt += 1
+                if attempt > self._max_retries or not _is_retryable(e):
+                    raise
+                delay = self._backoff(attempt)
+                logger.warning(
+                    "llm call failed (attempt %d/%d) model=%s: %s; retry in %.1fs",
+                    attempt, self._max_retries, self._label, e, delay)
+                await asyncio.sleep(delay)
+
+    async def ainvoke(self, messages, **kwargs):
+        return await self._retry(lambda: self._model.ainvoke(messages, **kwargs))
+
+    async def astream(self, messages, **kwargs):
+        attempt = 0
+        while True:
+            try:
+                async for chunk in self._model.astream(messages, **kwargs):
+                    yield chunk
+                return
+            except Exception as e:
+                attempt += 1
+                if attempt > self._max_retries or not _is_retryable(e):
+                    raise
+                delay = self._backoff(attempt)
+                logger.warning(
+                    "llm stream broken (attempt %d/%d) model=%s: %s; retry in %.1fs",
+                    attempt, self._max_retries, self._label, e, delay)
+                await asyncio.sleep(delay)
 
 
 @dataclass
@@ -36,14 +158,15 @@ class LLMFactory:
             temperature=0.3,
             streaming=True,
             request_timeout=60,   # 连续 60s 无数据视为卡死，抛错而不是无限等
+            max_retries=0,        # 关闭 SDK 内部静默重试，统一走外层 RetryableChatModel（可观测）
         )
-
 
 class LLMService:
     """按用户级配置构建 ChatModel，未配置回退系统默认（§12.2）。"""
 
     def __init__(self, system_default: dict, system_api_key: str,
-                 crypto: SecretCrypto):
+                 crypto: SecretCrypto, retry_max_retries: int = 3,
+                 retry_base_delay: float = 1.0):
         self._system = LLMConfig(
             provider=system_default.get("provider", "sensenova"),
             base_url=system_default.get("base_url", "https://token.sensenova.cn/v1"),
@@ -51,6 +174,8 @@ class LLMService:
             api_key=system_api_key,
         )
         self._crypto = crypto
+        self._retry_max = retry_max_retries
+        self._retry_delay = retry_base_delay
 
     # ---------- 查询 ----------
     def get_user_config(self, user_id: str) -> LLMConfig | None:
@@ -69,9 +194,12 @@ class LLMService:
                          model_id=row.model_id,
                          api_key=self._crypto.decrypt(row.api_key))
 
-    def get_chat_model(self, user_id: str) -> ChatOpenAI:
+    def get_chat_model(self, user_id: str) -> RetryableChatModel:
         cfg = self.get_user_config(user_id) or self._system
-        return LLMFactory.build(cfg)
+        model = LLMFactory.build(cfg)
+        return RetryableChatModel(model, max_retries=self._retry_max,
+                                  base_delay=self._retry_delay,
+                                  label=cfg.model_id)
 
     def get_config(self, user_id: str, config_id: str) -> LLMConfig | None:
         """读取某条已保存配置（api_key 解密），仅本人可见，不存在返回 None。"""
