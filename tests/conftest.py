@@ -7,6 +7,48 @@
 import os
 import tempfile
 
+
+def make_pdf_pages(texts: list[str]) -> bytes:
+    """手工构造多页最小 PDF（Helvetica Type1，仅支持 ASCII）——测试共用。"""
+    objs: dict[int, bytes] = {}
+    page_objs, n = [], 6
+    for text in texts:
+        page_no, content_no = n, n + 1
+        # ASCII 用字面量字符串；含中文等非 ASCII 用 UTF-16BE hex（带 BOM，
+        # pypdf 可解码提取；无需嵌入字体——测试只关心提取出的文本）
+        if text.isascii():
+            stream = b"BT /F1 24 Tf 72 720 Td (" + text.encode("ascii") + b") Tj ET"
+        else:
+            stream = (b"BT /F1 24 Tf 72 720 Td <FEFF"
+                      + text.encode("utf-16-be").hex().encode() + b"> Tj ET")
+        objs[page_no] = (b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                         b"/Contents " + str(content_no).encode() + b" 0 R "
+                         b"/Resources << /Font << /F1 5 0 R >> >> >>")
+        objs[content_no] = (b"<< /Length " + str(len(stream)).encode()
+                            + b" >>\nstream\n" + stream + b"\nendstream")
+        page_objs.append(f"{page_no} 0 R".encode())
+        n += 2
+    objs[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
+    objs[2] = (b"<< /Type /Pages /Kids [" + b" ".join(page_objs)
+               + b"] /Count " + str(len(texts)).encode() + b" >>")
+    objs[5] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = {}
+    for no in sorted(objs):
+        offsets[no] = len(out)
+        out += f"{no} 0 obj\n".encode() + objs[no] + b"\nendobj\n"
+    xref_pos = len(out)
+    out += b"xref\n0 " + str(max(offsets) + 1).encode() + b"\n0000000000 65535 f \n"
+    for no in range(1, max(offsets) + 1):
+        off = offsets.get(no)
+        if off is not None:
+            out += f"{off:010d} 00000 n \n".encode()
+        else:
+            out += b"0000000000 65535 f \n"
+    out += (f"trailer\n<< /Size {max(offsets) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_pos}\n%%EOF").encode()
+    return bytes(out)
+
 # 关键：测试必须离线、确定性——强制本地嵌入 + 临时数据目录。
 # 必须在 import app.main 之前设置（Settings.load() 在 lifespan 里读环境变量）。
 # 数据库也必须指向专用测试库，绝不能清空开发库（否则跑一次测试就删一次真实知识库）：

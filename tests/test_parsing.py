@@ -7,6 +7,7 @@ from docx import Document
 
 from app.services.kb_service import split_chunks
 from app.services.parsing import parse_file
+from conftest import make_pdf_pages as _make_pdf_pages
 
 
 def _make_pdf(text: str) -> bytes:
@@ -48,6 +49,31 @@ def test_parse_txt():
 def test_parse_pdf():
     content = _make_pdf("Hello Quantum Computing")
     assert "Hello Quantum Computing" in parse_file("paper.pdf", content)
+
+
+def test_parse_file_pages_pdf():
+    """PDF 逐页解析：页码从 1 起，每页文本独立。"""
+    from app.services.parsing import parse_file_pages
+    content = _make_pdf_pages(["Hello Page One", "World Page Two"])
+    pages = parse_file_pages("paper.pdf", content)
+    assert pages == [(1, "Hello Page One"), (2, "World Page Two")]
+
+
+def test_parse_file_pages_pdf_blank_page_keeps_number():
+    """空白页被过滤但保留原页码：第 1 页空 → 第 2 页内容页码为 2。"""
+    from app.services.parsing import parse_file_pages
+    # 第 1 页无文本（Contents 留空），第 2 页有文本
+    content = _make_pdf_pages(["", "Only Second Page Text"])
+    pages = parse_file_pages("paper.pdf", content)
+    assert pages == [(2, "Only Second Page Text")]
+
+
+def test_parse_file_pages_txt_and_docx():
+    """txt/md/docx 无分页概念：单条 (None, 全文)。"""
+    from app.services.parsing import parse_file_pages
+    assert parse_file_pages("a.txt", "你好".encode()) == [(None, "你好")]
+    docx = _make_docx("量子比特")
+    assert parse_file_pages("note.docx", docx) == [(None, "量子比特")]
 
 
 def test_parse_docx():

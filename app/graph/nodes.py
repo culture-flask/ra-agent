@@ -270,8 +270,18 @@ def _build_system_prompt(state: AgentState) -> str:
         parts.append(f"[历史对话总结] {state['conversation_summary']}")
     if state.get("retrievals"):
         parts.append("你是科研助手，基于知识库检索结果回答用户问题，引用时标明来源（public/private）。")
-        lines = [f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}"
-                 for r in state["retrievals"]]
+        lines = []
+        for r in state["retrievals"]:
+            if r.get("type") == "parent":
+                # 聚合父块：完整段落，标注来源文件/页码与命中片段数
+                loc = r.get("source") or "未知来源"
+                if r.get("pages"):
+                    loc += f" 第{'-'.join(str(p) for p in r['pages'])}页"
+                lines.append(
+                    f"[知识库检索结果·上下文段落 ({r.get('scope')} / {r.get('kb_name')} / {loc}，"
+                    f"含{r.get('hit_chunks')}个命中片段)] {r['text']}")
+            else:
+                lines.append(f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}")
         parts.append("\n".join(lines))
     else:
         parts.append("你是科研助手，根据你自己的知识回答用户问题。")
@@ -349,6 +359,73 @@ def _hit_rank_key(h: dict) -> float:
     return float(h.get("distance") or float("inf"))
 
 
+def _chunk_group_of(hit: dict, group_size: int) -> int:
+    """命中 chunk 的父块组号：chunk_id 形如 {kb_id}_{doc_id}_{i}，组 = i // group_size。"""
+    try:
+        i = int(str(hit.get("id", "")).rsplit("_", 1)[-1])
+    except (ValueError, IndexError):
+        i = 0
+    return i // group_size
+
+
+def _expand_parent_blocks(ctx, kb_hits: list, parent_budget: int,
+                          group_size: int, max_chars: int,
+                          total: int) -> list[dict]:
+    """聚合返回：前 parent_budget 个不同父块展开为完整段落，其余按分数返回小 chunk。
+
+    - 父块 key = (kb_id, doc_id, 组号)；已展开组内的命中 chunk 不再返回
+      （其上下文已包含在父块里，只累计 hit_chunks）
+    - 父块分数 = 组内最高命中分（按分数降序扫描，第一个命中的分即组内最高）
+    - 父块与小 chunk 按分数混排（复用 _hit_rank_key）
+    - 展开失败（磁盘缺失）自动降级为小 chunk；父块不足 budget 时自然退化
+    """
+    parents: dict = {}                       # key -> 父块条目
+    expanded: set = set()
+    for h in kb_hits:
+        if len(expanded) >= parent_budget:
+            break
+        doc_id = (h.get("metadata") or {}).get("doc_id")
+        if not doc_id:
+            continue
+        key = (h.get("kb_id"), doc_id, _chunk_group_of(h, group_size))
+        if key in expanded:
+            continue
+        block = ctx.kb_service.get_parent_block(
+            key[0], doc_id, key[2], group_size=group_size, max_chars=max_chars)
+        if block is None:
+            continue
+        entry = {
+            "type": "parent",
+            "text": block["text"],
+            "kb_id": h.get("kb_id"), "kb_name": h.get("kb_name"),
+            "scope": h.get("scope"),
+            "doc_id": doc_id, "group": key[2],
+            "source": block.get("source"), "pages": block.get("pages"),
+            "hit_chunks": 1,
+            "score": h.get("score"), "distance": h.get("distance"),
+            "bm25_score": h.get("bm25_score"), "method": h.get("method"),
+            "metadata": {"scope": h.get("scope"), "doc_id": doc_id},
+        }
+        parents[key] = entry
+        expanded.add(key)
+
+    chunk_budget = max(0, total - len(expanded))   # 剩余名额给小 chunk
+    chunks: list[dict] = []
+    for h in kb_hits:
+        doc_id = (h.get("metadata") or {}).get("doc_id")
+        key = ((h.get("kb_id"), doc_id, _chunk_group_of(h, group_size))
+               if doc_id else None)
+        if key in expanded:
+            parents[key]["hit_chunks"] += 1    # 上下文已在父块里，只累计不重复返回
+            continue
+        if len(chunks) >= chunk_budget:
+            break
+        chunks.append({**h, "type": "chunk"})
+    all_entries = list(parents.values()) + chunks
+    all_entries.sort(key=_hit_rank_key)
+    return all_entries
+
+
 async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """按 LLM 选定的知识库检索（仅限可见库），结果带 scope 标签（引用溯源）。
 
@@ -368,17 +445,36 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
         getattr(ctx.settings, "retrieval_total_k", 5))
     per_kb = max(1, min(per_kb, 20))
     total = max(1, min(total, 50))
+    # 聚合返回：父块名额（0=关闭，全返回小 chunk；None 或 <0 = 全局配置默认）
+    parent_groups = state.get("parent_groups")
+    if parent_groups is None or parent_groups < 0:
+        parent_groups = int(getattr(ctx.settings, "retrieval_parent_groups", 3))
+    group_size = int(getattr(ctx.settings, "retrieval_parent_group_size", 3))
+    max_chars = int(getattr(ctx.settings, "retrieval_parent_max_chars", 4000))
     hits = []
     for kb in targets:
         hits.extend(ctx.kb_service.search(kb.kb_id, state["query"], k=per_kb,
                                           user_id=state["user_id"], mode=mode))
     hits.sort(key=_hit_rank_key)
-    top = hits[:total]
+    if parent_groups > 0:
+        # 候选池要留足余量：已展开父块组内的命中会被跳过，多取一些候选
+        top = _expand_parent_blocks(ctx, hits[:max(total + parent_groups * 2,
+                                                   len(hits))],
+                                    parent_budget=min(parent_groups, total),
+                                    group_size=max(1, group_size),
+                                    max_chars=max(200, max_chars),
+                                    total=total)
+    else:
+        top = [{**h, "type": "chunk"} for h in hits[:total]]
     # 引用溯源推流：前端据此展示检索来源面板（text 截断，避免事件过大）
     emit("retrievals", {"mode": mode, "results": [
-        {"kb_name": h.get("kb_name"), "scope": h.get("scope"),
+        {"type": h.get("type", "chunk"), "kb_name": h.get("kb_name"),
+         "scope": h.get("scope"),
          "distance": h.get("distance"), "bm25_score": h.get("bm25_score"),
          "score": h.get("score"), "method": h.get("method"),
+         "source": h.get("source") or (h.get("metadata") or {}).get("source"),
+         "page": (h.get("metadata") or {}).get("page"),
+         "pages": h.get("pages"), "hit_chunks": h.get("hit_chunks"),
          "text": str(h.get("text", ""))[:300]}
         for h in top]})
     return {"retrievals": top}

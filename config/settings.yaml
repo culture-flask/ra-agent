@@ -37,6 +37,9 @@ retrieval:
   mode: hybrid  # 对话检索模式：vector（纯向量）| hybrid（向量 + BM25 混合），可在前端切换
   per_kb_k: 3   # 对话 RAG：每个知识库检索几条（前端可调，1~20）
   total_k: 5    # 对话 RAG：所有库合并后总共取几条（前端可调，1~50）
+  parent_groups: 3      # 聚合返回：展开的父块数（0=关闭，全返回小 chunk；前端可调）
+  parent_group_size: 3  # 每个父块聚合的相邻 chunk 数
+  parent_max_chars: 4000  # 单个父块拼接文本上限（字符）
 
 embedding:
   default_provider: doubao

@@ -240,6 +240,49 @@ def test_retrieve_counts_clamped():
     assert len(result["retrievals"]) == 1
 
 
+def test_parent_blocks_expanded_in_retrieval():
+    """聚合返回：同组多命中 → 展开父块（hit_chunks 累计、完整段落），其余小 chunk。"""
+    from conftest import make_pdf_pages as _pdf
+
+    ctx, kb_service = _make_ctx()
+    kb = kb_service.create_kb("聚合库", "public", None)
+    kb_service.ingest_file(kb.kb_id, "paper.pdf",
+                           _pdf(["Quantum computing fundamentals with superposition states. " * 60]))
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-parent-1",
+                                "query": "Quantum computing",
+                                "per_kb_k": 10, "total_k": 10, "parent_groups": 3,
+                                "messages": [HumanMessage(content="Quantum computing")]})
+    rets = result["retrievals"]
+    parents = [r for r in rets if r.get("type") == "parent"]
+    chunks = [r for r in rets if r.get("type") != "parent"]
+    assert parents, "应当有父块展开"
+    assert parents[0].get("source") == "paper.pdf"
+    assert parents[0].get("hit_chunks", 1) >= 1
+    assert len({(p.get("doc_id"), p.get("group")) for p in parents}) <= 3
+    assert len(parents[0]["text"]) > 500               # 父块是完整段落
+    assert all(c.get("type") == "chunk" for c in chunks)
+
+
+def test_parent_groups_zero_disables_aggregation():
+    """parent_groups=0：完全退化为小 chunk（不展开父块）。"""
+    from conftest import make_pdf_pages as _pdf
+
+    ctx, kb_service = _make_ctx()
+    kb = kb_service.create_kb("退化库", "public", None)
+    kb_service.ingest_file(kb.kb_id, "paper.pdf",
+                           _pdf(["Quantum computing fundamentals with superposition states. " * 60]))
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-parent-0",
+                                "query": "Quantum computing",
+                                "per_kb_k": 10, "total_k": 10, "parent_groups": 0,
+                                "messages": [HumanMessage(content="Quantum computing")]})
+    rets = result["retrievals"]
+    assert rets and all(r.get("type") == "chunk" for r in rets)
+
+
 def test_checkpointer_continues_session():
     """同 thread_id 两次调用 → 消息累积（短期记忆/会话级隔离）。"""
     ctx, _ = _make_ctx("回答")

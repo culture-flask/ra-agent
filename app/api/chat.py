@@ -30,6 +30,8 @@ class ChatRequest(BaseModel):
     total_k: int | None = None
     # 生成温度：0~2；None = 默认 0.3
     temperature: float | None = None
+    # 聚合返回：展开的父块数（0=关闭，全返回小 chunk）；None = 全局默认
+    parent_groups: int | None = None
 
 
 def _initial_state(req: ChatRequest, append_message: bool = True) -> dict:
@@ -57,6 +59,7 @@ def _initial_state(req: ChatRequest, append_message: bool = True) -> dict:
         "per_kb_k": req.per_kb_k or 0,
         "total_k": req.total_k or 0,
         "temperature": req.temperature,
+        "parent_groups": req.parent_groups,
     }
 
 

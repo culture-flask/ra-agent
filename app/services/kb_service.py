@@ -7,6 +7,7 @@
 """
 
 import hashlib
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -22,7 +23,7 @@ from app.core.db import SessionLocal
 from app.core.events import emit
 from app.core.logging import get_logger
 from app.models import KnowledgeBase
-from app.services.parsing import parse_file
+from app.services.parsing import parse_file_pages
 
 logger = get_logger("kb_service")
 
@@ -39,6 +40,14 @@ def split_chunks(text: str, size: int = 1000, overlap: int = 150) -> list[str]:
         chunks.append(text[start:start + size])
         start += size - overlap
     return chunks
+
+
+def _chunk_index(chunk_id: str) -> int:
+    """chunk_id 形如 {kb_id}_{digest}_{i} → 返回文件内序号 i（解析失败返回 0）。"""
+    try:
+        return int(chunk_id.rsplit("_", 1)[-1])
+    except (ValueError, IndexError):
+        return 0
 
 
 def _clean_text(text: str) -> str:
@@ -65,6 +74,7 @@ class KBService:
             "system": settings.embedding_api_key,
         }
         self._bm25_cache: dict[str, Bm25Index] = {}   # kb_id -> BM25 索引（懒构建）
+        self._chunks_cache: dict[str, list[ChunkRecord]] = {}  # kb_id -> 全量 chunk（聚合父块用）
 
     # ---------- 模型解析 ----------
     def resolve_embedding_meta(self, provider: str | None = None,
@@ -191,7 +201,8 @@ class KBService:
             logger.warning("delete collection failed kb=%s: %s", kb_id, e)
         # 2) 磁盘 chunk 目录
         shutil.rmtree(self._chunk_dir / kb_id, ignore_errors=True)
-        self._bm25_cache.pop(kb_id, None)              # 3.5) BM25 索引缓存失效
+        self._bm25_cache.pop(kb_id, None)              # 3.5) BM25/父块 chunk 缓存失效
+        self._chunks_cache.pop(kb_id, None)
         # 3) Postgres 元数据
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
@@ -228,7 +239,8 @@ class KBService:
         kb = self.get_kb(kb_id)
         try:
             n = self._ingest_inner(kb_id, kb, files)
-            self._bm25_cache.pop(kb_id, None)          # chunk 变了，BM25 索引失效
+            self._bm25_cache.pop(kb_id, None)          # chunk 变了，BM25/父块缓存失效
+            self._chunks_cache.pop(kb_id, None)
             return n
         except Exception as e:
             logger.error("ingest failed kb=%s: %s", kb_id, e)   # 失败原因进日志
@@ -256,18 +268,31 @@ class KBService:
         doc_ids: list[str] = []
         for filename, content in files:
             try:
-                # _clean_text：剔除 pypdf 等提取出的孤立代理字符，避免编码崩溃
-                text = _clean_text(parse_file(filename, content))
+                # 逐页解析（PDF 带页码）：_clean_text 剔除 pypdf 等提取出的
+                # 孤立代理字符，避免编码崩溃
+                pages = parse_file_pages(filename, content)
                 # 内容哈希：同一文件重复上传 → 相同 chunk id → Chroma 覆盖（幂等）
                 digest = hashlib.sha256(content).hexdigest()[:8]
                 file_chunks: list[ChunkRecord] = []
-                for i, piece in enumerate(split_chunks(text)):
-                    chunk_id = f"{kb_id}_{digest}_{i}"
-                    file_chunks.append(ChunkRecord(
-                        id=chunk_id, text=piece,
-                        payload={"scope": kb.scope, "user_id": kb.owner_user_id or "",
-                                 "doc_id": digest, "category_id": kb.category_id}))
-                    (kb_dir / f"{chunk_id}.txt").write_text(piece, encoding="utf-8")
+                i = 0
+                for page_no, page_text in pages:
+                    for piece in split_chunks(_clean_text(page_text)):
+                        chunk_id = f"{kb_id}_{digest}_{i}"
+                        payload = {"scope": kb.scope,
+                                   "user_id": kb.owner_user_id or "",
+                                   "doc_id": digest,
+                                   "category_id": kb.category_id,
+                                   "source": filename}     # 源文件名（引用溯源）
+                        if page_no is not None:
+                            payload["page"] = page_no      # 页码（Chroma 不接受 None 值）
+                        file_chunks.append(ChunkRecord(
+                            id=chunk_id, text=piece, payload=payload))
+                        (kb_dir / f"{chunk_id}.txt").write_text(piece, encoding="utf-8")
+                        # 伴生元数据文件：重建/BM25 从磁盘读 chunk 时恢复 source/page
+                        (kb_dir / f"{chunk_id}.meta.json").write_text(
+                            json.dumps({"source": filename, "page": page_no},
+                                       ensure_ascii=False), encoding="utf-8")
+                        i += 1
                 # 整个文件成功后才登记 doc_id + chunks，避免半截文件污染批次
                 doc_ids.append(digest)
                 chunks.extend(file_chunks)
@@ -438,11 +463,12 @@ class KBService:
         try:
             chunks = self._read_chunks(src_kb_id, new_kb)     # 复用已存 chunk
             self._vector_store(new_kb).add(chunks)            # 新 collection 重向量化
-            # 重建库的 chunk 物理上在 src 目录：BM25 索引直接构建并缓存，
+            # 重建库的 chunk 物理上在 src 目录：BM25 索引与父块 chunk 直接缓存，
             # 否则懒构建会读到空目录
             bm = Bm25Index()
             bm.build(chunks)
             self._bm25_cache[new_kb.kb_id] = bm
+            self._chunks_cache[new_kb.kb_id] = list(chunks)
             with SessionLocal() as db:
                 row = db.get(KnowledgeBase, new_kb.kb_id)
                 row.status = "ready"
@@ -464,15 +490,74 @@ class KBService:
             raise
         return self.get_kb(new_kb.kb_id)      # 返回 DB 最新状态（含 ready）
 
+    def _doc_chunks(self, kb_id: str, kb: KnowledgeBase) -> list[ChunkRecord]:
+        """该库全部 chunk（磁盘读取），进程内缓存（与 BM25 同步失效）。"""
+        chunks = self._chunks_cache.get(kb_id)
+        if chunks is None:
+            chunks = self._read_chunks(kb_id, kb)
+            self._chunks_cache[kb_id] = chunks
+        return chunks
+
+    def get_parent_block(self, kb_id: str, doc_id: str, group_no: int,
+                         group_size: int = 3,
+                         max_chars: int = 4000) -> dict | None:
+        """聚合父块：同一 doc 内序号 i//group_size==group_no 的 chunk 按序拼接。
+
+        父块内容运行时从磁盘 chunk 拼接——旧数据/重建库天然兼容，无需重新入库。
+        返回 {text, source, pages, chunk_ids, doc_id, group}；组不存在返回 None。
+        """
+        kb = self.get_kb(kb_id)
+        members = [c for c in self._doc_chunks(kb_id, kb)
+                   if c.payload.get("doc_id") == doc_id
+                   and _chunk_index(c.id) // group_size == group_no]
+        if not members:
+            return None
+        members.sort(key=lambda c: _chunk_index(c.id))
+        parts: list[str] = []
+        pages: list[int] = []
+        total = 0
+        for c in members:
+            page = c.payload.get("page")
+            if isinstance(page, int) and page not in pages:
+                pages.append(page)
+            if total >= max_chars:
+                break
+            text = c.text
+            if total + len(text) > max_chars:
+                text = text[: max_chars - total]
+            parts.append(text)
+            total += len(text)
+        return {
+            "text": "".join(parts),
+            "source": members[0].payload.get("source"),
+            "pages": sorted(pages),
+            "chunk_ids": [c.id for c in members],
+            "doc_id": doc_id,
+            "group": group_no,
+        }
+
     def _read_chunks(self, kb_id: str, kb: KnowledgeBase) -> list[ChunkRecord]:
-        """从磁盘读回该库的 chunk。"""
+        """从磁盘读回该库的 chunk（含伴生元数据：source 源文件名 / page 页码）。
+
+        旧格式没有 .meta.json → 回退（source/page 为 None），兼容历史数据。
+        """
         kb_dir = self._chunk_dir / kb_id
         chunks: list[ChunkRecord] = []
         for f in sorted(kb_dir.glob("*.txt")):
             parts = f.stem.split("_")
             digest = parts[1] if len(parts) > 2 else "doc"
+            meta: dict = {}
+            meta_path = kb_dir / f"{f.stem}.meta.json"
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    logger.warning("read chunk meta failed %s: %s", f.stem, e)
+            payload = {"scope": kb.scope, "user_id": kb.owner_user_id or "",
+                       "doc_id": digest, "category_id": kb.category_id,
+                       "source": meta.get("source")}
+            if meta.get("page") is not None:
+                payload["page"] = meta.get("page")
             chunks.append(ChunkRecord(
-                id=f.stem, text=f.read_text(encoding="utf-8"),
-                payload={"scope": kb.scope, "user_id": kb.owner_user_id or "",
-                         "doc_id": digest, "category_id": kb.category_id}))
+                id=f.stem, text=f.read_text(encoding="utf-8"), payload=payload))
         return chunks

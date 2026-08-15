@@ -11,6 +11,7 @@ from app.main import app
 from app.models import User
 from app.services.kb_service import KBService
 from app.settings import Settings
+from conftest import make_pdf_pages as _make_pdf_pages
 
 
 def _ensure_user(user_id: str):
@@ -119,6 +120,74 @@ def test_upload_document_state_machine():
         hits = c.get(f"/api/v1/kbs/{kb['kb_id']}/search",
                      params={"query": "叠加态", "user_id": "u1"}).json()
         assert hits and "量子比特" in hits[0]["text"]   # 上传内容可检索到
+
+
+def test_chunk_metadata_has_source_and_page():
+    """chunk 元数据带源文件名与页码（PDF 逐页）；检索结果透出。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("元数据库", "public", None)
+    # 两页 PDF（页 1 空页、页 2 有内容 → 页码应标 2）
+    ks.ingest_file(kb.kb_id, "paper.pdf", _make_pdf_pages(["", "Quantum Page Two"]))
+
+    hits = ks.search(kb.kb_id, "Quantum", k=3, user_id="u1", mode="vector")
+    assert hits
+    meta = hits[0]["metadata"]
+    assert meta["source"] == "paper.pdf"
+    assert meta["page"] == 2
+
+    # txt 无分页概念：页码为 None，文件名保留
+    ks.ingest_file(kb.kb_id, "notes.txt", "深度学习需要显卡算力".encode())
+    hits2 = ks.search(kb.kb_id, "深度学习", k=5, user_id="u1", mode="vector")
+    txt_hit = next(h for h in hits2 if h["metadata"]["source"] == "notes.txt")
+    assert txt_hit["metadata"].get("page") is None   # 无分页概念：不落 page 键
+
+
+def test_read_chunks_restores_metadata():
+    """从磁盘读 chunk（重建/BM25 路径）恢复 source/page（伴生 meta 文件）。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("恢复库", "public", None)
+    ks.ingest_file(kb.kb_id, "paper.pdf", _make_pdf_pages(["", "Page Two Text"]))
+    kb2 = ks.get_kb(kb.kb_id)
+
+    chunks = ks._read_chunks(kb.kb_id, kb2)
+    assert chunks
+    assert all(c.payload["source"] == "paper.pdf" for c in chunks)
+    assert all(c.payload["page"] == 2 for c in chunks)
+
+    # BM25 索引（同样从磁盘构建）也带 source/page
+    idx = ks._bm25_index(kb2)
+    bm_hits = idx.search("Page Two", k=3)
+    assert bm_hits and bm_hits[0]["metadata"]["source"] == "paper.pdf"
+
+
+def test_get_parent_block_aggregates_group():
+    """父块聚合：同 doc 内同组 chunk 拼接、页码收集、不存在的组返回 None。"""
+    from app.services.kb_service import _chunk_index
+
+    assert _chunk_index("abc123_def456_7") == 7
+    assert _chunk_index("abc123_def456_0") == 0
+
+    ks = _make_ctx()
+    kb = ks.create_kb("父块库", "public", None)
+    # PDF helper 仅支持 ASCII：用英文长文本，每页足够切成多个 chunk
+    page1 = "Quantum computing fundamentals with superposition states. " * 60
+    page2 = "Protein folding research in bioinformatics. " * 60
+    ks.ingest_file(kb.kb_id, "paper.pdf", _make_pdf_pages([page1, page2]))
+    kb2 = ks.get_kb(kb.kb_id)
+
+    chunks = ks._doc_chunks(kb.kb_id, kb2)
+    assert len(chunks) >= 3
+
+    block = ks.get_parent_block(kb.kb_id, chunks[0].payload["doc_id"], 0,
+                                group_size=3, max_chars=4000)
+    assert block is not None
+    assert block["text"]
+    assert block["source"] == "paper.pdf"
+    assert block["chunk_ids"]
+    assert "Quantum computing" in block["text"]     # 组 0 是第 1 页内容
+    assert block["pages"] == [1]                    # 页码收集
+
+    assert ks.get_parent_block(kb.kb_id, "nope", 99) is None   # 不存在的组
 
 
 def test_search_mode_vector_vs_hybrid():

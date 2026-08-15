@@ -21,3 +21,4 @@ class AgentState(TypedDict, total=False):
     per_kb_k: int                           # 每个知识库检索几条（0=全局默认）
     total_k: int                            # 所有库合并后总共取几条（0=全局默认）
     temperature: float | None               # 生成温度（None=默认 0.3；0 也合法）
+    parent_groups: int | None               # 聚合返回的父块名额（None=全局默认；0=关闭聚合）

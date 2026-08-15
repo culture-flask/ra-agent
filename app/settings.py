@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     retrieval_mode: str = "hybrid"          # 检索模式：vector（纯向量）| hybrid（向量+BM25）
     retrieval_per_kb_k: int = 3             # 对话 RAG：每个知识库检索几条
     retrieval_total_k: int = 5              # 对话 RAG：所有库合并后总共取几条
+    retrieval_parent_groups: int = 3        # 聚合返回：展开的父块数（0=关闭，全返回小 chunk）
+    retrieval_parent_group_size: int = 3    # 每个父块聚合的相邻 chunk 数
+    retrieval_parent_max_chars: int = 4000  # 单个父块拼接文本上限（字符）
     embedding_default_provider: str = "doubao"
     embedding_default_model: str = "doubao-embedding-vision"
     embedding_cloud: dict = Field(default_factory=dict)
@@ -69,6 +72,9 @@ class Settings(BaseSettings):
                 "retrieval_mode": raw.get("retrieval", {}).get("mode", "hybrid"),
                 "retrieval_per_kb_k": raw.get("retrieval", {}).get("per_kb_k", 3),
                 "retrieval_total_k": raw.get("retrieval", {}).get("total_k", 5),
+                "retrieval_parent_groups": raw.get("retrieval", {}).get("parent_groups", 3),
+                "retrieval_parent_group_size": raw.get("retrieval", {}).get("parent_group_size", 3),
+                "retrieval_parent_max_chars": raw.get("retrieval", {}).get("parent_max_chars", 4000),
                 "embedding_default_provider": raw["embedding"]["default_provider"],
                 "embedding_default_model": raw["embedding"]["default_model"],
                 "embedding_cloud": raw["embedding"]["cloud"],
