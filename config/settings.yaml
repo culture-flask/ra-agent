@@ -37,10 +37,11 @@ embedding:
       base_url: https://ark.cn-beijing.volces.com/api/coding/v3
       model_id: doubao-embedding-vision
       dim: 2048
+      rate_limited: true   # 云端限流：批次间保留间隔防 429
     ollama:
       base_url: http://100.85.4.71:11434/v1
       model_id: qwen3-embedding:8b
-      dim: 4096
+      dim: 4096            # 自建端点默认不设批次间隔
   local:
     default_dim: 384
 

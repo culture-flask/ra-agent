@@ -22,6 +22,11 @@ def _initial_state(req: ChatRequest) -> dict:
         "session_id": req.session_id,
         "query": req.message,
         "messages": [{"role": "user", "content": req.message}],
+        # 每轮对话重置检索状态：checkpointer 会保留上一轮的 retrievals，
+        # 不显式清空会让上一轮的知识库结果泄漏进本轮的系统提示词
+        "retrievals": [],
+        "needs_retrieval": False,
+        "selected_kb_ids": [],
     }
 
 

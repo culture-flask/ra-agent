@@ -47,7 +47,7 @@ def test_chunks_saved_to_disk():
     ks = _make_ctx()
     kb = ks.create_kb("入库库", "public", None, ["a" * 1200])
     chunk_files = list((Path(ks._chunk_dir) / kb.kb_id).glob("*.txt"))
-    assert len(chunk_files) == 3           # 1200 字 → 3 块
+    assert len(chunk_files) == 2           # 1200 字，size=1000/overlap=150 → 2 块
 
 
 def test_ingest_file_then_searchable():
@@ -94,15 +94,18 @@ def test_private_kb_visibility():
 
 
 def test_upload_document_state_machine():
-    """API 上传：立即返回 indexing → 轮询到 ready → 可检索。"""
+    """API 批量上传：一次带多个文件 → 立即返回 indexing → 轮询到 ready → 可检索。"""
     with TestClient(app) as c:
         kb = c.request("POST", "/api/v1/kbs",
                        json={"name": "上传库", "scope": "public", "user_id": "u1"}).json()
 
         r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents",
-                   files={"file": ("hello.txt", "量子比特可以处于叠加态。".encode(), "text/plain")})
+                   files=[("files", ("hello.txt", "量子比特可以处于叠加态。".encode(), "text/plain")),
+                          ("files", ("second.md", "# 批量上传\n第二个文件的内容。".encode(), "text/markdown"))])
         assert r.status_code == 200
-        assert r.json()["status"] == "indexing"
+        body = r.json()
+        assert body["status"] == "indexing"
+        assert body["count"] == 2                 # 两个文件都在一批里
 
         for _ in range(30):                       # 轮询最多 15 秒
             status = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()["status"]
@@ -110,10 +113,12 @@ def test_upload_document_state_machine():
                 break
             time.sleep(0.5)
         assert status == "ready"
+        cur = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()
+        assert len(cur["source_doc_ids"]) == 2    # 两个文件都已入库
 
         hits = c.get(f"/api/v1/kbs/{kb['kb_id']}/search",
                      params={"query": "叠加态", "user_id": "u1"}).json()
-        assert len(hits) == 1
+        assert hits and "量子比特" in hits[0]["text"]   # 上传内容可检索到
 
 
 def test_upload_unsupported_file_goes_failed():
@@ -122,7 +127,7 @@ def test_upload_unsupported_file_goes_failed():
         kb = c.request("POST", "/api/v1/kbs",
                        json={"name": "坏文件库", "scope": "public", "user_id": "u1"}).json()
         r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents",
-                   files={"file": ("data.xlsx", b"binary", "application/octet-stream")})
+                   files={"files": ("data.xlsx", b"binary", "application/octet-stream")})
         assert r.status_code == 200          # 上传立即成功
         for _ in range(30):
             status = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()["status"]
@@ -130,3 +135,26 @@ def test_upload_unsupported_file_goes_failed():
                 break
             time.sleep(0.5)
         assert status == "failed"            # 状态机正确落位
+
+
+def test_clean_text_drops_lone_surrogates():
+    """孤立代理字符（pypdf 提取残缺数学符号产生）→ 清洗掉，不再编码崩溃。"""
+    from app.services.kb_service import _clean_text
+    assert _clean_text("abc\ud835def") == "abcdef"
+    # 完整代理对（合法数学字母 U+1D435）保留
+    assert _clean_text("x\U0001d435y") == "x\U0001d435y"
+    assert _clean_text("普通中文 text") == "普通中文 text"
+
+
+def test_batch_skips_bad_file_and_ingests_rest():
+    """批量上传：一个文件解析失败只跳过它，其余文件照常入库，状态仍 ready。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("批量容错库", "public", None)
+    n = ks.ingest_files(kb.kb_id, [
+        ("ok.txt", "量子比特可以处于叠加态。".encode()),
+        ("bad.xlsx", b"binary"),                       # 不支持的格式 → 跳过
+    ])
+    assert n > 0
+    cur = ks.get_kb(kb.kb_id)
+    assert cur.status == "ready"
+    assert len(cur.source_doc_ids or []) == 1          # 只有 ok.txt 入库

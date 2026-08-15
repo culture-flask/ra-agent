@@ -23,6 +23,33 @@ class LLMModelsRequest(BaseModel):
     api_key: str
 
 
+class LLMConfigUpdateRequest(BaseModel):
+    """更新已保存配置：只传要改的字段，None 表示保持原值。"""
+    provider: str | None = None
+    base_url: str | None = None
+    model_id: str | None = None
+    api_key: str | None = None
+
+
+def _fetch_models(settings, provider: str, base_url: str,
+                  api_key: str) -> list[str]:
+    """拉取某 provider 可选模型：不可列出（listable=false）用内置 catalog 兜底。"""
+    catalog = settings.llm_providers.get(provider)
+    if catalog is not None and not catalog.get("listable", True):
+        return catalog.get("catalog", [])
+    url = f"{base_url.rstrip('/')}/models"
+    try:
+        r = httpx.get(url, headers={"Authorization": f"Bearer {api_key}"},
+                      timeout=10)
+        r.raise_for_status()
+        return [m.get("id") for m in r.json().get("data", [])]
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code,
+                            detail=f"provider error: {e.response.text[:200]}")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"provider unreachable: {e}")
+
+
 @router.get("/providers")
 async def list_providers(request: Request):
     """provider 分类目录（配置内置）：前端做"选厂商"下拉框。"""
@@ -62,21 +89,45 @@ async def delete_config(config_id: str, request: Request, user_id: str):
     return {"deleted": config_id}
 
 
+@router.patch("/configs/{config_id}/default")
+async def set_default_config(config_id: str, request: Request, user_id: str):
+    """把已保存的配置切换为默认模型（互斥：清除该用户其他默认）。"""
+    ok = request.app.state.llm_service.set_default_config(user_id, config_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="config not found")
+    return {"default": config_id}
+
+
 @router.post("/models")
 async def list_models(req: LLMModelsRequest, request: Request):
     """一键获取模型列表：OpenAI 兼容 provider 调 {base_url}/models；
     不可列出（listable=false）则用内置 catalog 兜底。"""
-    catalog = request.app.state.settings.llm_providers.get(req.provider)
-    if catalog is not None and not catalog.get("listable", True):
-        return catalog.get("catalog", [])
-    url = f"{req.base_url.rstrip('/')}/models"
-    try:
-        r = httpx.get(url, headers={"Authorization": f"Bearer {req.api_key}"},
-                      timeout=10)
-        r.raise_for_status()
-        return [m.get("id") for m in r.json().get("data", [])]
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code,
-                            detail=f"provider error: {e.response.text[:200]}")
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"provider unreachable: {e}")
+    return _fetch_models(request.app.state.settings,
+                         req.provider, req.base_url, req.api_key)
+
+
+@router.get("/configs/{config_id}/models")
+async def list_config_models(config_id: str, request: Request, user_id: str):
+    """某条已保存配置的可选模型列表：api_key 由后端解密调用，不离开服务端。
+
+    前端切换模型时不需要重新输入 base_url / api_key。
+    """
+    svc = request.app.state.llm_service
+    cfg = svc.get_config(user_id, config_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="config not found")
+    return _fetch_models(request.app.state.settings,
+                         cfg.provider, cfg.base_url, cfg.api_key or "")
+
+
+@router.patch("/configs/{config_id}")
+async def update_config(config_id: str, req: LLMConfigUpdateRequest,
+                        request: Request, user_id: str):
+    """更新已保存配置（切换模型）：只传要改的字段，None 保持原值。"""
+    ok = request.app.state.llm_service.update_config(
+        user_id, config_id,
+        provider=req.provider, base_url=req.base_url,
+        model_id=req.model_id, api_key=req.api_key)
+    if not ok:
+        raise HTTPException(status_code=404, detail="config not found")
+    return {"updated": config_id}

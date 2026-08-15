@@ -73,20 +73,34 @@ class LLMService:
         cfg = self.get_user_config(user_id) or self._system
         return LLMFactory.build(cfg)
 
+    def get_config(self, user_id: str, config_id: str) -> LLMConfig | None:
+        """读取某条已保存配置（api_key 解密），仅本人可见，不存在返回 None。"""
+        with SessionLocal() as db:
+            row = db.get(UserLLMConfig, config_id)
+            if row is None or row.user_id != user_id:
+                return None
+        return LLMConfig(provider=row.provider, base_url=row.base_url,
+                         model_id=row.model_id,
+                         api_key=self._crypto.decrypt(row.api_key))
+
     # ---------- 写入 ----------
+    def _clear_defaults(self, db, user_id: str,
+                         exclude_id: str | None = None) -> None:
+        """把该用户所有默认标记清掉（可排除某条，用于把它切成默认）。"""
+        rows = db.scalars(select(UserLLMConfig).where(
+            UserLLMConfig.user_id == user_id,
+            UserLLMConfig.is_default == True)).all()   # noqa: E712
+        for r in rows:
+            if r.id != exclude_id:
+                r.is_default = False
+
     def set_user_config(self, user_id: str, provider: str, base_url: str,
                         model_id: str, api_key: str,
                         is_default: bool = False) -> str:
         """保存用户配置：api_key 加密落库；设默认时先清掉其他默认。"""
-        if is_default:
-            with SessionLocal() as db:
-                rows = db.scalars(select(UserLLMConfig).where(
-                    UserLLMConfig.user_id == user_id,
-                    UserLLMConfig.is_default == True)).all()   # noqa: E712
-                for r in rows:
-                    r.is_default = False
-                db.commit()
         with SessionLocal() as db:
+            if is_default:
+                self._clear_defaults(db, user_id)
             row = UserLLMConfig(
                 user_id=user_id, provider=provider,
                 api_key=self._crypto.encrypt(api_key),   # 加密落库
@@ -96,6 +110,44 @@ class LLMService:
             db.add(row)
             db.commit()
             return row.id
+
+    def set_default_config(self, user_id: str, config_id: str) -> bool:
+        """把某条已保存配置切换为默认模型（互斥：先清该用户其他默认）。
+
+        仅允许操作本人的配置；config 不存在或属于他人 → 返回 False。
+        """
+        with SessionLocal() as db:
+            target = db.get(UserLLMConfig, config_id)
+            if target is None or target.user_id != user_id:
+                return False
+            self._clear_defaults(db, user_id, exclude_id=config_id)
+            target.is_default = True
+            db.commit()
+            return True
+
+    def update_config(self, user_id: str, config_id: str,
+                      provider: str | None = None,
+                      base_url: str | None = None,
+                      model_id: str | None = None,
+                      api_key: str | None = None) -> bool:
+        """更新已保存配置（切换模型用）：只传要改的字段，None 表示保持原值。
+
+        仅本人配置可改；is_default 不受影响（切换后仍是默认/非默认）。
+        """
+        with SessionLocal() as db:
+            row = db.get(UserLLMConfig, config_id)
+            if row is None or row.user_id != user_id:
+                return False
+            if provider is not None:
+                row.provider = provider
+            if base_url is not None:
+                row.base_url = base_url
+            if model_id is not None:
+                row.model_id = model_id
+            if api_key is not None:
+                row.api_key = self._crypto.encrypt(api_key)
+            db.commit()
+            return True
 
     def delete_config(self, user_id: str, config_id: str) -> bool:
         """删除一条配置：仅允许删本人的，返回是否删除成功。"""

@@ -24,6 +24,14 @@ class KBRebuildRequest(BaseModel):
     embedding_base_url: str | None = None      # 不传则按 provider 继承/默认
     embedding_api_key: str | None = None       # 不传则沿用原库密钥
 
+class KBEmbeddingUpdateRequest(BaseModel):
+    """修改嵌入配置（创建后随时可改）：只更新传了的字段。"""
+    embedding_provider: str | None = None
+    embedding_model_id: str | None = None
+    embedding_dim: int | None = None
+    embedding_base_url: str | None = None      # 空串=清空回退 provider 默认端点
+    embedding_api_key: str | None = None       # 空串=清除专用密钥
+
 def _kb_dict(kb) -> dict:
     return {
         "kb_id": kb.kb_id, "name": kb.name, "scope": kb.scope,
@@ -33,9 +41,25 @@ def _kb_dict(kb) -> dict:
         "embedding_dim": kb.embedding_dim, "status": kb.status,
         "embedding_base_url": kb.embedding_base_url,       # 端点非敏感，可回显便于编辑
         "has_embedding_key": bool(kb.embedding_api_key),   # 不下发明文，只告知是否设了专用密钥
+        "embedded_model": kb.embedded_model,               # 向量实际由谁嵌入
+        "embedding_mismatch": _kb_mismatch(kb),            # 查询模型 ≠ 嵌入模型时的提醒
         "source_doc_ids": kb.source_doc_ids or [],
         "created_at": kb.created_at.isoformat() if hasattr(kb.created_at, "isoformat") else str(kb.created_at),
     }
+
+def _kb_mismatch(kb) -> str | None:
+    """与 KBService.embedding_mismatch 相同逻辑；API 层免依赖 service 实例。"""
+    em = kb.embedded_model or {}
+    if not em:
+        return None
+    if (em.get("provider") == kb.embedding_provider
+            and em.get("model_id") == kb.embedding_model_id
+            and em.get("dim") == kb.embedding_dim):
+        return None
+    return (f"向量库由 {em.get('provider')}/{em.get('model_id')}（dim {em.get('dim')}）嵌入，"
+            f"当前配置为 {kb.embedding_provider}/{kb.embedding_model_id}"
+            f"（dim {kb.embedding_dim}），检索结果可能不准确；"
+            f"如需向量匹配新模型，请重新上传文档或使用「重建」")
 
 
 def _get_kb(request: Request, kb_id: str):
@@ -77,24 +101,54 @@ async def search_kb(kb_id: str, query: str, request: Request, k: int = 5,
 
 
 @router.post("/kbs/{kb_id}/documents")
-async def upload_document(kb_id: str, request: Request,
-                          background: BackgroundTasks,
-                          file: UploadFile = File(...)):
-    """多格式文档上传：解析入库放后台执行，立即返回 status=indexing。
+async def upload_documents(kb_id: str, request: Request,
+                           background: BackgroundTasks,
+                           files: list[UploadFile] = File(...)):
+    """批量文档上传：一次请求可带多个文件（multipart 字段名均为 files）。
 
     流程：status=indexing → 后台 parse/chunk/embed → status=ready|failed。
-    轮询 GET /kbs/{kb_id} 观察进度。
+    轮询 GET /kbs/{kb_id} 观察进度（整批一次状态流转，不逐文件分状态）。
     用 FastAPI BackgroundTasks（响应返回后由框架可靠执行，测试可预期）；
     生产环境可换成 Celery/ARQ Worker（第 10 天）。
     """
     kb = _get_kb(request, kb_id)
-    content = await file.read()
-    if not content:
+    if kb.status == "indexing":
+        # 上一批还在后台入库（远端嵌入模型可能很慢）：拒绝并发，避免两个任务抢状态/抢写向量库
+        raise HTTPException(status_code=409,
+                            detail="already indexing: 上一批文件还在入库中，请等待完成后再上传")
+    payload: list[tuple[str, bytes]] = []
+    for f in files:
+        content = await f.read()
+        if not content:
+            continue                     # 跳过空文件，其余照常入库
+        payload.append((f.filename or "upload.bin", content))
+    if not payload:
         raise HTTPException(status_code=400, detail="empty file")
     kb_service = request.app.state.kb_service
-    background.add_task(kb_service.ingest_file, kb.kb_id,
-                        file.filename or "upload.bin", content)
-    return {"kb_id": kb.kb_id, "status": "indexing", "filename": file.filename}
+    background.add_task(kb_service.ingest_files, kb.kb_id, payload)
+    return {"kb_id": kb.kb_id, "status": "indexing",
+            "count": len(payload),
+            "filenames": [name for name, _ in payload],
+            "filename": payload[0][0]}   # 兼容旧调用方
+
+@router.patch("/kbs/{kb_id}/embedding")
+async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,
+                              request: Request):
+    """修改知识库的嵌入配置（provider/model/端点/密钥），创建后随时可改。
+
+    已入库的向量不会重新嵌入：若换了模型，接口返回的 embedding_mismatch
+    会提醒检索结果可能不准确（重新上传或重建可让向量匹配新模型）。
+    """
+    _get_kb(request, kb_id)   # 先确认库存在，404 优先
+    try:
+        kb = request.app.state.kb_service.update_embedding(
+            kb_id, provider=req.embedding_provider,
+            model_id=req.embedding_model_id, dim=req.embedding_dim,
+            base_url=req.embedding_base_url, api_key=req.embedding_api_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _kb_dict(kb)
+
 
 @router.post("/kbs/{kb_id}/rebuild")
 async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):

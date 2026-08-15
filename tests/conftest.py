@@ -9,6 +9,10 @@ import tempfile
 
 # 关键：测试必须离线、确定性——强制本地嵌入 + 临时数据目录。
 # 必须在 import app.main 之前设置（Settings.load() 在 lifespan 里读环境变量）。
+# 数据库也必须指向专用测试库，绝不能清空开发库（否则跑一次测试就删一次真实知识库）：
+#   docker exec ra-postgres psql -U ra -d ra_agent -c "CREATE DATABASE ra_agent_test OWNER ra"
+#   DATABASE_URL=postgresql+psycopg://ra:ra@localhost:5432/ra_agent_test .venv/bin/alembic upgrade head
+os.environ["DATABASE_URL"] = "postgresql+psycopg://ra:ra@localhost:5432/ra_agent_test"
 os.environ["EMBEDDING_DEFAULT_PROVIDER"] = "local"
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="ra-test-data-")
 os.environ["CHROMA_DIR"] = tempfile.mkdtemp(prefix="ra-test-chroma-")
@@ -31,4 +35,7 @@ def clean_db():
         conn.execute(text("DELETE FROM memories"))  # 子表链按外键方向删
         conn.execute(text("DELETE FROM kbs"))       # 再删子表(有外键指向 users)
         conn.execute(text("DELETE FROM users"))
+        # LangGraph 检查点：不清理会让上一轮测试的 retrievals 等状态
+        # 按 thread_id 泄漏进下一轮测试（会话状态必须每轮重置）
+        conn.execute(text("TRUNCATE checkpoint_writes, checkpoint_blobs, checkpoints CASCADE"))
     yield

@@ -12,8 +12,10 @@ def test_local_embedding_dim():
 
 def test_embedding_factory_missing_key():
     meta = EmbeddingMeta(provider="doubao", model_id="m", dim=2048, base_url="http://x")
+    # "已配置"= secrets 字典里有该 provider 键（KBService._embedding_secrets 按
+    # settings.embedding_cloud 生成）；配置过的云端 provider 无 key 必须 fail fast
     try:
-        EmbeddingFactory.build(meta, {})
+        EmbeddingFactory.build(meta, {"doubao": None, "system": None})
     except RuntimeError as e:
         assert "api_key" in str(e)
     else:

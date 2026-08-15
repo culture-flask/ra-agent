@@ -31,7 +31,7 @@ class UserSession(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class KnowledgeBase(Base):
-    """知识库：固化[所用嵌入模型]标注，重建时保留旧库"""
+    """知识库：嵌入配置（provider/model/端点）创建后可随时修改；向量库实际写入模型记在 embedded_model。"""
     __tablename__ = "kbs"
 
     kb_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -47,6 +47,8 @@ class KnowledgeBase(Base):
         String(256), nullable=True)          # 该库自定义嵌入端点，空则用 provider 默认
     embedding_api_key: Mapped[str | None] = mapped_column(
         String(512), nullable=True)          # 该库专用嵌入密钥（AES 加密），空则用系统默认
+    embedded_model: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True)                 # 最近一次成功入库使用的嵌入模型标注（见 embedding_mismatch）
     status: Mapped[str] = mapped_column(String(16), default="indexing")
     #                       ↑ ready | indexing | reembedding | failed（状态机）
     source_doc_ids: Mapped[list] = mapped_column(JSON, default=list)   # 原文档引用

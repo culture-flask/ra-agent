@@ -37,6 +37,38 @@ def test_unknown_provider_rejected():
     ks = _make_ks()
     with pytest.raises(ValueError, match="unknown embedding provider"):
         ks.create_kb("坏库", "public", None, provider="nonexistent")
+    # 自定义 provider 也必须同时给全 base_url / model_id / dim，缺一即拒绝
+    with pytest.raises(ValueError, match="unknown embedding provider"):
+        ks.create_kb("坏库2", "public", None, provider="llama", model_id="x", dim=768)
+    with pytest.raises(ValueError, match="unknown embedding provider"):
+        ks.create_kb("坏库3", "public", None, provider="llama",
+                     dim=768, base_url="http://h:1/v1")      # 缺 model_id → 拒绝
+
+
+def test_custom_openai_compatible_provider():
+    """任意 OpenAI 兼容端点（llama.cpp / vLLM）：显式 base_url + model + dim 即可接入。"""
+    ks = _make_ks()
+    kb = ks.create_kb("llama库", "public", None,
+                      provider="llama", model_id="nomic-embed-text-v1.5",
+                      dim=768, base_url="http://100.85.4.71:9999/v1")
+    assert kb.embedding_provider == "llama"
+    assert kb.embedding_model_id == "nomic-embed-text-v1.5"
+    assert kb.embedding_dim == 768
+    assert kb.embedding_base_url == "http://100.85.4.71:9999/v1"
+    assert kb.status == "ready"
+
+
+def test_self_hosted_provider_needs_no_api_key():
+    """自建端点免鉴权：未配置 provider 无 key 也能构建（不再抛 missing api_key）。"""
+    from app.abstractions.embedding import EmbeddingFactory
+    meta = EmbeddingMeta("llama", "nomic-embed-text-v1.5", 768,
+                         "http://100.85.4.71:9999/v1")
+    model = EmbeddingFactory.build(meta, {})
+    assert model.meta.provider == "llama"
+    # 配置过的云端 provider 无 key 仍要 fail fast（secrets 字典含该 provider 键）
+    with pytest.raises(RuntimeError, match="missing api_key"):
+        EmbeddingFactory.build(EmbeddingMeta("doubao", "m", 2048),
+                               {"doubao": None, "system": None})
 
 
 def test_rebuild_keeps_old_kb_and_new_searchable():
@@ -110,3 +142,54 @@ def test_rebuild_api():
         assert new["kb_id"] != kb["kb_id"]
         assert new["embedding_model_id"] == "mini-b"
         assert new["status"] == "ready"
+
+
+def test_update_embedding_config_and_mismatch():
+    """嵌入配置创建后可改：改模型后 embedding_mismatch 提醒，只换端点不提醒。"""
+    ks = _make_ks()
+    kb = ks.create_kb("改配置库", "public", None)
+    assert ks.embedding_mismatch(ks.get_kb(kb.kb_id)) is None     # 空库无提醒
+
+    ks.ingest_file(kb.kb_id, "a.txt", "量子比特可以处于叠加态。".encode())
+    kb = ks.get_kb(kb.kb_id)
+    assert kb.embedded_model is not None                          # 记录了写入模型
+    assert ks.embedding_mismatch(kb) is None                      # 配置未变 → 无提醒
+
+    # 只换端点（同模型）→ 不提醒
+    kb1 = ks.update_embedding(kb.kb_id, base_url="http://127.0.0.1:1/v1")
+    assert ks.embedding_mismatch(kb1) is None
+
+    # 换模型（同 provider 不同 model_id）→ 提醒
+    kb2 = ks.update_embedding(kb.kb_id, provider="local", model_id="mini-b", dim=384)
+    assert kb2.embedding_model_id == "mini-b"
+    warn = ks.embedding_mismatch(kb2)
+    assert warn is not None and "mini" in warn and "重建" in warn
+
+    # 再入库一次 → embedded_model 更新为当前配置 → 提醒消失
+    ks.ingest_file(kb.kb_id, "b.txt", "Shor算法可以分解大整数。".encode())
+    kb4 = ks.get_kb(kb.kb_id)
+    assert kb4.embedded_model["model_id"] == "mini-b"
+    assert ks.embedding_mismatch(kb4) is None
+
+
+def test_api_update_embedding():
+    """API：PATCH /kbs/{id}/embedding 修改配置；非法 provider → 400。"""
+    with TestClient(app) as c:
+        kb = c.post("/api/v1/kbs", json={
+            "name": "API改库", "scope": "public", "user_id": "u1",
+            "embedding_provider": "local"}).json()
+        # 换到自定义端点（llama.cpp 风格）→ 200
+        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/embedding", json={
+            "embedding_provider": "llama.cpp", "embedding_model_id": "qwen3-embedding:8b",
+            "embedding_dim": 4096, "embedding_base_url": "http://127.0.0.1:18080/v1"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["embedding_provider"] == "llama.cpp"
+        assert d["embedding_dim"] == 4096
+        # 非法 provider 且无可用端点（base_url 被清空）→ 400 且配置不变
+        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/embedding",
+                     json={"embedding_provider": "nonexistent",
+                           "embedding_base_url": ""})
+        assert r2.status_code == 400
+        d2 = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()
+        assert d2["embedding_provider"] == "llama.cpp"

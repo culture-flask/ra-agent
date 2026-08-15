@@ -6,10 +6,12 @@ from openai import OpenAI
 
 @dataclass
 class EmbeddingMeta:
-    provider: str        # "local" | "doubao" | "openai" | "qwen" ...
+    provider: str        # "local" | "doubao" | "openai" | "qwen" | 任意自建端点名（llama.cpp 等）
     model_id: str
     dim: int
     base_url: str | None = None
+    batch_delay: float | None = None   # 批次间隔秒数；None=用实现默认（云端限流需要），自建端点置 0
+    batch_size: int | None = None      # 单批条数；None=用实现默认 10，自建端点减小防打崩脆弱服务器
 
 
 class EmbeddingModel(ABC):
@@ -66,29 +68,34 @@ class CloudEmbeddingModel(EmbeddingModel):
     """云端 API：api_key + base_url + model_id（OpenAI 兼容协议）。"""
 
     BATCH_SIZE = 10      # doubao 单次 input 上限 10 条（实测；各家不同，保守取 10）
-    BATCH_DELAY = 5.0    # 批次间隔秒数：防 429 限流（测试密钥 RPM 低，实测 0.5s 仍触发）
+    BATCH_DELAY = 0.5    # 批次间隔秒数：防 429 限流（测试密钥 RPM 低，实测 0.5s 仍触发）
     MAX_RETRIES = 10      # 429 重试次数（指数退避）
+    MAX_CONN_RETRIES = 4  # 连接抖动重试次数（0.5+1+2+4≈7.5s；服务器真挂了就快速失败，别空等 8 分钟）
 
     def __init__(self, meta: EmbeddingMeta, api_key: str):
         super().__init__(meta)
         self._client = OpenAI(api_key=api_key, base_url=meta.base_url)
+        # 自建端点（ollama / llama.cpp / vLLM）无限流，跳过批次间隔，避免大批量入库空等
+        self.batch_delay = meta.batch_delay if meta.batch_delay is not None else self.BATCH_DELAY
+        # 自建端点用小批次（内存峰值低，8B 模型 + 大 n_ctx 的服务器扛不住 10 条×1000 字）
+        self.batch_size = meta.batch_size or self.BATCH_SIZE
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        """分批嵌入：一次最多 BATCH_SIZE 条，超出自动切片并间隔发送（防限流）。"""
+        """分批嵌入：一次最多 batch_size 条，超出自动切片并间隔发送（防限流）。"""
         out: list[list[float]] = []
-        for i in range(0, len(texts), self.BATCH_SIZE):
-            batch = texts[i:i + self.BATCH_SIZE]
+        for i in range(0, len(texts), self.batch_size):
+            batch = texts[i:i + self.batch_size]
             out.extend(self._embed_batch_with_retry(batch))
-            if i + self.BATCH_SIZE < len(texts):
+            if self.batch_delay and i + self.batch_size < len(texts):
                 import time
-                time.sleep(self.BATCH_DELAY)
+                time.sleep(self.batch_delay)
         return out
 
     def _embed_batch_with_retry(self, batch: list[str]) -> list[list[float]]:
-        """单批嵌入：429 限流时按指数退避重试，其他错误直接抛。"""
+        """单批嵌入：429 限流 / 连接抖动（远端模型冷启动、网络瞬断）指数退避重试。"""
         import time
 
-        from openai import RateLimitError
+        from openai import APIConnectionError, APITimeoutError, RateLimitError
 
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -98,7 +105,11 @@ class CloudEmbeddingModel(EmbeddingModel):
             except RateLimitError:
                 if attempt == self.MAX_RETRIES - 1:
                     raise
-                time.sleep(2 ** attempt)      # 退避：1s → 2s
+                time.sleep(2 ** attempt)            # 退避：1s → 2s → 4s
+            except (APIConnectionError, APITimeoutError):
+                if attempt == self.MAX_CONN_RETRIES - 1:
+                    raise
+                time.sleep(0.5 * (2 ** attempt))    # 连接抖动：0.5s → 1s → 2s → 4s
         raise RuntimeError("unreachable")
 
     def embed_query(self, text: str) -> list[float]:
@@ -141,5 +152,8 @@ class EmbeddingFactory:
             return LocalEmbeddingModel(meta)
         api_key = secrets.get(meta.provider) or secrets.get("system")
         if not api_key:
-            raise RuntimeError(f"missing api_key for embedding provider: {meta.provider}")
+            if meta.provider in secrets:
+                # 配置过的云端 provider 必须有 key（fail fast，避免入库时才 401）
+                raise RuntimeError(f"missing api_key for embedding provider: {meta.provider}")
+            api_key = "sk-self-hosted"   # 自建端点（llama.cpp 等）免鉴权，占位即可
         return CloudEmbeddingModel(meta, api_key)

@@ -26,7 +26,7 @@ from app.services.parsing import parse_file
 logger = get_logger("kb_service")
 
 
-def split_chunks(text: str, size: int = 500, overlap: int = 100) -> list[str]:
+def split_chunks(text: str, size: int = 1000, overlap: int = 150) -> list[str]:
     """分块：固定窗口 + 重叠（正式解析流程的第 2 步）。"""
     text = text.strip()
     if not text:
@@ -38,6 +38,17 @@ def split_chunks(text: str, size: int = 500, overlap: int = 100) -> list[str]:
         chunks.append(text[start:start + size])
         start += size - overlap
     return chunks
+
+
+def _clean_text(text: str) -> str:
+    """剔除文本中的孤立代理字符（lone surrogate）。
+
+    部分 PDF 提取器（如 pypdf 处理含数学符号字体的 PDF）会产出残缺的
+    UTF-16 代理半区（如 \ud835），这类字符无法编码为 UTF-8，直接导致
+    写 chunk 落盘 / 向量化时 UnicodeEncodeError、整批入库失败。
+    完整代理对（合法数学字母等）经 surrogatepass 保留转换，只丢弃孤立半区。
+    """
+    return text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="ignore")
 
 
 class KBService:
@@ -56,27 +67,42 @@ class KBService:
     # ---------- 模型解析 ----------
     def resolve_embedding_meta(self, provider: str | None = None,
                                model_id: str | None = None,
-                               dim: int | None = None) -> EmbeddingMeta:
-        """解析嵌入模型：缺省用配置默认；可显式指定 provider/model_id/dim（每库标注）。"""
+                               dim: int | None = None,
+                               base_url: str | None = None) -> EmbeddingMeta:
+        """解析嵌入模型：缺省用配置默认；可显式指定 provider/model_id/dim（每库标注）。
+
+        任意 OpenAI 兼容端点（llama.cpp / vLLM 等）无需进配置白名单——
+        只要显式给出 base_url + model_id + dim，按云端协议直接接入。
+        """
         provider = provider or self._settings.embedding_default_provider
         if provider == "local":
             return EmbeddingMeta(provider="local", model_id=model_id or "mini",
                                  dim=dim or self._settings.embedding_local_default_dim)
         cloud = self._settings.embedding_cloud.get(provider)
         if not cloud:
-            raise ValueError(f"unknown embedding provider: {provider} "
-                             f"(可用: {', '.join(self._settings.embedding_cloud)})")
+            if not (base_url and model_id and dim):
+                raise ValueError(
+                    f"unknown embedding provider: {provider} "
+                    f"(可用: {', '.join(self._settings.embedding_cloud)}, local；"
+                    f"或自定义 OpenAI 兼容端点——需同时提供 base_url / model_id / dim)")
+            return EmbeddingMeta(provider=provider, model_id=model_id, dim=dim,
+                                 base_url=base_url)
         return EmbeddingMeta(provider=provider,
                              model_id=model_id or cloud["model_id"],
                              dim=dim or cloud["dim"],
-                             base_url=cloud["base_url"])
+                             base_url=base_url or cloud["base_url"])
 
     def _vector_store(self, kb: KnowledgeBase):
+        cloud_cfg = self._settings.embedding_cloud.get(kb.embedding_provider, {})
+        rate_limited = bool(cloud_cfg.get("rate_limited"))
         meta = EmbeddingMeta(
             kb.embedding_provider, kb.embedding_model_id, kb.embedding_dim,
             # 库级自定义端点优先，缺省回退该 provider 在配置里的默认 base_url
-            kb.embedding_base_url
-            or self._settings.embedding_cloud.get(kb.embedding_provider, {}).get("base_url"))
+            kb.embedding_base_url or cloud_cfg.get("base_url"),
+            # 自建端点（ollama/llama.cpp 等，配置未标 rate_limited）：零间隔 + 小批次，
+            # 降低单请求内存峰值（8B 模型配大 n_ctx 的服务器，大批次容易 OOM/断连）
+            batch_delay=None if rate_limited else 0.0,
+            batch_size=None if rate_limited else 4)
         emb = EmbeddingFactory.build(meta, self._secrets_for(kb))
         return VectorStoreFactory.build(self._settings, kb.kb_id, emb)
 
@@ -100,7 +126,7 @@ class KBService:
                   base_url: str | None = None) -> KnowledgeBase:
         """建库：写 Postgres（固化嵌入模型标注），有文本则同步入库。
         可显式指定嵌入模型（provider/model_id/dim）与专用 base_url/api_key，缺省用配置默认。"""
-        meta = self.resolve_embedding_meta(provider, model_id, dim)
+        meta = self.resolve_embedding_meta(provider, model_id, dim, base_url)
         with SessionLocal() as db:
             kb = KnowledgeBase(
                 kb_id=uuid.uuid4().hex[:12], name=name, scope=scope,
@@ -161,13 +187,21 @@ class KBService:
         """文本入库：分块 → 存 chunk → 向量化 → ready。"""
         return self._ingest(kb_id, [("text.txt", t.encode("utf-8")) for t in texts])
 
-    def ingest_file(self, kb_id: str, filename: str, content: bytes) -> int:
-        """单文件入库：置 indexing → 解析 → 分块 → 存 chunk → 向量化 → ready。"""
+    def ingest_files(self, kb_id: str, files: list[tuple[str, bytes]]) -> int:
+        """批量文件入库：一次置 indexing → 解析全部文件 → 分块 → 存 chunk → 向量化 → ready。
+
+        一次请求的多个文件走同一条后台任务，状态机只流转一次
+        （indexing → ready | failed），避免并发任务互相覆盖 status。
+        """
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
             row.status = "indexing"
             db.commit()
-        return self._ingest(kb_id, [(filename, content)])
+        return self._ingest(kb_id, files)
+
+    def ingest_file(self, kb_id: str, filename: str, content: bytes) -> int:
+        """单文件入库（批量接口的单文件特例）。"""
+        return self.ingest_files(kb_id, [(filename, content)])
 
     def _ingest(self, kb_id: str, files: list[tuple[str, bytes]]) -> int:
         """入库核心：解析全部文件 → 分块 → 落盘 → 向量化 → 更新状态。
@@ -179,10 +213,18 @@ class KBService:
             return self._ingest_inner(kb_id, kb, files)
         except Exception as e:
             logger.error("ingest failed kb=%s: %s", kb_id, e)   # 失败原因进日志
+            if e.__cause__:
+                # Chroma 等会把底层异常包一层（如 "Connection error. in add."），
+                # 记下真实原因（连接谁、什么错），不然排查只能看到包装消息
+                logger.error("ingest failed kb=%s (cause %s): %s",
+                             kb_id, type(e.__cause__).__name__, e.__cause__)
+            # 清掉本次失败留下的半截 chunk，避免脏文件残留（重新上传会重建）
+            shutil.rmtree(self._chunk_dir / kb_id, ignore_errors=True)
             with SessionLocal() as db:
                 row = db.get(KnowledgeBase, kb_id)
-                row.status = "failed"
-                db.commit()
+                if row is not None:            # 入库途中库被删 → 不再写失败状态
+                    row.status = "failed"
+                    db.commit()
             emit("ingest", {"kb_id": kb_id, "status": "failed", "error": str(e)[:200]})
             return 0      # 错误已落在 status=failed，不再抛出（后台任务不能把异常带回响应）
 
@@ -194,17 +236,27 @@ class KBService:
         chunks: list[ChunkRecord] = []
         doc_ids: list[str] = []
         for filename, content in files:
-            text = parse_file(filename, content)
-            # 内容哈希：同一文件重复上传 → 相同 chunk id → Chroma 覆盖（幂等）
-            digest = hashlib.sha256(content).hexdigest()[:8]
-            doc_ids.append(digest)
-            for i, piece in enumerate(split_chunks(text)):
-                chunk_id = f"{kb_id}_{digest}_{i}"
-                chunks.append(ChunkRecord(
-                    id=chunk_id, text=piece,
-                    payload={"scope": kb.scope, "user_id": kb.owner_user_id or "",
-                             "doc_id": digest, "category_id": kb.category_id}))
-                (kb_dir / f"{chunk_id}.txt").write_text(piece, encoding="utf-8")
+            try:
+                # _clean_text：剔除 pypdf 等提取出的孤立代理字符，避免编码崩溃
+                text = _clean_text(parse_file(filename, content))
+                # 内容哈希：同一文件重复上传 → 相同 chunk id → Chroma 覆盖（幂等）
+                digest = hashlib.sha256(content).hexdigest()[:8]
+                file_chunks: list[ChunkRecord] = []
+                for i, piece in enumerate(split_chunks(text)):
+                    chunk_id = f"{kb_id}_{digest}_{i}"
+                    file_chunks.append(ChunkRecord(
+                        id=chunk_id, text=piece,
+                        payload={"scope": kb.scope, "user_id": kb.owner_user_id or "",
+                                 "doc_id": digest, "category_id": kb.category_id}))
+                    (kb_dir / f"{chunk_id}.txt").write_text(piece, encoding="utf-8")
+                # 整个文件成功后才登记 doc_id + chunks，避免半截文件污染批次
+                doc_ids.append(digest)
+                chunks.extend(file_chunks)
+            except Exception as e:
+                # 单文件容错：坏文件只跳过并记日志，不影响同批其他文件入库
+                logger.warning("skip file %s (kb=%s): %s", filename, kb_id, e)
+        if not doc_ids:
+            raise ValueError("所有文件都解析失败，无文档可入库")
 
         self._vector_store(kb).add(chunks)
         with SessionLocal() as db:
@@ -217,14 +269,42 @@ class KBService:
                 if doc_id not in existing:
                     existing.append(doc_id)
             row.source_doc_ids = existing
+            # 记录这批向量实际由哪个嵌入模型写入（查询时用来比对，模型不一致则提醒）
+            row.embedded_model = {
+                "provider": kb.embedding_provider,
+                "model_id": kb.embedding_model_id,
+                "dim": kb.embedding_dim,
+                "base_url": kb.embedding_base_url,
+            }
             db.commit()
         emit("ingest", {"kb_id": kb_id, "chunks": len(chunks), "status": "ready"})
         return len(chunks)
 
     # ---------- 检索 ----------
+    def embedding_mismatch(self, kb: KnowledgeBase) -> str | None:
+        """比对"向量实际由谁嵌入"与"当前查询配置"：模型不一致时返回提醒文案。
+
+        只比对 provider/model_id/dim —— 仅换端点（base_url）不影响向量语义，不提醒。
+        """
+        em = kb.embedded_model or {}
+        same = (em.get("provider") == kb.embedding_provider
+                and em.get("model_id") == kb.embedding_model_id
+                and em.get("dim") == kb.embedding_dim)
+        if same:
+            return None
+        if not em:
+            return None        # 还没入库过任何向量，无从比对
+        return (f"向量库由 {em.get('provider')}/{em.get('model_id')}（dim {em.get('dim')}）"
+                f"嵌入，当前查询使用 {kb.embedding_provider}/{kb.embedding_model_id}"
+                f"（dim {kb.embedding_dim}），检索结果可能不准确；"
+                f"如需让向量匹配新模型，请重新上传文档或使用「重建」生成新库")
+
     def search(self, kb_id: str, query: str, k: int = 3,
                user_id: str | None = None) -> list[dict]:
         kb = self.get_kb(kb_id)
+        warn = self.embedding_mismatch(kb)
+        if warn:
+            logger.warning("embedding mismatch kb=%s: %s", kb_id, warn)
         hits = self._vector_store(kb).search(query, k=k, scope=kb.scope, user_id=user_id)
         for h in hits:
             h["scope"] = kb.scope
@@ -232,6 +312,39 @@ class KBService:
             h["kb_name"] = kb.name
         emit("retrieve", {"kb_id": kb_id, "hits": len(hits), "scope": kb.scope})
         return hits
+
+    # ---------- 嵌入配置修改 ----------
+    def update_embedding(self, kb_id: str, provider: str | None = None,
+                         model_id: str | None = None, dim: int | None = None,
+                         base_url: str | None = None,
+                         api_key: str | None = None) -> KnowledgeBase:
+        """修改知识库的嵌入配置（创建后随时可改，不再固化）。
+
+        - 传了才改：provider/model_id/dim 仅在有值时更新
+        - base_url：None=保持不变；空串=清空（回退 provider 默认端点）
+        - api_key：None=保持不变；空串=清除专用密钥；其他=加密更新
+        - 已入库的向量不会重新嵌入，查询时由 embedding_mismatch 提醒
+        """
+        kb = self.get_kb(kb_id)
+        if kb.status == "indexing":
+            raise ValueError("knowledge base is indexing: 入库中请勿修改嵌入配置")
+        new_provider = provider or kb.embedding_provider
+        new_model = model_id or kb.embedding_model_id
+        new_dim = dim or kb.embedding_dim
+        new_base = kb.embedding_base_url if base_url is None else (base_url.strip() or None)
+        meta = self.resolve_embedding_meta(new_provider, new_model, new_dim, new_base)
+        with SessionLocal() as db:
+            row = db.get(KnowledgeBase, kb_id)
+            row.embedding_provider = meta.provider
+            row.embedding_model_id = meta.model_id
+            row.embedding_dim = meta.dim
+            row.embedding_base_url = meta.base_url
+            if api_key is not None:
+                row.embedding_api_key = self._crypto.encrypt(api_key) if api_key else None
+            db.commit()
+        logger.info("kb=%s embedding config updated: %s/%s dim=%s base=%s",
+                    kb_id, meta.provider, meta.model_id, meta.dim, meta.base_url)
+        return self.get_kb(kb_id)
 
     # ---------- 知识库重建 ----------
     def rebuild(self, src_kb_id: str, provider: str | None = None,
@@ -246,7 +359,7 @@ class KBService:
         状态机：reembedding → ready | failed。
         """
         src = self.get_kb(src_kb_id)
-        meta = self.resolve_embedding_meta(provider, model_id, dim)
+        meta = self.resolve_embedding_meta(provider, model_id, dim, base_url)
         new_base_url = base_url if base_url is not None else (
             src.embedding_base_url if meta.provider == src.embedding_provider else None)
         new_kb = KnowledgeBase(

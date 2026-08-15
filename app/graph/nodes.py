@@ -5,8 +5,11 @@ import re
 from langchain_core.messages import AIMessage, SystemMessage,ToolMessage
 
 from app.core.events import emit
+from app.core.logging import get_logger
 from app.services.memory_service import MAX_MEMORIES_PER_USER
 from app.graph.state import AgentState
+
+logger = get_logger("graph_nodes")
 
 
 @dataclass
@@ -56,6 +59,66 @@ def _review(memory: dict) -> bool:
     return len(value) <= 200
 
 
+# ---------- 知识库路由（LLM 意图判断） ----------
+ROUTE_PROMPT = """你是问答路由，负责判断用户提问是否需要查询知识库，以及查哪些库。
+
+可用知识库（JSON 数组，只列用户可见的库）：
+{catalog}
+
+判断规则：
+- 闲聊、寒暄、数学计算、写代码、通用常识（无需特定资料就能回答）→ 不需要检索
+- 问题涉及知识库里的具体内容（术语、资料、论文、实验记录、项目背景等），
+  或用户明确要求"查/搜/总结知识库" → 需要检索，并选出最相关的库
+- 拿不准时倾向于需要检索，宁可多选一个相关的库也不漏掉
+
+只输出 JSON，不要任何其他文字：
+{{"needs_retrieval": true或false, "kbs": [{{"name": "库名", "scope": "public或private"}}]}}
+不需要检索时 kbs 为 []。"""
+
+
+def _parse_route(text: str) -> dict:
+    """解析路由 LLM 返回的 JSON（容忍围栏/夹带文字）。解析失败返回空 dict。"""
+    text = text.strip()
+    if "```" in text:                            # 去掉 markdown 围栏
+        text = re.sub(r"```(?:json)?", "", text).strip("` \n")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m:
+            return {}
+        try:
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _resolve_selected_kbs(kbs: list, picks: list) -> list:
+    """把 LLM 选的 (name/scope) 解析回可见知识库对象。
+
+    只允许命中「用户可见」的库：名称不存在、或属于他人私人库的名称一律忽略，
+    防止用户（或 LLM 被诱导）越权检索。scope 写错/漏写时按名称兜底匹配。
+    """
+    selected, seen = [], set()
+    for pick in picks or []:
+        if not isinstance(pick, dict):
+            continue
+        name = str(pick.get("name", "")).strip()
+        scope = str(pick.get("scope", "")).strip().lower()
+        if not name:
+            continue
+        matches = [kb for kb in kbs
+                   if kb.name == name and (not scope or kb.scope == scope)]
+        if not matches:                          # scope 漏写/写错 → 名称兜底
+            matches = [kb for kb in kbs if kb.name == name]
+        for kb in matches:
+            if kb.kb_id not in seen:
+                seen.add(kb.kb_id)
+                selected.append(kb)
+    return selected
+
+
 async def load_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """跨会话读取：把该用户的长记忆载入状态（图的第一站）。"""
     if ctx.memory_service is None:
@@ -96,23 +159,56 @@ async def save_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     return {}
 
 def _build_system_prompt(state: AgentState) -> str:
-    """把检索结果拼进系统提示词——RAG 的核心：知识先进 prompt，LLM 才能引用。"""
-    parts = ["你是科研助手，基于知识库检索结果回答用户问题，引用时标明来源（public/private）。"]
-    if state.get("memory"):
-        parts.append(f"[用户记忆] {json.dumps(state['memory'], ensure_ascii=False)}")
+    """组装系统提示词：有检索结果 → 基于知识库作答；没有 → 直接用自己的知识作答。"""
     if state.get("retrievals"):
+        parts = ["你是科研助手，基于知识库检索结果回答用户问题，引用时标明来源（public/private）。"]
         lines = [f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}"
                  for r in state["retrievals"]]
         parts.append("\n".join(lines))
+    else:
+        parts = ["你是科研助手，根据你自己的知识回答用户问题。"]
+    if state.get("memory"):
+        parts.append(f"[用户记忆] {json.dumps(state['memory'], ensure_ascii=False)}")
     return "\n\n".join(parts)
 
 
 async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """路由决策：用户有可用知识库 → 先检索；没有 → 直接生成。"""
+    """路由决策（LLM 意图判断）：先看用户有没有可见知识库。
+
+    - 没有可见库 → 无需检索，直接生成
+    - 有可见库 → 把「库名 + scope」目录交给 LLM，让它判断本次提问
+      是否需要检索、以及选哪几个库（按名称），再做可见性校验后落 state
+    - LLM 判断异常/解析失败 → 降级为全部可见库检索（保持 RAG 兜底）
+    """
     kbs = ctx.kb_service.list_kbs(state["user_id"])
-    needs = len(kbs) > 0
-    emit("supervisor", {"needs_retrieval": needs, "kb_count": len(kbs)})
-    return {"needs_retrieval": needs}
+    if not kbs:
+        emit("supervisor", {"needs_retrieval": False, "kb_count": 0, "selected": []})
+        return {"needs_retrieval": False, "selected_kb_ids": []}
+
+    catalog = [{"name": kb.name, "scope": kb.scope} for kb in kbs]
+    selected: list = []
+    try:
+        model = ctx.llm_service.get_chat_model(state["user_id"])
+        prompt = ROUTE_PROMPT.format(catalog=json.dumps(catalog, ensure_ascii=False))
+        resp = await model.ainvoke([SystemMessage(content=prompt)] + state["messages"][-4:])
+        route = _parse_route(str(resp.content or ""))
+        if not route:                         # LLM 没按 JSON 输出 → 无法判断意图
+            raise ValueError("unparseable route output")
+        needs = bool(route.get("needs_retrieval"))
+        if needs:
+            selected = _resolve_selected_kbs(kbs, route.get("kbs"))
+            if not selected:                  # 说要查但一个库都没选中 → 全查，避免漏检索
+                selected = list(kbs)
+    except Exception as e:
+        logger.warning("kb routing failed, fallback to all visible kbs: %s", e)
+        needs, selected = True, list(kbs)
+    emit("supervisor", {
+        "needs_retrieval": needs,
+        "kb_count": len(kbs),
+        "selected": [{"name": kb.name, "scope": kb.scope} for kb in selected],
+    })
+    return {"needs_retrieval": needs,
+            "selected_kb_ids": [kb.kb_id for kb in selected]}
 
 
 def route_supervisor(state: AgentState) -> str:
@@ -137,10 +233,12 @@ async def tool_executor_node(ctx: WorkflowContext, state: AgentState) -> dict:
     return {"messages": results}
 
 async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """两级 KB 合并检索：public + 本人 private，结果带 scope 标签（引用溯源）。"""
+    """按 LLM 选定的知识库检索（仅限可见库），结果带 scope 标签（引用溯源）。"""
     kbs = ctx.kb_service.list_kbs(state["user_id"])
+    selected_ids = set(state.get("selected_kb_ids") or [])
+    targets = [kb for kb in kbs if kb.kb_id in selected_ids]
     hits = []
-    for kb in kbs:
+    for kb in targets:
         hits.extend(ctx.kb_service.search(kb.kb_id, state["query"], k=3,
                                           user_id=state["user_id"]))
     hits.sort(key=lambda h: h.get("distance", 0))

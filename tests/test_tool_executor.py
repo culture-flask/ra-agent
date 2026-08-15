@@ -36,6 +36,9 @@ class ScriptedModel:
     async def ainvoke(self, messages):
         return self._responses.pop(0)
 
+    async def astream(self, messages):
+        yield await self.ainvoke(messages)    # generate 节点用 astream 逐 token 流式
+
 
 class ScriptedLLMService:
     def __init__(self, responses: list[AIMessage]):

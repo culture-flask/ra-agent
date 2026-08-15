@@ -51,6 +51,9 @@ class ScriptedModel:
         return self._responses.pop(0) if self._responses \
             else AIMessage(content='{"memories":[]}')
 
+    async def astream(self, messages):
+        yield await self.ainvoke(messages)    # generate 节点用 astream 逐 token 流式
+
 
 class ScriptedLLMService:
     def __init__(self, responses, captured=None):
