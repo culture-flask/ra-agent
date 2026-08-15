@@ -33,6 +33,11 @@ llm:
     qwen:      { base_url: https://dashscope.aliyuncs.com/compatible-mode/v1, listable: true }
     deepseek:  { base_url: https://api.deepseek.com/v1, listable: true }
 
+retrieval:
+  mode: hybrid  # 对话检索模式：vector（纯向量）| hybrid（向量 + BM25 混合），可在前端切换
+  per_kb_k: 3   # 对话 RAG：每个知识库检索几条（前端可调，1~20）
+  total_k: 5    # 对话 RAG：所有库合并后总共取几条（前端可调，1~50）
+
 embedding:
   default_provider: doubao
   default_model: doubao-embedding-vision

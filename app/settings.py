@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     llm_retry_max_retries: int = 3          # LLM 调用失败重试次数（指数退避）
     llm_retry_base_delay: float = 1.0       # 首次重试基础等待秒数，之后 2 倍递增
     llm_context_window: int = 32768         # 生效模型上下文窗口（token），80% 触发自动压缩
+    retrieval_mode: str = "hybrid"          # 检索模式：vector（纯向量）| hybrid（向量+BM25）
+    retrieval_per_kb_k: int = 3             # 对话 RAG：每个知识库检索几条
+    retrieval_total_k: int = 5              # 对话 RAG：所有库合并后总共取几条
     embedding_default_provider: str = "doubao"
     embedding_default_model: str = "doubao-embedding-vision"
     embedding_cloud: dict = Field(default_factory=dict)
@@ -63,6 +66,9 @@ class Settings(BaseSettings):
                 "llm_retry_max_retries": raw.get("llm", {}).get("retry", {}).get("max_retries", 3),
                 "llm_retry_base_delay": raw.get("llm", {}).get("retry", {}).get("base_delay", 1.0),
                 "llm_context_window": raw.get("llm", {}).get("context_window", 32768),
+                "retrieval_mode": raw.get("retrieval", {}).get("mode", "hybrid"),
+                "retrieval_per_kb_k": raw.get("retrieval", {}).get("per_kb_k", 3),
+                "retrieval_total_k": raw.get("retrieval", {}).get("total_k", 5),
                 "embedding_default_provider": raw["embedding"]["default_provider"],
                 "embedding_default_model": raw["embedding"]["default_model"],
                 "embedding_cloud": raw["embedding"]["cloud"],

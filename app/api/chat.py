@@ -23,6 +23,13 @@ class ChatRequest(BaseModel):
     history: list[dict] = Field(default_factory=list)
     # 重新生成：先回退 checkpoint 里最后一条回复，再基于最后一条用户消息重生成
     rewind: bool = False
+    # 检索模式：vector（纯向量）| hybrid（向量+BM25）；None = 全局默认
+    retrieval_mode: str | None = None
+    # 检索数量：每库几条 / 合并后总共几条；None 或 0 = 全局默认
+    per_kb_k: int | None = None
+    total_k: int | None = None
+    # 生成温度：0~2；None = 默认 0.3
+    temperature: float | None = None
 
 
 def _initial_state(req: ChatRequest, append_message: bool = True) -> dict:
@@ -46,6 +53,10 @@ def _initial_state(req: ChatRequest, append_message: bool = True) -> dict:
         "retrievals": [],
         "needs_retrieval": False,
         "selected_kb_ids": [],
+        "retrieval_mode": req.retrieval_mode or "",
+        "per_kb_k": req.per_kb_k or 0,
+        "total_k": req.total_k or 0,
+        "temperature": req.temperature,
     }
 
 

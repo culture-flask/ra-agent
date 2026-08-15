@@ -17,3 +17,7 @@ class AgentState(TypedDict, total=False):
     memory: dict                            # 长期记忆（用户级，跨会话）
     new_memories: list[dict]                # 本次抽取待审核的记忆
     conversation_summary: str               # 自动压缩产生的历史对话总结（拼进系统提示词）
+    retrieval_mode: str                     # 检索模式：vector（纯向量）| hybrid（向量+BM25）
+    per_kb_k: int                           # 每个知识库检索几条（0=全局默认）
+    total_k: int                            # 所有库合并后总共取几条（0=全局默认）
+    temperature: float | None               # 生成温度（None=默认 0.3；0 也合法）

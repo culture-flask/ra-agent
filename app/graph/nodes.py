@@ -128,7 +128,8 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
     if not old:
         return {}
     try:
-        model = ctx.llm_service.get_chat_model(state["user_id"])
+        model = ctx.llm_service.get_chat_model(
+            state["user_id"], temperature=state.get("temperature"))
         resp = await model.ainvoke([SystemMessage(content=COMPACT_PROMPT)] + old)
         summary = str(resp.content or "").strip()
     except Exception as e:
@@ -229,7 +230,8 @@ async def extract_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     if ctx.memory_service is None:
         return {"new_memories": []}
     try:
-        model = ctx.llm_service.get_chat_model(state["user_id"])
+        model = ctx.llm_service.get_chat_model(
+            state["user_id"], temperature=state.get("temperature"))
         system = SystemMessage(content=EXTRACT_PROMPT)
         resp = await model.ainvoke([system] + state["messages"][-4:])   # 只看最近几轮
         memories = _parse_memories(str(resp.content or ""))
@@ -295,7 +297,8 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
     catalog = [{"name": kb.name, "scope": kb.scope} for kb in kbs]
     selected: list = []
     try:
-        model = ctx.llm_service.get_chat_model(state["user_id"])
+        model = ctx.llm_service.get_chat_model(
+            state["user_id"], temperature=state.get("temperature"))
         prompt = ROUTE_PROMPT.format(catalog=json.dumps(catalog, ensure_ascii=False))
         resp = await model.ainvoke([SystemMessage(content=prompt)] + state["messages"][-4:])
         route = _parse_route(str(resp.content or ""))
@@ -339,23 +342,44 @@ async def tool_executor_node(ctx: WorkflowContext, state: AgentState) -> dict:
                                    tool_call_id=call["id"]))
     return {"messages": results}
 
+def _hit_rank_key(h: dict) -> float:
+    """跨库合并排序键：hybrid 结果按 RRF 融合分（越大越好），vector 按距离（越小越好）。"""
+    if h.get("score") is not None:
+        return -float(h.get("score") or 0)
+    return float(h.get("distance") or float("inf"))
+
+
 async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """按 LLM 选定的知识库检索（仅限可见库），结果带 scope 标签（引用溯源）。"""
+    """按 LLM 选定的知识库检索（仅限可见库），结果带 scope 标签（引用溯源）。
+
+    检索模式：state.retrieval_mode（前端每轮传）→ 全局配置 retrieval_mode 兜底。
+    """
     kbs = ctx.kb_service.list_kbs(state["user_id"])
     selected_ids = set(state.get("selected_kb_ids") or [])
     # 双保险：即使 selected_ids 携带被禁用的库（路由与检索之间用户改了开关），也跳过
     targets = [kb for kb in kbs
                if kb.kb_id in selected_ids and kb.retrieval_enabled]
+    mode = (state.get("retrieval_mode")
+            or getattr(ctx.settings, "retrieval_mode", "hybrid"))
+    # 检索数量：每库 k 条 / 合并后总共 top 条（state 传入 → 全局配置兜底，带范围约束）
+    per_kb = int(state.get("per_kb_k") or 0) or int(
+        getattr(ctx.settings, "retrieval_per_kb_k", 3))
+    total = int(state.get("total_k") or 0) or int(
+        getattr(ctx.settings, "retrieval_total_k", 5))
+    per_kb = max(1, min(per_kb, 20))
+    total = max(1, min(total, 50))
     hits = []
     for kb in targets:
-        hits.extend(ctx.kb_service.search(kb.kb_id, state["query"], k=3,
-                                          user_id=state["user_id"]))
-    hits.sort(key=lambda h: h.get("distance", 0))
-    top = hits[:5]
+        hits.extend(ctx.kb_service.search(kb.kb_id, state["query"], k=per_kb,
+                                          user_id=state["user_id"], mode=mode))
+    hits.sort(key=_hit_rank_key)
+    top = hits[:total]
     # 引用溯源推流：前端据此展示检索来源面板（text 截断，避免事件过大）
-    emit("retrievals", {"results": [
+    emit("retrievals", {"mode": mode, "results": [
         {"kb_name": h.get("kb_name"), "scope": h.get("scope"),
-         "distance": h.get("distance"), "text": str(h.get("text", ""))[:300]}
+         "distance": h.get("distance"), "bm25_score": h.get("bm25_score"),
+         "score": h.get("score"), "method": h.get("method"),
+         "text": str(h.get("text", ""))[:300]}
         for h in top]})
     return {"retrievals": top}
 
@@ -367,7 +391,8 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     实时推给 SSE 端点（前端打字机效果）；聚合后的完整 message 仍写入 state，
     tool_calls 也随之聚合，不影响 generate ⇄ tool_executor 循环。
     """
-    model = ctx.llm_service.get_chat_model(state["user_id"])
+    model = ctx.llm_service.get_chat_model(
+        state["user_id"], temperature=state.get("temperature"))
     if ctx.mcp_adapter is not None:
         schemas = await ctx.mcp_adapter.schemas_for_llm()
         if schemas:

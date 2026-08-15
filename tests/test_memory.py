@@ -60,7 +60,7 @@ class ScriptedLLMService:
         self._responses = responses          # 共享
         self._captured = captured
 
-    def get_chat_model(self, user_id: str):
+    def get_chat_model(self, user_id: str, temperature=None):
         return ScriptedModel(self._responses, self._captured)
 
 

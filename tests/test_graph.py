@@ -62,7 +62,7 @@ class FakeLLMService:
         self._answer = answer
         self._route_json = route_json
 
-    def get_chat_model(self, user_id: str):
+    def get_chat_model(self, user_id: str, temperature=None):
         return RouterAwareFakeModel(self._answer, self._route_json)
 
 
@@ -164,6 +164,80 @@ def test_private_kb_not_visible_to_others():
                                 "query": "实验参数",
                                 "messages": [HumanMessage(content="实验参数")]})
     assert result.get("retrievals", []) == []   # u2 什么都查不到
+
+
+def test_retrieve_with_mode_vector():
+    """retrieval_mode=vector：retrieve_node 走纯向量，结果无 BM25 分数。"""
+    ctx, kb_service = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "测试库", "scope": "public"}]}')
+    kb_service.create_kb("测试库", "public", "u1", ["量子比特可以处于叠加态"])
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-mode-1",
+                                "query": "叠加态是什么",
+                                "retrieval_mode": "vector",
+                                "messages": [HumanMessage(content="叠加态是什么")]})
+    assert result["retrievals"]
+    assert all(r.get("bm25_score") is None for r in result["retrievals"])
+    assert all(r.get("distance") is not None for r in result["retrievals"])
+
+
+def test_retrieve_with_mode_hybrid():
+    """retrieval_mode=hybrid：retrieve_node 结果带 BM25 分数与融合分。"""
+    ctx, kb_service = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "测试库", "scope": "public"}]}')
+    kb_service.create_kb("测试库", "public", "u1", ["量子比特可以处于叠加态"])
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-mode-2",
+                                "query": "叠加态是什么",
+                                "retrieval_mode": "hybrid",
+                                "messages": [HumanMessage(content="叠加态是什么")]})
+    assert result["retrievals"]
+    assert all(r.get("score") is not None for r in result["retrievals"])
+
+
+def test_retrieve_counts_parameterized():
+    """per_kb_k / total_k 生效：两库各 1 条，per_kb_k=1 + total_k=1 → 只取 1 条。"""
+    ctx, kb_service = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "库A", "scope": "public"}, {"name": "库B", "scope": "public"}]}')
+    kb_service.create_kb("库A", "public", "u1", ["量子比特可以处于叠加态A"])
+    kb_service.create_kb("库B", "public", "u1", ["蛋白质折叠预测B"])
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-k-1",
+                                "query": "量子比特",
+                                "per_kb_k": 1, "total_k": 1,
+                                "messages": [HumanMessage(content="量子比特")]})
+    assert len(result["retrievals"]) == 1
+
+
+def test_retrieve_counts_default_from_settings():
+    """不传 per_kb_k/total_k（0）→ 走全局配置默认（yaml：每库 3 / 总共 5）。"""
+    ctx, kb_service = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "库A", "scope": "public"}]}')
+    kb_service.create_kb("库A", "public", "u1", ["量子比特可以处于叠加态A"])
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-k-2",
+                                "query": "量子比特",
+                                "per_kb_k": 0, "total_k": 0,
+                                "messages": [HumanMessage(content="量子比特")]})
+    assert len(result["retrievals"]) == 1     # 单库单条：默认值下正常返回
+
+
+def test_retrieve_counts_clamped():
+    """越界值被约束不崩溃：per_kb_k=999/total_k=999 → clamp 后正常返回。"""
+    ctx, kb_service = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "库A", "scope": "public"}]}')
+    kb_service.create_kb("库A", "public", "u1", ["量子比特可以处于叠加态A"])
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-k-3",
+                                "query": "量子比特",
+                                "per_kb_k": 999, "total_k": 999,
+                                "messages": [HumanMessage(content="量子比特")]})
+    assert len(result["retrievals"]) == 1
 
 
 def test_checkpointer_continues_session():

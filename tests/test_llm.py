@@ -76,6 +76,41 @@ def test_masked_listing():
     assert "sk-v...9999" in str(cfgs)
 
 
+def test_factory_default_temperature():
+    """未指定 temperature → 默认 0.3。"""
+    from app.abstractions.llm import DEFAULT_TEMPERATURE, LLMConfig, LLMFactory
+    m = LLMFactory.build(LLMConfig(provider="x", base_url="http://x/v1",
+                                   model_id="m", api_key="sk-test"))
+    assert m.temperature == DEFAULT_TEMPERATURE == 0.3
+
+
+def test_factory_custom_temperature():
+    """指定 temperature → 透传。"""
+    from app.abstractions.llm import LLMConfig, LLMFactory
+    m = LLMFactory.build(LLMConfig(provider="x", base_url="http://x/v1",
+                                   model_id="m", api_key="sk-test",
+                                   temperature=0.8))
+    assert m.temperature == 0.8
+
+
+def test_get_chat_model_temperature_override():
+    """get_chat_model 传 temperature → 覆盖默认（0 也合法，不会被当成未设置）。"""
+    svc = _make_service()
+    m0 = svc.get_chat_model("nobody-temp")
+    assert m0.temperature == 0.3
+    m1 = svc.get_chat_model("nobody-temp", temperature=0.0)
+    assert m1.temperature == 0.0
+    m2 = svc.get_chat_model("nobody-temp", temperature=1.5)
+    assert m2.temperature == 1.5
+
+
+def test_get_chat_model_temperature_clamped():
+    """越界 temperature 被约束到 0~2。"""
+    svc = _make_service()
+    assert svc.get_chat_model("nobody-temp2", temperature=-1).temperature == 0.0
+    assert svc.get_chat_model("nobody-temp2", temperature=9).temperature == 2.0
+
+
 def test_extract_context_window_fields():
     """从模型元数据提取窗口：识别各平台字段名，缺失返回 None。"""
     from app.abstractions.llm import extract_context_window

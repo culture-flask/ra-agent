@@ -14,6 +14,7 @@ from pathlib import Path
 import chromadb
 from sqlalchemy import select
 
+from app.abstractions.bm25 import Bm25Index, rrf_fuse
 from app.abstractions.embedding import EmbeddingFactory, EmbeddingMeta
 from app.abstractions.vectorstore import ChunkRecord, VectorStoreFactory
 from app.core.crypto import SecretCrypto
@@ -63,6 +64,7 @@ class KBService:
             **{p: settings.embedding_api_key for p in settings.embedding_cloud},
             "system": settings.embedding_api_key,
         }
+        self._bm25_cache: dict[str, Bm25Index] = {}   # kb_id -> BM25 索引（懒构建）
 
     # ---------- 模型解析 ----------
     def resolve_embedding_meta(self, provider: str | None = None,
@@ -189,6 +191,7 @@ class KBService:
             logger.warning("delete collection failed kb=%s: %s", kb_id, e)
         # 2) 磁盘 chunk 目录
         shutil.rmtree(self._chunk_dir / kb_id, ignore_errors=True)
+        self._bm25_cache.pop(kb_id, None)              # 3.5) BM25 索引缓存失效
         # 3) Postgres 元数据
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
@@ -224,7 +227,9 @@ class KBService:
         """
         kb = self.get_kb(kb_id)
         try:
-            return self._ingest_inner(kb_id, kb, files)
+            n = self._ingest_inner(kb_id, kb, files)
+            self._bm25_cache.pop(kb_id, None)          # chunk 变了，BM25 索引失效
+            return n
         except Exception as e:
             logger.error("ingest failed kb=%s: %s", kb_id, e)   # 失败原因进日志
             if e.__cause__:
@@ -313,19 +318,60 @@ class KBService:
                 f"（dim {kb.embedding_dim}），检索结果可能不准确；"
                 f"如需让向量匹配新模型，请重新上传文档或使用「重建」生成新库")
 
+    def _bm25_index(self, kb: KnowledgeBase) -> Bm25Index:
+        """该库的 BM25 索引：进程内缓存 + 懒构建（chunk 从磁盘读，与嵌入模型解耦）。
+
+        入库/重建/删除后由调用方清除缓存，重启后自动重建。
+        """
+        idx = self._bm25_cache.get(kb.kb_id)
+        if idx is None:
+            idx = Bm25Index()
+            idx.build(self._read_chunks(kb.kb_id, kb))
+            self._bm25_cache[kb.kb_id] = idx
+        return idx
+
     def search(self, kb_id: str, query: str, k: int = 3,
-               user_id: str | None = None) -> list[dict]:
+               user_id: str | None = None,
+               mode: str | None = None) -> list[dict]:
+        """检索一个知识库：mode=vector 纯向量；mode=hybrid 向量 + BM25 融合。
+
+        默认取全局配置 retrieval_mode；结果统一带 scope/kb_id/kb_name/method：
+        - vector：distance（越小越近）
+        - hybrid：distance（向量分）+ bm25_score（词频分）+ score（RRF 融合分，越大越好）
+        """
         kb = self.get_kb(kb_id)
+        mode = mode or self._settings.retrieval_mode
         warn = self.embedding_mismatch(kb)
         if warn:
             logger.warning("embedding mismatch kb=%s: %s", kb_id, warn)
-        hits = self._vector_store(kb).search(query, k=k, scope=kb.scope, user_id=user_id)
-        for h in hits:
-            h["scope"] = kb.scope
-            h["kb_id"] = kb.kb_id
-            h["kb_name"] = kb.name
-        emit("retrieve", {"kb_id": kb_id, "hits": len(hits), "scope": kb.scope})
+
+        if mode == "hybrid":
+            vec_hits = self._vector_store(kb).search(
+                query, k=max(k, 8), scope=kb.scope, user_id=user_id)
+            bm_hits = self._bm25_index(kb).search(query, k=max(k, 8))
+            hits = rrf_fuse([self._annotate(kb, h) for h in vec_hits],
+                            [self._annotate(kb, h) for h in bm_hits],
+                            top=k)
+        else:
+            hits = [self._annotate(kb, h)
+                    for h in self._vector_store(kb).search(
+                        query, k=k, scope=kb.scope, user_id=user_id)]
+        emit("retrieve", {"kb_id": kb_id, "hits": len(hits), "scope": kb.scope,
+                          "mode": mode})
         return hits
+
+    @staticmethod
+    def _annotate(kb: KnowledgeBase, h: dict) -> dict:
+        """补知识库归属字段 + 命中方式标记（vector/bm25/hybrid 两路都命中）。"""
+        out = dict(h)
+        out.setdefault("scope", kb.scope)
+        out.setdefault("kb_id", kb.kb_id)
+        out.setdefault("kb_name", kb.name)
+        has_vec = out.get("distance") is not None
+        has_bm = out.get("bm25_score") is not None
+        out["method"] = "hybrid" if (has_vec and has_bm) else (
+            "bm25" if has_bm else "vector")
+        return out
 
     # ---------- 嵌入配置修改 ----------
     def update_embedding(self, kb_id: str, provider: str | None = None,
@@ -392,6 +438,11 @@ class KBService:
         try:
             chunks = self._read_chunks(src_kb_id, new_kb)     # 复用已存 chunk
             self._vector_store(new_kb).add(chunks)            # 新 collection 重向量化
+            # 重建库的 chunk 物理上在 src 目录：BM25 索引直接构建并缓存，
+            # 否则懒构建会读到空目录
+            bm = Bm25Index()
+            bm.build(chunks)
+            self._bm25_cache[new_kb.kb_id] = bm
             with SessionLocal() as db:
                 row = db.get(KnowledgeBase, new_kb.kb_id)
                 row.status = "ready"

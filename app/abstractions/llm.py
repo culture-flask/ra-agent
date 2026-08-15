@@ -8,7 +8,7 @@
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 from langchain_openai import ChatOpenAI
@@ -92,6 +92,11 @@ class RetryableChatModel:
         """透传底层模型名（追踪/日志用）。"""
         return self._label
 
+    @property
+    def temperature(self) -> float:
+        """透传底层生成温度（调试/测试用）。"""
+        return getattr(self._model, "temperature", DEFAULT_TEMPERATURE)
+
     def bind_tools(self, schemas):
         """绑定 MCP 工具后仍保留重试能力（generate ⇄ tool 循环的第二次生成）。"""
         bound = self._model.bind_tools(schemas)
@@ -167,6 +172,11 @@ class LLMConfig:
     model_id: str
     api_key: str | None = None
     context_window: int | None = None   # 显式指定时优先于探测/默认
+    temperature: float | None = None    # None = 使用默认温度 0.3（按轮次可由用户覆盖）
+
+
+# 默认生成温度
+DEFAULT_TEMPERATURE = 0.3
 
 
 class LLMFactory:
@@ -178,7 +188,8 @@ class LLMFactory:
             model=cfg.model_id,
             api_key=cfg.api_key,
             base_url=cfg.base_url,
-            temperature=0.3,
+            temperature=(cfg.temperature if cfg.temperature is not None
+                         else DEFAULT_TEMPERATURE),
             streaming=True,
             request_timeout=60,   # 连续 60s 无数据视为卡死，抛错而不是无限等
             max_retries=0,        # 关闭 SDK 内部静默重试，统一走外层 RetryableChatModel（可观测）
@@ -220,8 +231,13 @@ class LLMService:
                          model_id=row.model_id,
                          api_key=self._crypto.decrypt(row.api_key))
 
-    def get_chat_model(self, user_id: str) -> RetryableChatModel:
+    def get_chat_model(self, user_id: str,
+                       temperature: float | None = None) -> RetryableChatModel:
+        """构建用户生效模型；temperature 非 None 时覆盖（按轮次可调，0 也有效）。"""
         cfg = self.get_user_config(user_id) or self._system
+        if temperature is not None:
+            temperature = max(0.0, min(2.0, float(temperature)))   # 范围约束 0~2
+            cfg = replace(cfg, temperature=temperature)
         model = LLMFactory.build(cfg)
         return RetryableChatModel(model, max_retries=self._retry_max,
                                   base_delay=self._retry_delay,

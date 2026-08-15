@@ -121,6 +121,33 @@ def test_upload_document_state_machine():
         assert hits and "量子比特" in hits[0]["text"]   # 上传内容可检索到
 
 
+def test_search_mode_vector_vs_hybrid():
+    """同一查询两种检索模式都返回结果：vector 只有向量距离，hybrid 带 BM25 分数。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("模式库", "public", None,
+                      ["量子比特是量子计算的基本单元，可以处于叠加态"])
+    vec = ks.search(kb.kb_id, "量子比特", k=3, user_id="u1", mode="vector")
+    hyb = ks.search(kb.kb_id, "量子比特", k=3, user_id="u1", mode="hybrid")
+
+    assert vec and hyb
+    assert all("distance" in h for h in vec)
+    assert all(h.get("bm25_score") is None for h in vec)     # 纯向量无 BM25 字段
+    assert all(h["method"] == "vector" for h in vec)
+
+    assert all("score" in h for h in hyb)                    # RRF 融合分
+    assert any(h.get("bm25_score") is not None for h in hyb) # 有 BM25 命中
+    assert all(h["method"] in ("vector", "bm25", "hybrid") for h in hyb)
+    assert all(h["kb_name"] == "模式库" for h in vec + hyb)  # 归属字段一致
+
+
+def test_search_mode_default_from_settings():
+    """mode 缺省时取全局配置 retrieval_mode（yaml 默认 hybrid）。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("默认模式库", "public", None, ["深度学习需要显卡算力"])
+    hits = ks.search(kb.kb_id, "深度学习", k=3, user_id="u1")
+    assert hits and hits[0].get("score") is not None        # hybrid 生效
+
+
 def test_upload_unsupported_file_goes_failed():
     """不支持的格式 → 后台任务失败 → 状态机走到 failed（而不是永久 indexing）。"""
     with TestClient(app) as c:

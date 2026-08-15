@@ -100,9 +100,12 @@ async def get_kb(kb_id: str, request: Request):
 
 @router.get("/kbs/{kb_id}/search")
 async def search_kb(kb_id: str, query: str, request: Request, k: int = 5,
-                    user_id: str = "u1"):
+                    user_id: str = "u1", mode: str | None = None):
+    """检索测试：mode=vector（纯向量）| hybrid（向量+BM25），默认全局配置。"""
     kb = _get_kb(request, kb_id)
-    return request.app.state.kb_service.search(kb.kb_id, query, k=k, user_id=user_id)
+    mode = mode or request.app.state.settings.retrieval_mode
+    return request.app.state.kb_service.search(kb.kb_id, query, k=k,
+                                               user_id=user_id, mode=mode)
 
 
 @router.post("/kbs/{kb_id}/documents")

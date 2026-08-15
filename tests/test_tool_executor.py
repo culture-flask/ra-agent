@@ -44,7 +44,7 @@ class ScriptedLLMService:
     def __init__(self, responses: list[AIMessage]):
         self._responses = responses       # 全测试共享这一个队列
 
-    def get_chat_model(self, user_id: str):
+    def get_chat_model(self, user_id: str, temperature=None):
         return ScriptedModel(self._responses)
 
 

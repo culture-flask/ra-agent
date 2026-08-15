@@ -84,7 +84,7 @@ class _FakeLLMService:
                  summary="历史总结：用户研究了量子计算与叠加态"):
         self._answer, self._route_json, self._summary = answer, route_json, summary
 
-    def get_chat_model(self, user_id: str):
+    def get_chat_model(self, user_id: str, temperature=None):
         return _FakeModel(self._answer, self._route_json, self._summary)
 
 
@@ -231,7 +231,7 @@ def test_compact_failure_skips_gracefully():
             return AIMessage(content="回答")
 
     class BoomService:
-        def get_chat_model(self, user_id: str):
+        def get_chat_model(self, user_id: str, temperature=None):
             return BoomModel("回答", '{"needs_retrieval": false, "kbs": []}', "x")
 
     settings = Settings.load().model_copy(update={
