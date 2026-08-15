@@ -181,3 +181,71 @@ def test_checkpointer_continues_session():
                                 config=cfg))
     texts = [m.content for m in result["messages"]]
     assert "第一问" in texts and "第二问" in texts   # 历史消息都在
+
+
+def test_fork_with_history_initial_state():
+    """分支会话：history 随首次请求传入，初始 messages = history + 新提问。"""
+    from app.api.chat import ChatRequest, _initial_state
+    req = ChatRequest(user_id="u1", session_id="branch-1", message="继续",
+                      history=[
+                          {"role": "user", "content": "第一问"},
+                          {"role": "assistant", "content": "第一答"},
+                          {"role": "user", "content": "分支点提问"},
+                      ])
+    state = _initial_state(req)
+    assert [m["role"] for m in state["messages"]] == ["user", "assistant", "user", "user"]
+    assert state["messages"][0]["content"] == "第一问"
+    assert state["messages"][-1]["content"] == "继续"
+    assert state["retrievals"] == [] and state["needs_retrieval"] is False
+
+
+def test_fork_history_runs_graph():
+    """分支历史真实跑图：新 thread 从 history 起步，历史 + 新提问 + 回答完整累积。"""
+    from app.api.chat import ChatRequest, _initial_state
+    ctx, _ = _make_ctx("分支回答")
+    graph = _run(build_graph(ctx))
+    req = ChatRequest(user_id="u1", session_id="branch-2", message="继续",
+                      history=[{"role": "user", "content": "分支点提问"}])
+    result = _run(graph.ainvoke(
+        _initial_state(req),
+        config={"configurable": {"thread_id": "branch-2"}}))
+    assert result["answer"] == "分支回答"
+    texts = [m.content for m in result["messages"]]
+    assert texts == ["分支点提问", "继续", "分支回答"]   # 历史 + 新提问 + 回答
+
+
+def test_rewind_regenerates_last_answer():
+    """重新生成：回退旧回复 → 重生成，不残留旧回答、不重复提问。"""
+    from app.api.chat import ChatRequest, _initial_state, _rewind_to_last_user
+
+    cfg = {"configurable": {"thread_id": "rewind-1"}}
+    # 第一轮：提问 → 旧回答
+    ctx1, _ = _make_ctx("旧回答")
+    graph1 = _run(build_graph(ctx1))
+    req1 = ChatRequest(user_id="u1", session_id="rewind-1", message="1+1等于几")
+    r1 = _run(graph1.ainvoke(_initial_state(req1), config=cfg))
+    assert r1["answer"] == "旧回答"
+    assert [m.content for m in r1["messages"]] == ["1+1等于几", "旧回答"]
+
+    # 回退：checkpoint 截断到最后一条用户消息
+    assert _run(_rewind_to_last_user(graph1, cfg)) is True
+    snap = _run(graph1.aget_state(cfg))
+    assert [m.content for m in snap.values["messages"]] == ["1+1等于几"]
+
+    # 重新生成（同一 thread，不追加消息）：新回答，无旧回答残留、无重复提问
+    ctx2, _ = _make_ctx("新回答")
+    graph2 = _run(build_graph(ctx2))
+    req2 = ChatRequest(user_id="u1", session_id="rewind-1", message="1+1等于几")
+    result = _run(graph2.ainvoke(_initial_state(req2, append_message=False),
+                                 config=cfg))
+    assert result["answer"] == "新回答"
+    assert [m.content for m in result["messages"]] == ["1+1等于几", "新回答"]
+
+
+def test_rewind_on_empty_thread_returns_false():
+    """新 thread 无 checkpoint 历史：无可回退，返回 False（端点据此退化为追加消息）。"""
+    from app.api.chat import _rewind_to_last_user
+    ctx, _ = _make_ctx("x")
+    graph = _run(build_graph(ctx))
+    cfg = {"configurable": {"thread_id": "brand-new-thread"}}
+    assert _run(_rewind_to_last_user(graph, cfg)) is False

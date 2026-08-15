@@ -3,6 +3,7 @@ import json
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from langchain_core.messages import RemoveMessage
 from pydantic import BaseModel, Field
 
 from app.core.events import clear_event_sink, set_event_sink
@@ -14,14 +15,28 @@ class ChatRequest(BaseModel):
     user_id: str = "u1"
     session_id: str = "s1"
     message: str = Field(min_length=1)
+    # 分支会话：新 thread 的初始历史（选中消息及之前），由前端随首次请求传入
+    history: list[dict] = Field(default_factory=list)
+    # 重新生成：先回退 checkpoint 里最后一条回复，再基于最后一条用户消息重生成
+    rewind: bool = False
 
 
-def _initial_state(req: ChatRequest) -> dict:
+def _initial_state(req: ChatRequest, append_message: bool = True) -> dict:
+    """组装图初始状态。
+
+    - history：分支会话首次请求携带的历史（dict → LangChain 兼容消息格式）
+    - append_message=False（rewind 场景）：不追加用户消息——checkpoint 里
+      已回退到最后一条用户消息，直接以其为起点重新生成
+    """
+    messages = [{"role": m.get("role", "user"), "content": m.get("content", "")}
+                for m in req.history]
+    if append_message:
+        messages.append({"role": "user", "content": req.message})
     return {
         "user_id": req.user_id,
         "session_id": req.session_id,
         "query": req.message,
-        "messages": [{"role": "user", "content": req.message}],
+        "messages": messages,
         # 每轮对话重置检索状态：checkpointer 会保留上一轮的 retrievals，
         # 不显式清空会让上一轮的知识库结果泄漏进本轮的系统提示词
         "retrievals": [],
@@ -30,20 +45,50 @@ def _initial_state(req: ChatRequest) -> dict:
     }
 
 
+async def _rewind_to_last_user(graph, config: dict) -> bool:
+    """重新生成前的回退：把 checkpoint 消息截断到最后一条用户消息。
+
+    丢弃其后的 assistant/tool 消息（旧回复或失败残留），返回是否执行了回退。
+    注意：messages 键走 add_messages reducer，直接传列表是"追加"而非替换，
+    必须用 RemoveMessage 按 id 删除要丢弃的消息。
+    """
+    snap = await graph.aget_state(config)
+    stored = list((snap.values or {}).get("messages", [])) if snap else []
+    if not stored:
+        return False
+    keep = list(stored)
+    while keep and getattr(keep[-1], "type", "") != "human":
+        keep.pop()
+    if not keep:
+        return False
+    keep_ids = {m.id for m in keep if getattr(m, "id", None)}
+    removes = [RemoveMessage(id=m.id) for m in stored
+               if getattr(m, "id", None) and m.id not in keep_ids]
+    if removes:
+        await graph.aupdate_state(config, {"messages": removes})
+    return True
+
+
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @router.post("/chat")
 async def chat(req: ChatRequest, request: Request):
-    """普通对话：跑完整图，返回答复与检索结果。"""
+    """普通对话：跑完整图，返回答复与检索结果。
+
+    rewind=true（重新生成）：先回退到最后一条用户消息，不追加新消息。
+    """
     graph = request.app.state.graph
-    result = await graph.ainvoke(
-        _initial_state(req),
-        config={"configurable": {"thread_id": req.session_id}, # 会话级隔离
-        "recursion_limit": 100
-        },   
-    )
+    config = {"configurable": {"thread_id": req.session_id},   # 会话级隔离
+              "recursion_limit": 100}
+    if req.rewind:
+        rewound = await _rewind_to_last_user(graph, config)
+        # 无 checkpoint 历史（新 thread）时无法回退 → 按普通提问追加消息
+        initial = _initial_state(req, append_message=not rewound)
+    else:
+        initial = _initial_state(req)
+    result = await graph.ainvoke(initial, config=config)
     return {
         "answer": result.get("answer", ""),
         "retrievals": result.get("retrievals", []),
@@ -60,16 +105,19 @@ async def chat_stream(req: ChatRequest, request: Request):
     """
     graph = request.app.state.graph
     sink: asyncio.Queue = asyncio.Queue()
+    config = {"configurable": {"thread_id": req.session_id},   # 会话级隔离
+              "recursion_limit": 100}
 
     async def run_graph():
         set_event_sink(sink)                     # 在本任务上下文里挂队列，节点 emit 可见
         try:
-            await graph.ainvoke(
-                _initial_state(req),
-                config={"configurable": {"thread_id": req.session_id},
-                "recursion_limit": 100
-                },   # 会话级隔离
-            )
+            if req.rewind:
+                rewound = await _rewind_to_last_user(graph, config)
+                # 无 checkpoint 历史（新 thread）时无法回退 → 按普通提问追加消息
+                initial = _initial_state(req, append_message=not rewound)
+            else:
+                initial = _initial_state(req)
+            await graph.ainvoke(initial, config=config)
             await sink.put({"type": "__done__"})
         except Exception as e:
             from app.abstractions.llm import _is_quota_exhausted
