@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_retry_max_retries: int = 3          # LLM 调用失败重试次数（指数退避）
     llm_retry_base_delay: float = 1.0       # 首次重试基础等待秒数，之后 2 倍递增
+    llm_context_window: int = 32768         # 生效模型上下文窗口（token），80% 触发自动压缩
     embedding_default_provider: str = "doubao"
     embedding_default_model: str = "doubao-embedding-vision"
     embedding_cloud: dict = Field(default_factory=dict)
@@ -61,6 +62,7 @@ class Settings(BaseSettings):
                 "llm_system_default": raw["llm"]["system_default"],
                 "llm_retry_max_retries": raw.get("llm", {}).get("retry", {}).get("max_retries", 3),
                 "llm_retry_base_delay": raw.get("llm", {}).get("retry", {}).get("base_delay", 1.0),
+                "llm_context_window": raw.get("llm", {}).get("context_window", 32768),
                 "embedding_default_provider": raw["embedding"]["default_provider"],
                 "embedding_default_model": raw["embedding"]["default_model"],
                 "embedding_cloud": raw["embedding"]["cloud"],

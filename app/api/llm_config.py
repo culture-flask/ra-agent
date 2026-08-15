@@ -32,17 +32,25 @@ class LLMConfigUpdateRequest(BaseModel):
 
 
 def _fetch_models(settings, provider: str, base_url: str,
-                  api_key: str) -> list[str]:
-    """拉取某 provider 可选模型：不可列出（listable=false）用内置 catalog 兜底。"""
+                  api_key: str) -> list[dict]:
+    """拉取某 provider 可选模型（附带上下文窗口探测）：不可列出
+    （listable=false）用内置 catalog 兜底。
+
+    返回 [{"id": str, "context_window": int | None}, ...]——
+    模型元数据里带 context_length 等字段的平台（如 OpenRouter）能拿到真实窗口。
+    """
+    from app.abstractions.llm import extract_context_window
     catalog = settings.llm_providers.get(provider)
     if catalog is not None and not catalog.get("listable", True):
-        return catalog.get("catalog", [])
+        return [{"id": m, "context_window": None}
+                for m in catalog.get("catalog", [])]
     url = f"{base_url.rstrip('/')}/models"
     try:
         r = httpx.get(url, headers={"Authorization": f"Bearer {api_key}"},
                       timeout=10)
         r.raise_for_status()
-        return [m.get("id") for m in r.json().get("data", [])]
+        return [{"id": m.get("id"), "context_window": extract_context_window(m)}
+                for m in r.json().get("data", [])]
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code,
                             detail=f"provider error: {e.response.text[:200]}")

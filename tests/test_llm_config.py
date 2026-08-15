@@ -70,7 +70,7 @@ def test_custom_provider_mocked():
         r = c.post("/api/v1/llm/models", json={
             "provider": "ollama", "base_url": "http://x:11434/v1", "api_key": "k"})
         assert r.status_code == 200
-        assert r.json() == ["local-model"]
+        assert r.json() == [{"id": "local-model", "context_window": None}]
     monkeypatch.undo()
 
 
@@ -185,7 +185,9 @@ def test_config_models_uses_stored_key(monkeypatch):
         resp = c.get(f"/api/v1/llm/configs/{r['id']}/models",
                      params={"user_id": uid})
         assert resp.status_code == 200
-        assert resp.json() == ["deepseek-v4-flash", "deepseek-v4"]
+        assert resp.json() == [
+            {"id": "deepseek-v4-flash", "context_window": None},
+            {"id": "deepseek-v4", "context_window": None}]
         assert seen.get("auth") == "Bearer sk-abcdefgh123456"   # 明文 key 只在服务端内部用
 
 
@@ -212,4 +214,6 @@ def test_list_models_mocked(monkeypatch):
             "provider": "sensenova", "base_url": "https://token.sensenova.cn/v1",
             "api_key": "k"})
         assert r.status_code == 200
-        assert r.json() == ["m1", "m2"]
+        assert r.json() == [
+            {"id": "m1", "context_window": None},
+            {"id": "m2", "context_window": None}]

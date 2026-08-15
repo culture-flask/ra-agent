@@ -7,6 +7,10 @@ from langchain_core.messages import RemoveMessage
 from pydantic import BaseModel, Field
 
 from app.core.events import clear_event_sink, set_event_sink
+from app.core.logging import get_logger
+from app.graph.nodes import _estimate_tokens
+
+logger = get_logger("chat")
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
@@ -45,6 +49,15 @@ def _initial_state(req: ChatRequest, append_message: bool = True) -> dict:
     }
 
 
+async def _context_usage(graph, config: dict, window: int) -> dict:
+    """当前会话上下文占用：窗口上限 + 消息 token 估测（自动压缩后）+ 占用比例。"""
+    snap = await graph.aget_state(config)
+    msgs = list((snap.values or {}).get("messages", [])) if snap else []
+    used = _estimate_tokens(msgs) if msgs else 0
+    return {"window": window, "used_tokens": used,
+            "ratio": round(used / window * 100, 1) if window else 0}
+
+
 async def _rewind_to_last_user(graph, config: dict) -> bool:
     """重新生成前的回退：把 checkpoint 消息截断到最后一条用户消息。
 
@@ -71,6 +84,18 @@ async def _rewind_to_last_user(graph, config: dict) -> bool:
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.get("/chat/context")
+async def chat_context(user_id: str, session_id: str, request: Request):
+    """当前会话上下文占用（打开/切换会话时前端拉取；对话中由 SSE context 事件刷新）。"""
+    graph = request.app.state.graph
+    config = {"configurable": {"thread_id": session_id}}
+    svc = request.app.state.llm_service
+    window = (svc.context_window_for(user_id)
+              if hasattr(svc, "context_window_for")
+              else int(request.app.state.settings.llm_context_window))
+    return await _context_usage(graph, config, window)
 
 
 @router.post("/chat")
@@ -118,6 +143,16 @@ async def chat_stream(req: ChatRequest, request: Request):
             else:
                 initial = _initial_state(req)
             await graph.ainvoke(initial, config=config)
+            # 上下文占用推流：窗口（模型响应探测/默认）+ 压缩后的消息估测 tokens
+            try:
+                svc = request.app.state.llm_service
+                window = (svc.context_window_for(req.user_id)
+                          if hasattr(svc, "context_window_for")
+                          else int(request.app.state.settings.llm_context_window))
+                await sink.put({"type": "context",
+                                **_context_usage(graph, config, window)})
+            except Exception as e:
+                logger.warning("context usage emit failed: %s", e)
             await sink.put({"type": "__done__"})
         except Exception as e:
             from app.abstractions.llm import _is_quota_exhausted

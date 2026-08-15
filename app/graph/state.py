@@ -16,3 +16,4 @@ class AgentState(TypedDict, total=False):
     answer: str                             # 最终答复
     memory: dict                            # 长期记忆（用户级，跨会话）
     new_memories: list[dict]                # 本次抽取待审核的记忆
+    conversation_summary: str               # 自动压缩产生的历史对话总结（拼进系统提示词）

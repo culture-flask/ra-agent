@@ -76,6 +76,94 @@ def test_masked_listing():
     assert "sk-v...9999" in str(cfgs)
 
 
+def test_extract_context_window_fields():
+    """从模型元数据提取窗口：识别各平台字段名，缺失返回 None。"""
+    from app.abstractions.llm import extract_context_window
+    assert extract_context_window({"id": "x", "context_length": 131072}) == 131072
+    assert extract_context_window({"id": "x", "max_model_len": 8192}) == 8192
+    assert extract_context_window({"id": "x", "max_context_length": "4096"}) == 4096
+    assert extract_context_window({"id": "x", "max_sequence_length": 0}) is None
+    assert extract_context_window({"id": "x"}) is None
+    assert extract_context_window({}) is None
+
+
+def test_context_window_probe_from_models_response(monkeypatch):
+    """从 /models 响应探测窗口：命中返回真实窗口，未命中回退默认值。"""
+    from app.abstractions.llm import LLMService
+    svc = _make_service()
+
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"data": [
+                {"id": "deepseek-v4-flash", "context_length": 131072},
+                {"id": "other", "context_length": 4096},
+            ]}
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, headers=None, timeout=None):
+        calls["n"] += 1
+        return FakeResp()
+
+    monkeypatch.setattr("app.abstractions.llm.httpx.get", fake_get)
+    assert svc.context_window_for("nobody-probe") == 131072
+    assert calls["n"] == 1
+    # 缓存：第二次不再发请求
+    assert svc.context_window_for("nobody-probe") == 131072
+    assert calls["n"] == 1
+
+
+def test_context_window_probe_missing_falls_back(monkeypatch):
+    """响应里没有窗口字段 / 请求失败 → 回退默认值。"""
+    from app.abstractions.llm import LLMService
+    svc = LLMService(system_default={"provider": "sensenova",
+                                     "base_url": "https://x/v1",
+                                     "model_id": "m"},
+                     system_api_key="k",
+                     crypto=SecretCrypto("s"),
+                     context_window_default=32768)
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"id": "m"}]}          # 无窗口字段
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr("app.abstractions.llm.httpx.get",
+                        lambda url, headers=None, timeout=None: FakeResp())
+    assert svc.context_window_for("nobody-missing") == 32768
+
+
+def test_context_window_probe_failure_falls_back(monkeypatch):
+    """探测请求异常 → 回退默认值，且失败结果也缓存（不重复请求）。"""
+    import httpx
+    from app.abstractions.llm import LLMService
+    svc = LLMService(system_default={"provider": "sensenova",
+                                     "base_url": "https://x/v1",
+                                     "model_id": "m"},
+                     system_api_key="k",
+                     crypto=SecretCrypto("s"),
+                     context_window_default=16000)
+    calls = {"n": 0}
+
+    def boom(url, headers=None, timeout=None):
+        calls["n"] += 1
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr("app.abstractions.llm.httpx.get", boom)
+    assert svc.context_window_for("nobody-offline") == 16000
+    assert svc.context_window_for("nobody-offline") == 16000
+    assert calls["n"] == 1
+
+
 def test_crypto_roundtrip_and_mask():
     """加解密往返 + 掩码格式。"""
     from app.core.crypto import mask_secret

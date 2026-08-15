@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 import json
 import re
+import uuid
 
-from langchain_core.messages import AIMessage, SystemMessage,ToolMessage
+from langchain_core.messages import AIMessage, RemoveMessage, SystemMessage, ToolMessage
 
 from app.core.events import emit
 from app.core.logging import get_logger
@@ -57,6 +58,98 @@ def _review(memory: dict) -> bool:
     if not isinstance(value, str) or len(value.strip()) < 4:
         return False
     return len(value) <= 200
+
+
+# ---------- 自动上下文压缩 ----------
+COMPACT_KEEP_ROUNDS = 4          # 压缩后保留的最近轮数
+COMPACT_MIN_ROUNDS = 20          # 轮数超过该值触发压缩（>20 轮）
+
+COMPACT_PROMPT = """你是对话总结助手。下面是用户与科研助手的多轮对话历史。
+请把它整理成一份简洁的中文总结，保留以下信息：
+- 用户的研究主题、关键问题与已获得的结论
+- 对话中确认的事实、参数、偏好（后续对话可能继续引用）
+- 尚未解决或待跟进的问题
+要求：第三人称叙述，按主题组织，200~400 字，不要遗漏重要细节。只输出总结正文。"""
+
+
+def _round_count(messages: list) -> int:
+    """轮数 = 用户提问条数（一对 user+assistant 算一轮）。"""
+    return sum(1 for m in messages if getattr(m, "type", "") == "human")
+
+
+def _estimate_tokens(messages: list) -> int:
+    """粗估 token 数：中英文混合约 2 字符/token（宁可早压缩也不爆窗）。"""
+    chars = sum(len(str(getattr(m, "content", ""))) for m in messages)
+    return chars // 2
+
+
+def _split_keep_and_old(messages: list, keep_rounds: int):
+    """按轮数切分：保留最近 keep_rounds 轮，其余归为待总结历史。
+
+    用对象身份切分（消息 id 可能是 None——手工构造/输入转换的消息没有 id）。
+    """
+    keep, user_seen = [], 0
+    for m in reversed(messages):
+        keep.append(m)
+        if getattr(m, "type", "") == "human":
+            user_seen += 1
+            if user_seen >= keep_rounds:
+                break
+    keep.reverse()
+    keep_refs = {id(m) for m in keep}
+    old = [m for m in messages if id(m) not in keep_refs]
+    return keep, old
+
+
+async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
+    """自动上下文压缩（图的第一站）：轮数 >20 或 token 估测达上下文上限 80% 时，
+    把最近 4 轮之外的历史交给 LLM 总结，后续生成使用「总结 + 最近 4 轮」。
+
+    - 总结存入 conversation_summary（拼进系统提示词），旧消息用 RemoveMessage
+      删除（messages 是 add_messages reducer，直接传列表只会追加）
+    - 压缩失败（LLM 异常）静默跳过，绝不阻断主对话
+    """
+    messages = state.get("messages") or []
+    if not messages:
+        return {}
+    # 上下文窗口优先从模型 /models 响应探测（LLMService.context_window_for），
+    # 假服务/异常时回退配置默认值
+    svc = ctx.llm_service
+    if hasattr(svc, "context_window_for"):
+        window = int(svc.context_window_for(state["user_id"]))
+    else:
+        window = int(getattr(ctx.settings, "llm_context_window", 32768))
+    rounds = _round_count(messages)
+    tokens = _estimate_tokens(messages)
+    if rounds <= COMPACT_MIN_ROUNDS and tokens <= window * 0.8:
+        return {}
+
+    keep, old = _split_keep_and_old(messages, COMPACT_KEEP_ROUNDS)
+    if not old:
+        return {}
+    try:
+        model = ctx.llm_service.get_chat_model(state["user_id"])
+        resp = await model.ainvoke([SystemMessage(content=COMPACT_PROMPT)] + old)
+        summary = str(resp.content or "").strip()
+    except Exception as e:
+        logger.warning("context compact failed, skip: %s", e)
+        return {}
+    if not summary:
+        return {}
+    # RemoveMessage 按 id 匹配：输入转换/手工构造的消息可能没有 id，先补齐
+    for m in old:
+        if not getattr(m, "id", None):
+            m.id = uuid.uuid4().hex
+    compacted = _round_count(old)
+    emit("compact", {"compacted_rounds": compacted,
+                     "keep_rounds": len(keep) // 2,
+                     "total_rounds": rounds,
+                     "tokens_estimated": tokens,
+                     "window": window})
+    return {
+        "conversation_summary": summary,
+        "messages": [RemoveMessage(id=m.id) for m in old],
+    }
 
 
 # ---------- 知识库路由（LLM 意图判断） ----------
@@ -166,14 +259,20 @@ async def save_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     return {}
 
 def _build_system_prompt(state: AgentState) -> str:
-    """组装系统提示词：有检索结果 → 基于知识库作答；没有 → 直接用自己的知识作答。"""
+    """组装系统提示词：有检索结果 → 基于知识库作答；没有 → 直接用自己的知识作答。
+
+    自动压缩产生的历史总结放在最前面（替代被压缩掉的旧轮次）。
+    """
+    parts = []
+    if state.get("conversation_summary"):
+        parts.append(f"[历史对话总结] {state['conversation_summary']}")
     if state.get("retrievals"):
-        parts = ["你是科研助手，基于知识库检索结果回答用户问题，引用时标明来源（public/private）。"]
+        parts.append("你是科研助手，基于知识库检索结果回答用户问题，引用时标明来源（public/private）。")
         lines = [f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}"
                  for r in state["retrievals"]]
         parts.append("\n".join(lines))
     else:
-        parts = ["你是科研助手，根据你自己的知识回答用户问题。"]
+        parts.append("你是科研助手，根据你自己的知识回答用户问题。")
     if state.get("memory"):
         parts.append(f"[用户记忆] {json.dumps(state['memory'], ensure_ascii=False)}")
     return "\n\n".join(parts)

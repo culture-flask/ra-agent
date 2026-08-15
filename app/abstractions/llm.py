@@ -138,12 +138,35 @@ class RetryableChatModel:
                 await asyncio.sleep(delay)
 
 
+# 各平台 /models 响应里常见的上下文窗口字段名（按优先级尝试）
+_CONTEXT_WINDOW_FIELDS = (
+    "context_length",        # OpenRouter 等
+    "context_window",
+    "max_model_len",         # vLLM / llama.cpp 风格
+    "max_context_length",
+    "max_sequence_length",
+    "model_max_length",
+)
+
+
+def extract_context_window(item: dict) -> int | None:
+    """从模型元数据里提取上下文窗口（token），没有则返回 None。"""
+    for field in _CONTEXT_WINDOW_FIELDS:
+        v = item.get(field)
+        if isinstance(v, int) and v > 0:
+            return v
+        if isinstance(v, str) and v.strip().isdigit():
+            return int(v.strip())
+    return None
+
+
 @dataclass
 class LLMConfig:
     provider: str
     base_url: str
     model_id: str
     api_key: str | None = None
+    context_window: int | None = None   # 显式指定时优先于探测/默认
 
 
 class LLMFactory:
@@ -166,7 +189,8 @@ class LLMService:
 
     def __init__(self, system_default: dict, system_api_key: str,
                  crypto: SecretCrypto, retry_max_retries: int = 3,
-                 retry_base_delay: float = 1.0):
+                 retry_base_delay: float = 1.0,
+                 context_window_default: int = 32768):
         self._system = LLMConfig(
             provider=system_default.get("provider", "sensenova"),
             base_url=system_default.get("base_url", "https://token.sensenova.cn/v1"),
@@ -176,6 +200,8 @@ class LLMService:
         self._crypto = crypto
         self._retry_max = retry_max_retries
         self._retry_delay = retry_base_delay
+        self._window_default = context_window_default
+        self._probe_cache: dict = {}      # (provider, base_url, model_id) -> int | None
 
     # ---------- 查询 ----------
     def get_user_config(self, user_id: str) -> LLMConfig | None:
@@ -200,6 +226,43 @@ class LLMService:
         return RetryableChatModel(model, max_retries=self._retry_max,
                                   base_delay=self._retry_delay,
                                   label=cfg.model_id)
+
+    # ---------- 上下文窗口 ----------
+    def context_window_for(self, user_id: str) -> int:
+        """当前生效模型的上下文窗口（token）。
+
+        优先级：显式配置 > /models 响应探测（缓存） > 默认值。
+        """
+        cfg = self.get_user_config(user_id) or self._system
+        if cfg.context_window:
+            return cfg.context_window
+        probed = self._probe_context_window(cfg)
+        return probed or self._window_default
+
+    def _probe_context_window(self, cfg: LLMConfig) -> int | None:
+        """从 {base_url}/models 响应里读当前模型的窗口字段（OpenRouter 等平台提供）。
+
+        请求失败/字段缺失 → None（回退默认值）。结果按配置键缓存，
+        避免每次对话都发请求；失败也缓存 None（探测只在配置变化后重试）。
+        """
+        key = (cfg.provider, cfg.base_url, cfg.model_id)
+        if key in self._probe_cache:
+            return self._probe_cache[key]
+        result = None
+        try:
+            resp = httpx.get(
+                f"{cfg.base_url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {cfg.api_key or ''}"},
+                timeout=5)
+            resp.raise_for_status()
+            for item in resp.json().get("data", []) or []:
+                if item.get("id") == cfg.model_id:
+                    result = extract_context_window(item)
+                    break
+        except Exception as e:
+            logger.debug("context window probe failed %s: %s", cfg.model_id, e)
+        self._probe_cache[key] = result
+        return result
 
     def get_config(self, user_id: str, config_id: str) -> LLMConfig | None:
         """读取某条已保存配置（api_key 解密），仅本人可见，不存在返回 None。"""

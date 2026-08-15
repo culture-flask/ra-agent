@@ -4,6 +4,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.graph.nodes import (
     WorkflowContext,
+    compact_node,
     extract_memory_node,
     generate_node,
     load_memory_node,
@@ -31,6 +32,7 @@ async def build_graph(ctx: WorkflowContext) -> StateGraph:
     builder = StateGraph(AgentState)
 
     async def _load_memory(s): return await load_memory_node(ctx, s)
+    async def _compact(s): return await compact_node(ctx, s)
     async def _supervisor(s): return await supervisor_node(ctx, s)
     async def _retrieve(s): return await retrieve_node(ctx, s)
     async def _generate(s): return await generate_node(ctx, s)
@@ -39,6 +41,7 @@ async def build_graph(ctx: WorkflowContext) -> StateGraph:
     async def _save_memory(s): return await save_memory_node(ctx, s)
 
     builder.add_node("load_memory", _load_memory)
+    builder.add_node("compact", _compact)
     builder.add_node("supervisor", _supervisor)
     builder.add_node("retrieve", _retrieve)
     builder.add_node("generate", _generate)
@@ -47,7 +50,8 @@ async def build_graph(ctx: WorkflowContext) -> StateGraph:
     builder.add_node("save_memory", _save_memory)
 
     builder.add_edge(START, "load_memory")                 # 先读记忆
-    builder.add_edge("load_memory", "supervisor")
+    builder.add_edge("load_memory", "compact")             # 再查是否需压缩
+    builder.add_edge("compact", "supervisor")
     builder.add_conditional_edges("supervisor", route_supervisor,
                                   {"retrieve": "retrieve", "generate": "generate"})
     builder.add_edge("retrieve", "generate")
