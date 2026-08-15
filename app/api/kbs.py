@@ -8,6 +8,7 @@ router = APIRouter(prefix="/api/v1", tags=["kbs"])
 
 class KBCreateRequest(BaseModel):
     name: str
+    description: str = ""          # 知识库介绍：必填，LLM 选库参考
     scope: str = "public"          # public | private
     user_id: str = "u1"
     texts: list[str] = []
@@ -23,6 +24,7 @@ class KBRebuildRequest(BaseModel):
     embedding_dim: int | None = None
     embedding_base_url: str | None = None      # 不传则按 provider 继承/默认
     embedding_api_key: str | None = None       # 不传则沿用原库密钥
+    user_id: str = "u1"                        # 重建发起者：重建库强制归其私人所有
 
 class KBEmbeddingUpdateRequest(BaseModel):
     """修改嵌入配置（创建后随时可改）：只更新传了的字段。"""
@@ -38,7 +40,9 @@ class KBRetrievalUpdateRequest(BaseModel):
 
 def _kb_dict(kb) -> dict:
     return {
-        "kb_id": kb.kb_id, "name": kb.name, "scope": kb.scope,
+        "kb_id": kb.kb_id, "name": kb.name,
+        "description": kb.description or "",   # 知识库介绍
+        "scope": kb.scope,
         "owner_user_id": kb.owner_user_id, "category_id": kb.category_id,
         "embedding_provider": kb.embedding_provider,
         "embedding_model_id": kb.embedding_model_id,
@@ -76,12 +80,15 @@ def _get_kb(request: Request, kb_id: str):
 
 @router.post("/kbs")
 async def create_kb(req: KBCreateRequest, request: Request):
+    """建库：知识库介绍必填（不能为空），供 LLM 选库时判断相关性。"""
+    if not req.description.strip():
+        raise HTTPException(status_code=400, detail="知识库介绍不能为空")
     try:
         kb = request.app.state.kb_service.create_kb(
             name=req.name, scope=req.scope, user_id=req.user_id, texts=req.texts,
             provider=req.embedding_provider, model_id=req.embedding_model_id,
             dim=req.embedding_dim, api_key=req.embedding_api_key,
-            base_url=req.embedding_base_url)
+            base_url=req.embedding_base_url, description=req.description)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))   # 未知 provider 等
     return _kb_dict(kb)
@@ -106,6 +113,25 @@ async def search_kb(kb_id: str, query: str, request: Request, k: int = 5,
     mode = mode or request.app.state.settings.retrieval_mode
     return request.app.state.kb_service.search(kb.kb_id, query, k=k,
                                                user_id=user_id, mode=mode)
+
+
+class KBDeleteRequest(BaseModel):
+    doc_ids: list[str] = []
+
+
+@router.get("/kbs/{kb_id}/files")
+async def list_kb_files(kb_id: str, request: Request):
+    """该库的源文件列表：原始文件名、片段数、页码范围（删除管理用）。"""
+    kb = _get_kb(request, kb_id)
+    return request.app.state.kb_service.list_documents(kb.kb_id)
+
+
+@router.post("/kbs/{kb_id}/documents/delete")
+async def delete_kb_documents(kb_id: str, req: KBDeleteRequest, request: Request):
+    """按 doc_id 批量删除源文件：Chroma 向量 + 磁盘 chunk + 元数据同步清理。"""
+    _get_kb(request, kb_id)
+    result = request.app.state.kb_service.delete_documents(kb.kb_id, req.doc_ids)
+    return {"kb_id": kb_id, **result}
 
 
 @router.post("/kbs/{kb_id}/documents")
@@ -169,13 +195,18 @@ async def update_kb_retrieval(kb_id: str, req: KBRetrievalUpdateRequest,
 
 @router.post("/kbs/{kb_id}/rebuild")
 async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):
-    """复制原 chunk + 新嵌入模型重新向量化 → 新 KB，旧 KB 保留。"""
+    """复制原 chunk + 新嵌入模型重新向量化 → 新 KB，旧 KB 保留。
+
+    重建库强制为发起者的「私人」库（不继承原库 scope）——避免重建公共库
+    变成共有库影响其他用户。
+    """
     kb = _get_kb(request, kb_id)
     try:
         new_kb = request.app.state.kb_service.rebuild(
             kb.kb_id, provider=req.embedding_provider,
             model_id=req.embedding_model_id, dim=req.embedding_dim,
-            api_key=req.embedding_api_key, base_url=req.embedding_base_url)
+            api_key=req.embedding_api_key, base_url=req.embedding_base_url,
+            user_id=req.user_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _kb_dict(new_kb)

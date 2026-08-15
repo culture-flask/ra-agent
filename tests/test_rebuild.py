@@ -7,9 +7,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.abstractions.embedding import EmbeddingModel, EmbeddingMeta
+from app.core.db import SessionLocal
 from app.main import app
+from app.models import User
 from app.services.kb_service import KBService
 from app.settings import Settings
+
+
+def _ensure_user(user_id: str):
+    """kbs.owner_user_id 有外键指向 users，私人库（含重建库）测试前先建用户。"""
+    with SessionLocal() as db:
+        if not db.get(User, user_id):
+            db.add(User(id=user_id, username=user_id, password_hash="x"))
+            db.commit()
 
 
 def _make_ks():
@@ -74,15 +84,18 @@ def test_self_hosted_provider_needs_no_api_key():
 def test_rebuild_keeps_old_kb_and_new_searchable():
     """重建：旧 KB 保留可检索 + 新 KB（新 collection）可检索，互不影响。"""
     ks = _make_ks()
+    _ensure_user("u1")
     old = ks.create_kb("原库", "public", None,
                        ["量子比特是量子计算的基本单元，可以处于叠加态。",
                         "Shor算法可以分解大整数。"])
-    new = ks.rebuild(old.kb_id, provider="local", model_id="mini-b")
+    new = ks.rebuild(old.kb_id, provider="local", model_id="mini-b", user_id="u1")
 
     assert new.kb_id != old.kb_id                  # 新 KB 独立 id
     assert new.name.endswith("(重建)")
     assert new.embedding_model_id == "mini-b"      # 新模型标注
     assert new.status == "ready"
+    assert new.scope == "private"                  # 重建库强制私人（归属发起者）
+    assert new.owner_user_id == "u1"
 
     # 旧库：仍可检索（未被覆盖）
     hits_old = ks.search(old.kb_id, "叠加态", k=3, user_id="u1")
@@ -128,20 +141,24 @@ def test_dimension_mismatch_rejected():
 
 
 def test_rebuild_api():
-    """API：重建端点返回新 KB（模型标注更新）。"""
+    """API：重建端点返回新 KB（模型标注更新，且强制私人）。"""
+    _ensure_user("u1")
     with TestClient(app) as c:
         kb = c.post("/api/v1/kbs", json={
             "name": "API重建", "scope": "public", "user_id": "u1",
             "texts": ["量子比特是基本单元"],
+            "description": "量子计算资料",
             "embedding_provider": "local"}).json()
         r = c.post(f"/api/v1/kbs/{kb['kb_id']}/rebuild",
                    json={"embedding_provider": "local",
-                         "embedding_model_id": "mini-b"})
+                         "embedding_model_id": "mini-b", "user_id": "u1"})
         assert r.status_code == 200
         new = r.json()
         assert new["kb_id"] != kb["kb_id"]
         assert new["embedding_model_id"] == "mini-b"
         assert new["status"] == "ready"
+        assert new["scope"] == "private"           # 重建库默认私人
+        assert new["description"] == "量子计算资料"  # 介绍继承原库
 
 
 def test_update_embedding_config_and_mismatch():
@@ -177,6 +194,7 @@ def test_api_update_embedding():
     with TestClient(app) as c:
         kb = c.post("/api/v1/kbs", json={
             "name": "API改库", "scope": "public", "user_id": "u1",
+            "description": "改配置测试库",
             "embedding_provider": "local"}).json()
         # 换到自定义端点（llama.cpp 风格）→ 200
         r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/embedding", json={
@@ -218,7 +236,8 @@ def test_api_retrieval_toggle():
     """API：PATCH /kbs/{id}/retrieval 开关对话检索；缺 enabled → 422。"""
     with TestClient(app) as c:
         kb = c.post("/api/v1/kbs", json={
-            "name": "API开关库", "scope": "public", "user_id": "u1"}).json()
+            "name": "API开关库", "scope": "public", "user_id": "u1",
+            "description": "检索开关测试库"}).json()
         assert kb["retrieval_enabled"] is True
 
         r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval", json={"enabled": False})

@@ -156,7 +156,8 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
 # ---------- 知识库路由（LLM 意图判断） ----------
 ROUTE_PROMPT = """你是问答路由，负责判断用户提问是否需要查询知识库，以及查哪些库。
 
-可用知识库（JSON 数组，只列用户可见的库）：
+可用知识库（JSON 数组，只列用户可见的库；description 是该库的介绍，
+据此判断它与提问的相关性）：
 {catalog}
 
 判断规则：
@@ -304,7 +305,8 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
         emit("supervisor", {"needs_retrieval": False, "kb_count": 0, "selected": []})
         return {"needs_retrieval": False, "selected_kb_ids": []}
 
-    catalog = [{"name": kb.name, "scope": kb.scope} for kb in kbs]
+    catalog = [{"name": kb.name, "scope": kb.scope,
+                "description": kb.description or ""} for kb in kbs]
     selected: list = []
     try:
         model = ctx.llm_service.get_chat_model(

@@ -36,6 +36,7 @@ class KnowledgeBase(Base):
 
     kb_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(String(512), default="")  # 知识库介绍（新建必填，LLM 选库参考）
     scope: Mapped[str] = mapped_column(String(16), default="public")   # public | private
     owner_user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True)              # 私人库属主

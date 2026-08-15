@@ -98,7 +98,8 @@ def test_upload_document_state_machine():
     """API 批量上传：一次带多个文件 → 立即返回 indexing → 轮询到 ready → 可检索。"""
     with TestClient(app) as c:
         kb = c.request("POST", "/api/v1/kbs",
-                       json={"name": "上传库", "scope": "public", "user_id": "u1"}).json()
+                       json={"name": "上传库", "scope": "public", "user_id": "u1",
+                             "description": "批量上传测试库"}).json()
 
         r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents",
                    files=[("files", ("hello.txt", "量子比特可以处于叠加态。".encode(), "text/plain")),
@@ -190,6 +191,54 @@ def test_get_parent_block_aggregates_group():
     assert ks.get_parent_block(kb.kb_id, "nope", 99) is None   # 不存在的组
 
 
+def test_list_documents_shows_filenames():
+    """文件列表：原始文件名 + 片段数 + 页码范围（PDF 带页）。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("文件列表库", "public", None)
+    ks.ingest_file(kb.kb_id, "a.txt", "深度学习需要显卡算力。".encode())
+    ks.ingest_file(kb.kb_id, "b.pdf", _make_pdf_pages(
+        ["Quantum page one", "Quantum page two"]))
+
+    docs = ks.list_documents(kb.kb_id)
+    by_name = {d["filename"]: d for d in docs}
+    assert "a.txt" in by_name and by_name["a.txt"]["chunks"] == 1
+    assert "b.pdf" in by_name and by_name["b.pdf"]["pages"] == [1, 2]
+    assert by_name["b.pdf"]["chunks"] >= 1
+    assert all(d["doc_id"] for d in docs)          # 都有内容哈希
+
+
+def test_delete_documents_single_and_batch():
+    """删除文件：Chroma 向量 + 磁盘 chunk + 元数据同步清理；批量删除多个。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("删除库", "public", None)
+    ks.ingest_file(kb.kb_id, "a.txt", "深度学习需要显卡算力。".encode())
+    ks.ingest_file(kb.kb_id, "b.txt", "量子比特是量子计算的基本单元。".encode())
+    ks.ingest_file(kb.kb_id, "c.txt", "蛋白质折叠是生物信息学课题。".encode())
+    docs = {d["filename"]: d for d in ks.list_documents(kb.kb_id)}
+    assert set(docs) == {"a.txt", "b.txt", "c.txt"}
+
+    # 删除单个 a.txt
+    r = ks.delete_documents(kb.kb_id, [docs["a.txt"]["doc_id"]])
+    assert r["files"] == 1 and r["chunks"] == 1
+    remaining = {d["filename"] for d in ks.list_documents(kb.kb_id)}
+    assert remaining == {"b.txt", "c.txt"}
+    # Chroma 里 a.txt 的 chunk 已删：检索 "深度学习" 不再命中
+    hits = ks.search(kb.kb_id, "深度学习", k=5, user_id="u1", mode="vector")
+    assert not any("显卡" in h["text"] for h in hits)
+    # Postgres source_doc_ids 同步
+    assert docs["a.txt"]["doc_id"] not in ks.get_kb(kb.kb_id).source_doc_ids
+
+    # 批量删除 b.txt + c.txt
+    r2 = ks.delete_documents(kb.kb_id, [docs["b.txt"]["doc_id"], docs["c.txt"]["doc_id"]])
+    assert r2["files"] == 2
+    assert ks.list_documents(kb.kb_id) == []
+    assert ks.get_kb(kb.kb_id).source_doc_ids == []
+
+    # 空 doc_ids / 不存在的 doc_id：无害
+    assert ks.delete_documents(kb.kb_id, [])["files"] == 0
+    assert ks.delete_documents(kb.kb_id, ["nope"])["files"] == 1
+
+
 def test_search_mode_vector_vs_hybrid():
     """同一查询两种检索模式都返回结果：vector 只有向量距离，hybrid 带 BM25 分数。"""
     ks = _make_ctx()
@@ -221,7 +270,8 @@ def test_upload_unsupported_file_goes_failed():
     """不支持的格式 → 后台任务失败 → 状态机走到 failed（而不是永久 indexing）。"""
     with TestClient(app) as c:
         kb = c.request("POST", "/api/v1/kbs",
-                       json={"name": "坏文件库", "scope": "public", "user_id": "u1"}).json()
+                       json={"name": "坏文件库", "scope": "public", "user_id": "u1",
+                             "description": "坏文件测试库"}).json()
         r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents",
                    files={"files": ("data.xlsx", b"binary", "application/octet-stream")})
         assert r.status_code == 200          # 上传立即成功

@@ -135,13 +135,18 @@ class KBService:
                   model_id: str | None = None,
                   dim: int | None = None,
                   api_key: str | None = None,
-                  base_url: str | None = None) -> KnowledgeBase:
+                  base_url: str | None = None,
+                  description: str = "") -> KnowledgeBase:
         """建库：写 Postgres（固化嵌入模型标注），有文本则同步入库。
-        可显式指定嵌入模型（provider/model_id/dim）与专用 base_url/api_key，缺省用配置默认。"""
+
+        可显式指定嵌入模型（provider/model_id/dim）与专用 base_url/api_key，
+        缺省用配置默认。description 为知识库介绍（LLM 选库参考，API 层必填）。
+        """
         meta = self.resolve_embedding_meta(provider, model_id, dim, base_url)
         with SessionLocal() as db:
             kb = KnowledgeBase(
                 kb_id=uuid.uuid4().hex[:12], name=name, scope=scope,
+                description=description.strip(),
                 owner_user_id=user_id if scope == "private" else None,
                 category_id="default",
                 embedding_provider=meta.provider,
@@ -188,6 +193,72 @@ class KBService:
             db.commit()
         logger.info("kb=%s retrieval_enabled -> %s", kb_id, enabled)
         return self.get_kb(kb_id)
+
+# ---------- 文件管理 ----------
+    def list_documents(self, kb_id: str) -> list[dict]:
+        """该库的源文件列表：doc_id（内容哈希）、原始文件名、chunk 数、页码范围。
+
+        文件名来自 chunk 的 source 元数据（伴生 meta 文件）；旧数据没有
+        则回退显示 doc_id。
+        """
+        kb = self.get_kb(kb_id)
+        docs: dict[str, dict] = {}
+        for c in self._doc_chunks(kb_id, kb):
+            doc_id = c.payload.get("doc_id") or "doc"
+            entry = docs.setdefault(doc_id, {"doc_id": doc_id, "filename": None,
+                                             "chunks": 0, "pages": []})
+            entry["chunks"] += 1
+            page = c.payload.get("page")
+            if isinstance(page, int) and page not in entry["pages"]:
+                entry["pages"].append(page)
+            if entry["filename"] is None and c.payload.get("source"):
+                entry["filename"] = c.payload["source"]
+        return sorted(docs.values(),
+                      key=lambda d: (d["filename"] or d["doc_id"]).lower())
+
+    def delete_documents(self, kb_id: str, doc_ids: list[str]) -> dict:
+        """删除该库的若干源文件（按 doc_id 内容哈希）：Chroma chunk + 磁盘 + 元数据。
+
+        返回 {"files": 删除的文件数, "chunks": 删除的片段数}；不存在的 doc_id 无害。
+        """
+        doc_set = set(doc_ids or [])
+        if not doc_set:
+            return {"files": 0, "chunks": 0}
+        kb_dir = self._chunk_dir / kb_id
+        removed_chunks = 0
+        # 1) 磁盘 chunk 文本 + 伴生 meta（文件名里第二段是 doc_id）
+        for f in list(kb_dir.glob("*.txt")) + list(kb_dir.glob("*.meta.json")):
+            parts = f.stem.split("_")
+            if len(parts) > 2 and parts[1] in doc_set:
+                try:
+                    f.unlink()
+                    removed_chunks += 1 if f.suffix == ".txt" else 0
+                except OSError as e:
+                    logger.warning("remove file failed %s: %s", f, e)
+        # 2) Chroma：按 metadata doc_id 过滤删除该文件的所有向量
+        try:
+            client = chromadb.PersistentClient(
+                path=str(self._settings.chroma_persist_dir))
+            col = client.get_collection(f"kb_{kb_id}")
+            for doc_id in doc_set:
+                col.delete(where={"doc_id": doc_id})
+        except Exception as e:
+            logger.warning("delete chroma chunks failed kb=%s: %s", kb_id, e)
+        # 3) Postgres 元数据：source_doc_ids 移除
+        with SessionLocal() as db:
+            row = db.get(KnowledgeBase, kb_id)
+            if row is not None:
+                row.source_doc_ids = [d for d in (row.source_doc_ids or [])
+                                      if d not in doc_set]
+                db.commit()
+        # 4) 缓存失效：BM25 / 父块 chunk（下次检索懒重建）
+        self._bm25_cache.pop(kb_id, None)
+        self._chunks_cache.pop(kb_id, None)
+        files = len(doc_set)
+        emit("doc_delete", {"kb_id": kb_id, "files": files,
+                            "chunks": removed_chunks})
+        return {"files": files, "chunks": removed_chunks}
+
 
     def delete_kb(self, kb_id: str) -> None:
         """删除知识库：Chroma collection + 磁盘 chunk + Postgres 元数据，三段都清理。"""
@@ -435,13 +506,17 @@ class KBService:
     def rebuild(self, src_kb_id: str, provider: str | None = None,
                 model_id: str | None = None, dim: int | None = None,
                 api_key: str | None = None,
-                base_url: str | None = None) -> KnowledgeBase:
+                base_url: str | None = None,
+                user_id: str | None = None) -> KnowledgeBase:
         """复制原 chunk + 新嵌入模型重新向量化 → 新 KB（新 collection），旧库保留。
 
         免重新解析：chunk 已落盘，直接读盘重向量化。
         api_key / base_url 缺省继承原库；但 base_url 仅在 provider 未变时才继承
         （换了 provider 还沿用旧端点是错的，此时回退新 provider 的默认端点）。
         状态机：reembedding → ready | failed。
+
+        ⚠️ 重建库强制为「私人」库（归属发起重建的用户）：公共库被任何用户重建
+        都会变成共有库，影响其他用户——重建只影响发起者自己，不污染公共库。
         """
         src = self.get_kb(src_kb_id)
         meta = self.resolve_embedding_meta(provider, model_id, dim, base_url)
@@ -449,7 +524,8 @@ class KBService:
             src.embedding_base_url if meta.provider == src.embedding_provider else None)
         new_kb = KnowledgeBase(
             kb_id=uuid.uuid4().hex[:12], name=f"{src.name}{model_id or ''}(重建)",
-            scope=src.scope, owner_user_id=src.owner_user_id,
+            scope="private", owner_user_id=user_id or src.owner_user_id,
+            description=src.description,          # 介绍继承原库
             category_id=src.category_id,
             embedding_provider=meta.provider, embedding_model_id=meta.model_id,
             embedding_dim=meta.dim, status="reembedding",

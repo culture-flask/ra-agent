@@ -37,9 +37,10 @@ class RouterAwareFakeModel:
     - 其他（生成 / 记忆抽取）→ 返回 answer
     """
 
-    def __init__(self, answer: str, route_json: str):
+    def __init__(self, answer: str, route_json: str, captured=None):
         self._answer = answer
         self._route_json = route_json
+        self._captured = captured                 # 记录收到的 system 提示词（断言用）
 
     def bind_tools(self, schemas):
         return self
@@ -47,6 +48,8 @@ class RouterAwareFakeModel:
     async def ainvoke(self, messages):
         system = next((m.content for m in messages
                        if getattr(m, "type", "") == "system"), "")
+        if self._captured is not None:
+            self._captured.append(str(system))
         if "问答路由" in str(system):
             return AIMessage(content=self._route_json)
         return AIMessage(content=self._answer)
@@ -58,22 +61,26 @@ class RouterAwareFakeModel:
 class FakeLLMService:
     """替身 LLM 服务：路由/生成按提示词分别返回预置内容。"""
 
-    def __init__(self, answer: str, route_json: str):
+    def __init__(self, answer: str, route_json: str, captured=None):
         self._answer = answer
         self._route_json = route_json
+        self._captured = captured
 
     def get_chat_model(self, user_id: str, temperature=None):
-        return RouterAwareFakeModel(self._answer, self._route_json)
+        return RouterAwareFakeModel(self._answer, self._route_json,
+                                    self._captured)
 
 
 def _make_ctx(answer: str = "这是假模型回答",
-              route_json: str = '{"needs_retrieval": true, "kbs": []}'):
+              route_json: str = '{"needs_retrieval": true, "kbs": []}',
+              captured=None):
     settings = Settings.load().model_copy(update={
         "chroma_persist_dir": Path(tempfile.mkdtemp()),
         "embedding_default_provider": "local",   # 离线嵌入，测试确定性
     })
     kb_service = KBService(settings)
-    ctx = WorkflowContext(settings, FakeLLMService(answer, route_json), kb_service)
+    ctx = WorkflowContext(settings, FakeLLMService(answer, route_json, captured),
+                          kb_service)
     return ctx, kb_service
 
 
@@ -281,6 +288,41 @@ def test_parent_groups_zero_disables_aggregation():
                                 "messages": [HumanMessage(content="Quantum computing")]})
     rets = result["retrievals"]
     assert rets and all(r.get("type") == "chunk" for r in rets)
+
+
+def test_kb_description_passed_to_router():
+    """知识库介绍随选库目录传给 LLM：路由提示词包含 description。"""
+    captured = []
+    ctx, kb_service = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "量子库", "scope": "public"}]}',
+        captured=captured)
+    kb_service.create_kb("量子库", "public", "u1", ["量子比特可以处于叠加态"],
+                         description="收录量子计算与密码学论文，适合回答量子算法问题")
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-desc-1",
+                                "query": "叠加态是什么",
+                                "messages": [HumanMessage(content="叠加态是什么")]})
+    assert result["answer"] == "答案"
+    route_prompt = next(p for p in captured if "问答路由" in p)
+    assert "量子库" in route_prompt
+    assert "收录量子计算与密码学论文" in route_prompt      # description 进了提示词
+
+
+def test_kb_description_required_by_api():
+    """API 建库：介绍为空 → 400；带介绍 → 落库并回显。"""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app) as c:
+        r1 = c.post("/api/v1/kbs", json={
+            "name": "无介绍库", "scope": "public", "user_id": "u1",
+            "description": "   ", "embedding_provider": "local"})
+        assert r1.status_code == 400                          # 空白介绍被拒
+        r2 = c.post("/api/v1/kbs", json={
+            "name": "有介绍库", "scope": "public", "user_id": "u1",
+            "description": "深度学习论文合集", "embedding_provider": "local"})
+        assert r2.status_code == 200
+        assert r2.json()["description"] == "深度学习论文合集"
 
 
 def test_checkpointer_continues_session():
