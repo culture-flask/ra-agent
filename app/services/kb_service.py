@@ -537,10 +537,16 @@ class KBService:
             db.add(new_kb)
             db.commit()
         try:
-            chunks = self._read_chunks(src_kb_id, new_kb)     # 复用已存 chunk
+            # 先把源库 chunk 目录完整复制一份：新库拥有独立磁盘数据，
+            # 之后删源库/删源文件都不会波及重建库（向量本来就在独立 collection）
+            src_dir = self._chunk_dir / src_kb_id
+            if src_dir.exists():
+                shutil.copytree(src_dir, self._chunk_dir / new_kb.kb_id,
+                                dirs_exist_ok=True)
+            chunks = self._read_chunks(new_kb.kb_id, new_kb)   # 读自己的目录
             self._vector_store(new_kb).add(chunks)            # 新 collection 重向量化
-            # 重建库的 chunk 物理上在 src 目录：BM25 索引与父块 chunk 直接缓存，
-            # 否则懒构建会读到空目录
+            # BM25 索引与父块 chunk 直接缓存（省一次磁盘重读；目录已复制，
+            # 重启后懒构建同样能从新库目录读到）
             bm = Bm25Index()
             bm.build(chunks)
             self._bm25_cache[new_kb.kb_id] = bm

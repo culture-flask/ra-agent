@@ -1,5 +1,6 @@
 """MCP 适配层 ：统一调用 + 追踪 + 错误回灌，上层无感协议细节。"""
 
+import asyncio
 import json
 
 from langchain_core.utils.function_calling import convert_to_openai_function
@@ -28,14 +29,15 @@ class MCPToolAdapter:
     async def call(self, name: str, args: dict, session_id: str,
                    user_id: str, parent_id: str | None = None) -> dict:
         """执行一个工具：全链路写 ToolCallLog，错误结构化返回（促 LLM 重试）。"""
-        log_id = self.tracer.start("tool", name, session_id, user_id, args, parent_id)
+        log_id = await asyncio.to_thread(
+            self.tracer.start, "tool", name, session_id, user_id, args, parent_id)
         try:
             tool = next(t for t in self.host.tools if t.name == name)
             result = await tool.ainvoke(args)          # 经 MCP tools/call
             output = json.dumps(result, ensure_ascii=False, default=str) \
                 if not isinstance(result, str) else result
-            self.tracer.success(log_id, output)
+            await asyncio.to_thread(self.tracer.success, log_id, output)
             return {"output": output}
         except Exception as e:
-            self.tracer.error(log_id, str(e))
+            await asyncio.to_thread(self.tracer.error, log_id, str(e))
             return {"error": str(e), "name": name}     # 结构化错误回灌 LLM

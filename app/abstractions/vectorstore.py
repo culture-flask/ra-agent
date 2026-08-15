@@ -61,15 +61,23 @@ class ChromaVectorStore(VectorStore):
         self._client = chromadb.PersistentClient(path=persist_dir)
         self._col = self._client.get_or_create_collection(name=f"kb_{kb_id}")
 
+    # Chroma 服务端单次 add 硬上限 5461 条（超出抛
+    # "Batch size of N is greater than max batch size of 5461"）。
+    # 大库（>5461 chunk）一次全量提交必被拒——入库/重建都走这里，
+    # 拆成小批写入，避免 7342 个 chunk 的重建整体失败。
+    MAX_ADD_BATCH = 1000
+
     def add(self, chunks: list[ChunkRecord]) -> None:
         if not chunks:
             return
-        self._col.add(
-            ids=[c.id for c in chunks],
-            documents=[c.text for c in chunks],
-            metadatas=[c.payload for c in chunks],
-            embeddings=self.embedding_model.embed_texts([c.text for c in chunks]),
-        )
+        for i in range(0, len(chunks), self.MAX_ADD_BATCH):
+            batch = chunks[i:i + self.MAX_ADD_BATCH]
+            self._col.add(
+                ids=[c.id for c in batch],
+                documents=[c.text for c in batch],
+                metadatas=[c.payload for c in batch],
+                embeddings=self.embedding_model.embed_texts([c.text for c in batch]),
+            )
 
     def search(self, query: str, k: int = 5, scope: str = "all",
                user_id: str | None = None) -> list[dict]:

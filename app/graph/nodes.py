@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import asyncio
 import json
 import re
 import uuid
@@ -116,7 +117,9 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
     # 假服务/异常时回退配置默认值
     svc = ctx.llm_service
     if hasattr(svc, "context_window_for"):
-        window = int(svc.context_window_for(state["user_id"]))
+        # 可能触发同步 httpx 探测，放线程池避免阻塞事件循环
+        window = int(await asyncio.to_thread(svc.context_window_for,
+                                             state["user_id"]))
     else:
         window = int(getattr(ctx.settings, "llm_context_window", 32768))
     rounds = _round_count(messages)
@@ -128,7 +131,8 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
     if not old:
         return {}
     try:
-        model = ctx.llm_service.get_chat_model(
+        model = await asyncio.to_thread(
+            ctx.llm_service.get_chat_model,
             state["user_id"], temperature=state.get("temperature"))
         resp = await model.ainvoke([SystemMessage(content=COMPACT_PROMPT)] + old)
         summary = str(resp.content or "").strip()
@@ -218,7 +222,7 @@ async def load_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """跨会话读取：把该用户的长记忆载入状态（图的第一站）。"""
     if ctx.memory_service is None:
         return {"memory": {}}
-    memory = ctx.memory_service.get_all(state["user_id"])
+    memory = await asyncio.to_thread(ctx.memory_service.get_all, state["user_id"])
     emit("memory_load", {"count": len(memory)})
     return {"memory": memory}
 
@@ -231,7 +235,8 @@ async def extract_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     if ctx.memory_service is None:
         return {"new_memories": []}
     try:
-        model = ctx.llm_service.get_chat_model(
+        model = await asyncio.to_thread(
+            ctx.llm_service.get_chat_model,
             state["user_id"], temperature=state.get("temperature"))
         system = SystemMessage(content=EXTRACT_PROMPT)
         resp = await model.ainvoke([system] + state["messages"][-4:])   # 只看最近几轮
@@ -251,10 +256,13 @@ async def save_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     for m in state.get("new_memories", []):
         if not _review(m):
             continue                                   # 审核不通过，丢弃
-        if ctx.memory_service.count(state["user_id"]) >= MAX_MEMORIES_PER_USER:
+        count = await asyncio.to_thread(ctx.memory_service.count,
+                                        state["user_id"])
+        if count >= MAX_MEMORIES_PER_USER:
             break                                      # 达到上限，停止
         try:
-            ctx.memory_service.set(state["user_id"], m["key"], {"v": m["value"]})
+            await asyncio.to_thread(ctx.memory_service.set,
+                                    state["user_id"], m["key"], {"v": m["value"]})
             saved += 1
         except Exception:
             pass          # 记忆写入失败绝不影响主对话（锦上添花原则）
@@ -300,7 +308,8 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
     - LLM 判断异常/解析失败 → 降级为全部可见库检索（保持 RAG 兜底）
     """
     # 只用"可检索"的库（用户可自行禁用某库参与对话检索）
-    kbs = ctx.kb_service.list_queryable_kbs(state["user_id"])
+    kbs = await asyncio.to_thread(ctx.kb_service.list_queryable_kbs,
+                                  state["user_id"])
     if not kbs:
         emit("supervisor", {"needs_retrieval": False, "kb_count": 0, "selected": []})
         return {"needs_retrieval": False, "selected_kb_ids": []}
@@ -309,7 +318,8 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
                 "description": kb.description or ""} for kb in kbs]
     selected: list = []
     try:
-        model = ctx.llm_service.get_chat_model(
+        model = await asyncio.to_thread(
+            ctx.llm_service.get_chat_model,
             state["user_id"], temperature=state.get("temperature"))
         prompt = ROUTE_PROMPT.format(catalog=json.dumps(catalog, ensure_ascii=False))
         resp = await model.ainvoke([SystemMessage(content=prompt)] + state["messages"][-4:])
@@ -433,7 +443,7 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
 
     检索模式：state.retrieval_mode（前端每轮传）→ 全局配置 retrieval_mode 兜底。
     """
-    kbs = ctx.kb_service.list_kbs(state["user_id"])
+    kbs = await asyncio.to_thread(ctx.kb_service.list_kbs, state["user_id"])
     selected_ids = set(state.get("selected_kb_ids") or [])
     # 双保险：即使 selected_ids 携带被禁用的库（路由与检索之间用户改了开关），也跳过
     targets = [kb for kb in kbs
@@ -455,17 +465,22 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
     max_chars = int(getattr(ctx.settings, "retrieval_parent_max_chars", 4000))
     hits = []
     for kb in targets:
-        hits.extend(ctx.kb_service.search(kb.kb_id, state["query"], k=per_kb,
-                                          user_id=state["user_id"], mode=mode))
+        # 检索链路全同步（查询嵌入 HTTP + Chroma + BM25 磁盘读），必须放线程池
+        kb_hits = await asyncio.to_thread(
+            ctx.kb_service.search, kb.kb_id, state["query"], k=per_kb,
+            user_id=state["user_id"], mode=mode)
+        hits.extend(kb_hits)
     hits.sort(key=_hit_rank_key)
     if parent_groups > 0:
         # 候选池要留足余量：已展开父块组内的命中会被跳过，多取一些候选
-        top = _expand_parent_blocks(ctx, hits[:max(total + parent_groups * 2,
-                                                   len(hits))],
-                                    parent_budget=min(parent_groups, total),
-                                    group_size=max(1, group_size),
-                                    max_chars=max(200, max_chars),
-                                    total=total)
+        # （_expand_parent_blocks 内部 get_parent_block 走磁盘，同样放线程池）
+        top = await asyncio.to_thread(
+            _expand_parent_blocks, ctx,
+            hits[:max(total + parent_groups * 2, len(hits))],
+            parent_budget=min(parent_groups, total),
+            group_size=max(1, group_size),
+            max_chars=max(200, max_chars),
+            total=total)
     else:
         top = [{**h, "type": "chunk"} for h in hits[:total]]
     # 引用溯源推流：前端据此展示检索来源面板（text 截断，避免事件过大）
@@ -489,7 +504,8 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     实时推给 SSE 端点（前端打字机效果）；聚合后的完整 message 仍写入 state，
     tool_calls 也随之聚合，不影响 generate ⇄ tool_executor 循环。
     """
-    model = ctx.llm_service.get_chat_model(
+    model = await asyncio.to_thread(
+        ctx.llm_service.get_chat_model,
         state["user_id"], temperature=state.get("temperature"))
     if ctx.mcp_adapter is not None:
         schemas = await ctx.mcp_adapter.schemas_for_llm()
@@ -497,8 +513,9 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
             model = model.bind_tools(schemas)      # 告诉 LLM"你有这些工具可用"
     system = SystemMessage(content=_build_system_prompt(state))
     if ctx.tracer is not None:
-        log_id = ctx.tracer.start("llm", getattr(model, "model_name", "chat"),
-                                  state["session_id"], state["user_id"])
+        log_id = await asyncio.to_thread(
+            ctx.tracer.start, "llm", getattr(model, "model_name", "chat"),
+            state["session_id"], state["user_id"])
     resp = None
     async for chunk in model.astream([system] + state["messages"]):
         resp = chunk if resp is None else resp + chunk     # 逐 token 聚合为完整消息
@@ -515,5 +532,5 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
         resp = AIMessage(content="")
     answer = str(resp.content) if resp.content else ""
     if ctx.tracer is not None:
-        ctx.tracer.success(log_id, answer[:2000])
+        await asyncio.to_thread(ctx.tracer.success, log_id, answer[:2000])
     return {"messages": [resp], "answer": answer}

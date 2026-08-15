@@ -1,6 +1,7 @@
 """知识库 ：建库/列表/检索 + 多格式文档上传（后台异步入库）。"""
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1", tags=["kbs"])
@@ -71,9 +72,10 @@ def _kb_mismatch(kb) -> str | None:
             f"如需向量匹配新模型，请重新上传文档或使用「重建」")
 
 
-def _get_kb(request: Request, kb_id: str):
+async def _get_kb(request: Request, kb_id: str):
+    """取 KB：Postgres 读是阻塞 I/O，放线程池避免卡住事件循环。"""
     try:
-        return request.app.state.kb_service.get_kb(kb_id)
+        return await run_in_threadpool(request.app.state.kb_service.get_kb, kb_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="kb not found")
 
@@ -84,7 +86,8 @@ async def create_kb(req: KBCreateRequest, request: Request):
     if not req.description.strip():
         raise HTTPException(status_code=400, detail="知识库介绍不能为空")
     try:
-        kb = request.app.state.kb_service.create_kb(
+        kb = await run_in_threadpool(
+            request.app.state.kb_service.create_kb,
             name=req.name, scope=req.scope, user_id=req.user_id, texts=req.texts,
             provider=req.embedding_provider, model_id=req.embedding_model_id,
             dim=req.embedding_dim, api_key=req.embedding_api_key,
@@ -96,23 +99,25 @@ async def create_kb(req: KBCreateRequest, request: Request):
 
 @router.get("/kbs")
 async def list_kbs(request: Request, user_id: str = "u1"):
-    return [_kb_dict(kb) for kb in request.app.state.kb_service.list_kbs(user_id)]
+    kbs = await run_in_threadpool(request.app.state.kb_service.list_kbs, user_id)
+    return [_kb_dict(kb) for kb in kbs]
 
 
 @router.get("/kbs/{kb_id}")
 async def get_kb(kb_id: str, request: Request):
     """查单个 KB（含入库状态，轮询入库进度用）。"""
-    return _kb_dict(_get_kb(request, kb_id))
+    return _kb_dict(await _get_kb(request, kb_id))
 
 
 @router.get("/kbs/{kb_id}/search")
 async def search_kb(kb_id: str, query: str, request: Request, k: int = 5,
                     user_id: str = "u1", mode: str | None = None):
     """检索测试：mode=vector（纯向量）| hybrid（向量+BM25），默认全局配置。"""
-    kb = _get_kb(request, kb_id)
+    kb = await _get_kb(request, kb_id)
     mode = mode or request.app.state.settings.retrieval_mode
-    return request.app.state.kb_service.search(kb.kb_id, query, k=k,
-                                               user_id=user_id, mode=mode)
+    return await run_in_threadpool(request.app.state.kb_service.search,
+                                   kb.kb_id, query, k=k,
+                                   user_id=user_id, mode=mode)
 
 
 class KBDeleteRequest(BaseModel):
@@ -122,15 +127,16 @@ class KBDeleteRequest(BaseModel):
 @router.get("/kbs/{kb_id}/files")
 async def list_kb_files(kb_id: str, request: Request):
     """该库的源文件列表：原始文件名、片段数、页码范围（删除管理用）。"""
-    kb = _get_kb(request, kb_id)
-    return request.app.state.kb_service.list_documents(kb.kb_id)
+    kb = await _get_kb(request, kb_id)
+    return await run_in_threadpool(request.app.state.kb_service.list_documents, kb.kb_id)
 
 
 @router.post("/kbs/{kb_id}/documents/delete")
 async def delete_kb_documents(kb_id: str, req: KBDeleteRequest, request: Request):
     """按 doc_id 批量删除源文件：Chroma 向量 + 磁盘 chunk + 元数据同步清理。"""
-    _get_kb(request, kb_id)
-    result = request.app.state.kb_service.delete_documents(kb.kb_id, req.doc_ids)
+    await _get_kb(request, kb_id)
+    result = await run_in_threadpool(request.app.state.kb_service.delete_documents,
+                                     kb_id, req.doc_ids)
     return {"kb_id": kb_id, **result}
 
 
@@ -145,7 +151,7 @@ async def upload_documents(kb_id: str, request: Request,
     用 FastAPI BackgroundTasks（响应返回后由框架可靠执行，测试可预期）；
     生产环境可换成 Celery/ARQ Worker（第 10 天）。
     """
-    kb = _get_kb(request, kb_id)
+    kb = await _get_kb(request, kb_id)
     if kb.status == "indexing":
         # 上一批还在后台入库（远端嵌入模型可能很慢）：拒绝并发，避免两个任务抢状态/抢写向量库
         raise HTTPException(status_code=409,
@@ -173,9 +179,10 @@ async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,
     已入库的向量不会重新嵌入：若换了模型，接口返回的 embedding_mismatch
     会提醒检索结果可能不准确（重新上传或重建可让向量匹配新模型）。
     """
-    _get_kb(request, kb_id)   # 先确认库存在，404 优先
+    await _get_kb(request, kb_id)   # 先确认库存在，404 优先
     try:
-        kb = request.app.state.kb_service.update_embedding(
+        kb = await run_in_threadpool(
+            request.app.state.kb_service.update_embedding,
             kb_id, provider=req.embedding_provider,
             model_id=req.embedding_model_id, dim=req.embedding_dim,
             base_url=req.embedding_base_url, api_key=req.embedding_api_key)
@@ -188,8 +195,9 @@ async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,
 async def update_kb_retrieval(kb_id: str, req: KBRetrievalUpdateRequest,
                               request: Request):
     """允许/禁止该库被对话检索（库本身保留，可随时恢复）。"""
-    _get_kb(request, kb_id)
-    kb = request.app.state.kb_service.set_retrieval(kb_id, req.enabled)
+    await _get_kb(request, kb_id)
+    kb = await run_in_threadpool(request.app.state.kb_service.set_retrieval,
+                                 kb_id, req.enabled)
     return _kb_dict(kb)
 
 
@@ -200,9 +208,10 @@ async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):
     重建库强制为发起者的「私人」库（不继承原库 scope）——避免重建公共库
     变成共有库影响其他用户。
     """
-    kb = _get_kb(request, kb_id)
+    kb = await _get_kb(request, kb_id)
     try:
-        new_kb = request.app.state.kb_service.rebuild(
+        new_kb = await run_in_threadpool(
+            request.app.state.kb_service.rebuild,
             kb.kb_id, provider=req.embedding_provider,
             model_id=req.embedding_model_id, dim=req.embedding_dim,
             api_key=req.embedding_api_key, base_url=req.embedding_base_url,
@@ -215,8 +224,8 @@ async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):
 @router.delete("/kbs/{kb_id}")
 async def delete_kb(kb_id: str, request: Request, user_id: str = "u1"):
     """删除知识库：私人库仅属主可删；清理向量库 / 磁盘 chunk / 元数据。"""
-    kb = _get_kb(request, kb_id)
+    kb = await _get_kb(request, kb_id)
     if kb.scope == "private" and kb.owner_user_id and kb.owner_user_id != user_id:
         raise HTTPException(status_code=403, detail="forbidden: not kb owner")
-    request.app.state.kb_service.delete_kb(kb_id)
+    await run_in_threadpool(request.app.state.kb_service.delete_kb, kb_id)
     return {"deleted": kb_id}

@@ -57,15 +57,27 @@ def test_custom_provider_mocked():
         def raise_for_status(self):
             pass
 
-    def fake_get(url, headers=None, timeout=None):
-        return FakeResp()
+    class FakeClient:
+        """假异步客户端：_fetch_models 现走 httpx.AsyncClient。"""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, headers=None):
+            return FakeResp()
 
     import app.api.llm_config as m
     from app.main import app as a
     from fastapi.testclient import TestClient
     import pytest
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(m.httpx, "get", fake_get)
+    monkeypatch.setattr(m.httpx, "AsyncClient", FakeClient)
     with TestClient(a) as c:
         r = c.post("/api/v1/llm/models", json={
             "provider": "ollama", "base_url": "http://x:11434/v1", "api_key": "k"})
@@ -169,13 +181,23 @@ def test_config_models_uses_stored_key(monkeypatch):
         def raise_for_status(self):
             pass
 
-    def fake_get(url, headers=None, timeout=None):
-        seen["auth"] = headers.get("Authorization")
-        assert "/models" in url
-        return FakeResp()
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, headers=None):
+            seen["auth"] = headers.get("Authorization")
+            assert "/models" in url
+            return FakeResp()
 
     import app.api.llm_config as m
-    monkeypatch.setattr(m.httpx, "get", fake_get)
+    monkeypatch.setattr(m.httpx, "AsyncClient", FakeClient)
     with TestClient(app) as c:
         uid = _register(c, "cfgpatch3")
         r = c.post("/api/v1/llm/configs", json={
@@ -203,12 +225,22 @@ def test_list_models_mocked(monkeypatch):
         def raise_for_status(self):
             pass
 
-    def fake_get(url, headers=None, timeout=None):
-        assert "/models" in url
-        return FakeResp()
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, headers=None):
+            assert "/models" in url
+            return FakeResp()
 
     import app.api.llm_config as m
-    monkeypatch.setattr(m.httpx, "get", fake_get)
+    monkeypatch.setattr(m.httpx, "AsyncClient", FakeClient)
     with TestClient(app) as c:
         r = c.post("/api/v1/llm/models", json={
             "provider": "sensenova", "base_url": "https://token.sensenova.cn/v1",

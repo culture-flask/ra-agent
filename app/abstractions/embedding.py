@@ -67,8 +67,8 @@ class EmbeddingModel(ABC):
 class CloudEmbeddingModel(EmbeddingModel):
     """云端 API：api_key + base_url + model_id（OpenAI 兼容协议）。"""
 
-    BATCH_SIZE = 10      # doubao 单次 input 上限 10 条（实测；各家不同，保守取 10）
-    BATCH_DELAY = 0.5    # 批次间隔秒数：防 429 限流（测试密钥 RPM 低，实测 0.5s 仍触发）
+    BATCH_SIZE = 100      # doubao 单次 input 上限 10 条（实测；各家不同，保守取 10）
+    BATCH_DELAY = 0    # 批次间隔秒数：防 429 限流（测试密钥 RPM 低，实测 0.5s 仍触发）
     MAX_RETRIES = 10      # 429 重试次数（指数退避）
     MAX_CONN_RETRIES = 4  # 连接抖动重试次数（0.5+1+2+4≈7.5s；服务器真挂了就快速失败，别空等 8 分钟）
 

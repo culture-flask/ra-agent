@@ -2,6 +2,7 @@ import asyncio
 import json
 
 from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import RemoveMessage
 from pydantic import BaseModel, Field
@@ -106,9 +107,11 @@ async def chat_context(user_id: str, session_id: str, request: Request):
     graph = request.app.state.graph
     config = {"configurable": {"thread_id": session_id}}
     svc = request.app.state.llm_service
-    window = (svc.context_window_for(user_id)
-              if hasattr(svc, "context_window_for")
-              else int(request.app.state.settings.llm_context_window))
+    if hasattr(svc, "context_window_for"):
+        # 可能触发同步 httpx /models 探测，放线程池避免阻塞事件循环
+        window = await run_in_threadpool(svc.context_window_for, user_id)
+    else:
+        window = int(request.app.state.settings.llm_context_window)
     return await _context_usage(graph, config, window)
 
 
@@ -160,11 +163,13 @@ async def chat_stream(req: ChatRequest, request: Request):
             # 上下文占用推流：窗口（模型响应探测/默认）+ 压缩后的消息估测 tokens
             try:
                 svc = request.app.state.llm_service
-                window = (svc.context_window_for(req.user_id)
-                          if hasattr(svc, "context_window_for")
-                          else int(request.app.state.settings.llm_context_window))
+                if hasattr(svc, "context_window_for"):
+                    window = await run_in_threadpool(svc.context_window_for,
+                                                     req.user_id)
+                else:
+                    window = int(request.app.state.settings.llm_context_window)
                 await sink.put({"type": "context",
-                                **_context_usage(graph, config, window)})
+                                **await _context_usage(graph, config, window)})
             except Exception as e:
                 logger.warning("context usage emit failed: %s", e)
             await sink.put({"type": "__done__"})
