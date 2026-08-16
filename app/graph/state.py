@@ -22,3 +22,4 @@ class AgentState(TypedDict, total=False):
     total_k: int                            # 所有库合并后总共取几条（0=全局默认）
     temperature: float | None               # 生成温度（None=默认 0.3；0 也合法）
     parent_groups: int | None               # 聚合返回的父块名额（None=全局默认；0=关闭聚合）
+    last_usage: dict | None                 # 上一次 generate 的真实 token 用量（来自 LLM 响应）

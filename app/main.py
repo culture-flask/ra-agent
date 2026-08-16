@@ -9,10 +9,12 @@ from fastapi.staticfiles import StaticFiles
 from app.abstractions.llm import LLMService
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
+from app.api.conversations import router as conversations_router
 from app.api.kbs import router as kbs_router
 from app.api.traces import router as traces_router
 from app.api.llm_config import router as llm_config_router
 from app.core.crypto import SecretCrypto
+from app.core.db import engine
 from app.core.errors import register_exception_handlers
 from app.core.logging import get_logger, setup_logging
 from app.core.net import apply_proxy
@@ -21,6 +23,7 @@ from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter
 from app.mcp.host import MCPHost
+from app.models import Conversation
 from app.services.kb_service import KBService
 from app.services.memory_service import MemoryService
 from app.api.memories import router as memories_router
@@ -35,6 +38,8 @@ async def lifespan(app: FastAPI):
     settings = Settings.load()
     apply_proxy(settings)          # 外部网络代理（无代理环境也能出网）
     app.state.settings = settings
+    # 会话登记表（跨设备同步）：幂等建表，已有表不动
+    Conversation.__table__.create(engine, checkfirst=True)
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)
@@ -71,6 +76,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
 register_exception_handlers(app)           # 第 10 节实现
 app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(conversations_router)
 app.include_router(kbs_router)
 app.include_router(traces_router)
 app.include_router(memories_router)

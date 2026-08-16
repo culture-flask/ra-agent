@@ -84,6 +84,27 @@ def _estimate_tokens(messages: list) -> int:
     return chars // 2
 
 
+def _usage_of(msg) -> dict | None:
+    """从 LLM 响应消息里提取真实 token 用量。
+
+    优先 LangChain 标准 usage_metadata（stream_usage=True 时流式末块携带并聚合），
+    回退 OpenAI 风格 response_metadata.token_usage；都没有返回 None（假模型/未支持）。
+    """
+    um = getattr(msg, "usage_metadata", None)
+    if isinstance(um, dict) and um.get("total_tokens"):
+        return {"input_tokens": int(um.get("input_tokens") or 0),
+                "output_tokens": int(um.get("output_tokens") or 0),
+                "total_tokens": int(um["total_tokens"])}
+    tu = (getattr(msg, "response_metadata", None) or {}).get("token_usage")
+    if isinstance(tu, dict):
+        inp = int(tu.get("prompt_tokens") or 0)
+        out = int(tu.get("completion_tokens") or 0)
+        if inp + out > 0:
+            return {"input_tokens": inp, "output_tokens": out,
+                    "total_tokens": inp + out}
+    return None
+
+
 def _split_keep_and_old(messages: list, keep_rounds: int):
     """按轮数切分：保留最近 keep_rounds 轮，其余归为待总结历史。
 
@@ -123,7 +144,10 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
     else:
         window = int(getattr(ctx.settings, "llm_context_window", 32768))
     rounds = _round_count(messages)
-    tokens = _estimate_tokens(messages)
+    # token 占用优先取上一轮 generate 的真实用量（含系统提示词+检索结果，
+    # 比 _estimate_tokens 准）；没有时（首轮/假模型）回退字符估算
+    last_usage = state.get("last_usage") or {}
+    tokens = int(last_usage.get("total_tokens") or 0) or _estimate_tokens(messages)
     if rounds <= COMPACT_MIN_ROUNDS and tokens <= window * 0.8:
         return {}
 
@@ -533,4 +557,5 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     answer = str(resp.content) if resp.content else ""
     if ctx.tracer is not None:
         await asyncio.to_thread(ctx.tracer.success, log_id, answer[:2000])
-    return {"messages": [resp], "answer": answer}
+    # 真实 token 用量写入 state（stream_usage=True 时流式末块携带并聚合到 resp）
+    return {"messages": [resp], "answer": answer, "last_usage": _usage_of(resp)}

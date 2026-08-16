@@ -23,12 +23,24 @@ class User(Base):
 class UserSession(Base):
     """会话：LangGraph 的 thread_id 落库，便于追踪与续聊。"""
     __tablename__ = "sessions"
-
     session_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class Conversation(Base):
+    """对话会话登记：跨设备同步会话列表（消息本体在 LangGraph checkpoint）。
+
+    前端会话 id 是浏览器生成的 uuid，此前只存 localStorage——换设备即不可见。
+    每次发消息后登记/刷新本表，列表查询以服务端为准。
+    user_id 不设外键（与 ToolCallLog 一致，避免对历史数据强约束）。
+    """
+    __tablename__ = "conversations"
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    title: Mapped[str] = mapped_column(String(128), default="新会话")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 class KnowledgeBase(Base):
     """知识库：嵌入配置（provider/model/端点）创建后可随时修改；向量库实际写入模型记在 embedded_model。"""

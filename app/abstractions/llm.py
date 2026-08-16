@@ -191,6 +191,7 @@ class LLMFactory:
             temperature=(cfg.temperature if cfg.temperature is not None
                          else DEFAULT_TEMPERATURE),
             streaming=True,
+            stream_usage=True,  # 流式响应末块携带真实 token 用量（上下文占用展示用）
             request_timeout=60,   # 连续 60s 无数据视为卡死，抛错而不是无限等
             max_retries=0,        # 关闭 SDK 内部静默重试，统一走外层 RetryableChatModel（可观测）
         )
