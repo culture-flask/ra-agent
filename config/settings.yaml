@@ -24,9 +24,9 @@ llm:
     base_url: https://token.sensenova.cn/v1
     model_id: deepseek-v4-flash
   retry:             # 调用失败退避重试：限流/5xx/网络错误指数退避重试
-    max_retries: 3
+    max_retries: 10
     base_delay: 1.0 # 首次重试等 1s，之后 2s / 4s（含随机抖动）
-  context_window: 32768  # 生效模型的上下文窗口(token)估测，达到 80% 触发自动压缩
+  context_window: 256000  # 上下文窗口兜底值(token)：用户未设置且探测不到模型元数据时使用，达到 80% 触发自动压缩
   providers:
     sensenova: { base_url: https://token.sensenova.cn/v1, listable: true }
     openai:    { base_url: https://api.openai.com/v1, listable: true }

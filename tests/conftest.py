@@ -78,6 +78,9 @@ with engine.begin() as conn:
                       "last_used_at TIMESTAMPTZ"))
     conn.execute(text("UPDATE memories SET last_used_at = updated_at "
                       "WHERE last_used_at IS NULL"))
+    # 用户自定义上下文窗口（与 app.main lifespan 相同的幂等补列）
+    conn.execute(text("ALTER TABLE user_llm_config ADD COLUMN IF NOT EXISTS "
+                      "context_window INTEGER"))
 
 
 @pytest.fixture(autouse=True)

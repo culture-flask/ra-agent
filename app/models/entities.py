@@ -78,6 +78,8 @@ class UserLLMConfig(Base):
     api_key: Mapped[str] = mapped_column(String(512))                  # AES-256 加密后
     base_url: Mapped[str] = mapped_column(String(256))
     model_id: Mapped[str] = mapped_column(String(64))
+    context_window: Mapped[int | None] = mapped_column(
+        Integer, nullable=True)             # 用户显式指定的上下文窗口（token），空=自动探测/兜底
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_retry_max_retries: int = 3          # LLM 调用失败重试次数（指数退避）
     llm_retry_base_delay: float = 1.0       # 首次重试基础等待秒数，之后 2 倍递增
-    llm_context_window: int = 32768         # 生效模型上下文窗口（token），80% 触发自动压缩
+    llm_context_window: int = 256000        # 上下文窗口兜底值（token）：探测与用户设置均缺失时使用，80% 触发自动压缩
     retrieval_mode: str = "hybrid"          # 检索模式：vector（纯向量）| hybrid（向量+BM25）
     retrieval_per_kb_k: int = 3             # 对话 RAG：每个知识库检索几条
     retrieval_total_k: int = 5              # 对话 RAG：所有库合并后总共取几条
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
                 "llm_system_default": raw["llm"]["system_default"],
                 "llm_retry_max_retries": raw.get("llm", {}).get("retry", {}).get("max_retries", 3),
                 "llm_retry_base_delay": raw.get("llm", {}).get("retry", {}).get("base_delay", 1.0),
-                "llm_context_window": raw.get("llm", {}).get("context_window", 32768),
+                "llm_context_window": raw.get("llm", {}).get("context_window", 256000),
                 "retrieval_mode": raw.get("retrieval", {}).get("mode", "hybrid"),
                 "retrieval_per_kb_k": raw.get("retrieval", {}).get("per_kb_k", 3),
                 "retrieval_total_k": raw.get("retrieval", {}).get("total_k", 5),

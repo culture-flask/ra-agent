@@ -242,3 +242,58 @@ def test_5xx_and_network_retryable_4xx_not():
     assert _is_retryable(_Fake429("", 502))
     assert not _is_retryable(_Fake429("", 400))
     assert not _is_retryable(_Fake429("", 401))
+
+
+def test_user_context_window_explicit_beats_probe(monkeypatch):
+    """用户显式设置的上下文窗口优先于 /models 探测与默认值。"""
+    calls = {"n": 0}
+
+    def fake_get(url, headers=None, timeout=None):
+        calls["n"] += 1
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"id": "gpt-4o-mini", "context_length": 4096}]}
+
+            def raise_for_status(self):
+                pass
+        return FakeResp()
+
+    monkeypatch.setattr("app.abstractions.llm.httpx.get", fake_get)
+
+    _ensure_user("llm-ctxw")
+    svc = _make_service()
+    svc.set_user_config("llm-ctxw", "openai", "https://api.openai.com/v1",
+                        "gpt-4o-mini", "sk-test-abcdef123456",
+                        context_window=131072)
+    assert svc.context_window_for("llm-ctxw") == 131072
+    assert calls["n"] == 0            # 显式设置生效时不再发探测请求
+
+
+def test_user_context_window_clear_falls_back(monkeypatch):
+    """update 传 0 清除显式设置 → 恢复探测/默认值兜底。"""
+    import httpx
+    from app.abstractions.llm import LLMService
+
+    _ensure_user("llm-ctxw2")
+    svc = LLMService(system_default={"provider": "openai",
+                                     "base_url": "https://x/v1",
+                                     "model_id": "m"},
+                     system_api_key="k",
+                     crypto=SecretCrypto("s"),
+                     context_window_default=256000)
+    svc.set_user_config("llm-ctxw2", "openai", "https://x/v1",
+                        "gpt-4o-mini", "sk-test-abcdef123456",
+                        context_window=131072)
+    assert svc.context_window_for("llm-ctxw2") == 131072
+
+    def offline(url, headers=None, timeout=None):
+        raise httpx.ConnectError("offline")   # 探测失败 → 走兜底默认
+    monkeypatch.setattr("app.abstractions.llm.httpx.get", offline)
+
+    cid = svc.list_configs("llm-ctxw2")[0]["id"]
+    assert svc.update_config("llm-ctxw2", cid, context_window=0) is True
+    assert svc.list_configs("llm-ctxw2")[0]["context_window"] is None
+    assert svc.context_window_for("llm-ctxw2") == 256000

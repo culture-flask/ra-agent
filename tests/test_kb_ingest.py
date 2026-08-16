@@ -304,3 +304,68 @@ def test_batch_skips_bad_file_and_ingests_rest():
     cur = ks.get_kb(kb.kb_id)
     assert cur.status == "ready"
     assert len(cur.source_doc_ids or []) == 1          # 只有 ok.txt 入库
+
+
+def test_safe_filename():
+    """文件名清洗：去路径成分（防穿越）、替换特殊字符、保留中文、空名兜底。"""
+    from app.services.kb_service import _safe_filename
+    assert _safe_filename("../../etc/passwd") == "passwd"
+    assert _safe_filename("..\\..\\win.ini") == "win.ini"
+    assert _safe_filename("报告 final: v2?.pdf") == "报告_final_v2_.pdf"
+    assert _safe_filename("..") == "upload.bin"
+    assert _safe_filename("") == "upload.bin"
+
+
+def test_upload_archives_source_file():
+    """上传入库成功 → 原始文件归档到 data/docs/{kb_id}/{doc_id}__文件名。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("归档库", "public", None)
+    content = "源文件留底测试：量子纠错需要冗余。".encode()
+    ks.ingest_files(kb.kb_id, [("报告 v1.txt", content)])
+    docs = Path(ks._docs_dir) / kb.kb_id
+    files = list(docs.glob("*"))
+    assert len(files) == 1
+    assert files[0].name.endswith("__报告_v1.txt")
+    assert files[0].read_bytes() == content            # 原始字节留底
+
+
+def test_reupload_same_content_replaces_archive():
+    """同内容换名重传（doc_id 相同）→ 归档替换为新名字，一个 doc 只占一个文件。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("归档去重库", "public", None)
+    c = b"same content everywhere"
+    ks.ingest_files(kb.kb_id, [("a.txt", c)])
+    ks.ingest_files(kb.kb_id, [("b.txt", c)])
+    files = list((Path(ks._docs_dir) / kb.kb_id).glob("*"))
+    assert len(files) == 1 and files[0].name.endswith("__b.txt")
+
+
+def test_upload_bad_file_not_archived():
+    """解析失败的文件不入库，也不归档（避免文件管理里看不到的孤儿文件）。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("坏档库", "public", None)
+    ks.ingest_files(kb.kb_id, [("bad.xlsx", b"binary")])
+    assert not list((Path(ks._docs_dir) / kb.kb_id).glob("*"))
+
+
+def test_source_filename_path_traversal_sanitized():
+    """恶意文件名（含路径成分）→ 清洗后落在本库归档目录内。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("穿越库", "public", None)
+    ks.ingest_files(kb.kb_id, [("../../etc/passwd.txt", b"evil")])
+    docs_dir = Path(ks._docs_dir) / kb.kb_id
+    files = list(docs_dir.glob("*"))
+    assert len(files) == 1
+    assert files[0].parent == docs_dir and files[0].name.endswith("__passwd.txt")
+
+
+def test_delete_documents_removes_archive():
+    """文件管理删除 → chunk、向量、归档源文件同生命周期清理。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("删档库", "public", None)
+    ks.ingest_files(kb.kb_id, [("x.txt", b"hello world")])
+    doc_id = ks.get_kb(kb.kb_id).source_doc_ids[0]
+    docs_dir = Path(ks._docs_dir) / kb.kb_id
+    assert list(docs_dir.glob(f"{doc_id}__*"))
+    ks.delete_documents(kb.kb_id, [doc_id])
+    assert not list(docs_dir.glob(f"{doc_id}__*"))

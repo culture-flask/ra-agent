@@ -63,6 +63,28 @@ def test_bm25_ranks_by_term_overlap():
     assert hits[0]["id"] == "c3"
 
 
+def test_bm25_high_df_query_token_filtered():
+    """高频查询词过滤：几乎每篇都出现的词不参与打分，全被过滤则无命中。
+
+    阈值 = max(3% chunk 数, 50)：51 篇全含"神经网络"→ df=51 > 50 被过滤；
+    小库（如 3 篇）任何词 df 都 ≤ 50，过滤不生效（保护小语料）。
+    """
+    chunks = _chunks() + [
+        ChunkRecord(id=f"n{i}", text=f"神经网络与深度学习应用研究场景示例第{i}号"
+                                      "填充文本用于拉高词频分布",
+                    payload={"scope": "public"})
+        for i in range(51)]
+    idx = Bm25Index()
+    idx.build(chunks)
+    assert idx.search("神经网络", k=5) == []          # 高频词全被过滤 → 无命中
+    hits = idx.search("量子比特", k=5)                # 稀有词不受影响
+    assert hits and hits[0]["id"] == "c1"
+    # 小库不触发过滤（df 下限 50）
+    small = Bm25Index()
+    small.build(_chunks())
+    assert small.search("深度学习算力", k=3)[0]["id"] == "c3"
+
+
 # ---------- RRF 融合 ----------
 def test_rrf_fuse_merges_two_rankings():
     vec = [{"id": "a", "text": "a", "distance": 0.1},

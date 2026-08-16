@@ -202,7 +202,7 @@ class LLMService:
     def __init__(self, system_default: dict, system_api_key: str,
                  crypto: SecretCrypto, retry_max_retries: int = 3,
                  retry_base_delay: float = 1.0,
-                 context_window_default: int = 32768):
+                 context_window_default: int = 256000):
         self._system = LLMConfig(
             provider=system_default.get("provider", "sensenova"),
             base_url=system_default.get("base_url", "https://token.sensenova.cn/v1"),
@@ -230,6 +230,7 @@ class LLMService:
             return None
         return LLMConfig(provider=row.provider, base_url=row.base_url,
                          model_id=row.model_id,
+                         context_window=row.context_window,
                          api_key=self._crypto.decrypt(row.api_key))
 
     def get_chat_model(self, user_id: str,
@@ -248,7 +249,7 @@ class LLMService:
     def context_window_for(self, user_id: str) -> int:
         """当前生效模型的上下文窗口（token）。
 
-        优先级：显式配置 > /models 响应探测（缓存） > 默认值。
+        优先级：用户显式设置 > /models 响应探测（缓存） > 默认值。
         """
         cfg = self.get_user_config(user_id) or self._system
         if cfg.context_window:
@@ -289,6 +290,7 @@ class LLMService:
                 return None
         return LLMConfig(provider=row.provider, base_url=row.base_url,
                          model_id=row.model_id,
+                         context_window=row.context_window,
                          api_key=self._crypto.decrypt(row.api_key))
 
     # ---------- 写入 ----------
@@ -304,8 +306,12 @@ class LLMService:
 
     def set_user_config(self, user_id: str, provider: str, base_url: str,
                         model_id: str, api_key: str,
-                        is_default: bool = False) -> str:
-        """保存用户配置：api_key 加密落库；设默认时先清掉其他默认。"""
+                        is_default: bool = False,
+                        context_window: int | None = None) -> str:
+        """保存用户配置：api_key 加密落库；设默认时先清掉其他默认。
+
+        context_window 为用户显式指定的上下文窗口（token），None = 自动。
+        """
         with SessionLocal() as db:
             if is_default:
                 self._clear_defaults(db, user_id)
@@ -314,6 +320,7 @@ class LLMService:
                 api_key=self._crypto.encrypt(api_key),   # 加密落库
                 base_url=base_url, model_id=model_id,
                 is_default=is_default,
+                context_window=int(context_window) if context_window else None,
             )
             db.add(row)
             db.commit()
@@ -337,10 +344,12 @@ class LLMService:
                       provider: str | None = None,
                       base_url: str | None = None,
                       model_id: str | None = None,
-                      api_key: str | None = None) -> bool:
+                      api_key: str | None = None,
+                      context_window: int | None = None) -> bool:
         """更新已保存配置（切换模型用）：只传要改的字段，None 表示保持原值。
 
         仅本人配置可改；is_default 不受影响（切换后仍是默认/非默认）。
+        context_window 例外约定：0 表示清除（恢复自动探测/兜底），正数为显式设置。
         """
         with SessionLocal() as db:
             row = db.get(UserLLMConfig, config_id)
@@ -354,6 +363,8 @@ class LLMService:
                 row.model_id = model_id
             if api_key is not None:
                 row.api_key = self._crypto.encrypt(api_key)
+            if context_window is not None:
+                row.context_window = int(context_window) or None
             db.commit()
             return True
 
@@ -376,6 +387,7 @@ class LLMService:
         return [
             {"id": r.id, "provider": r.provider, "base_url": r.base_url,
              "model_id": r.model_id, "is_default": r.is_default,
+             "context_window": r.context_window,
              "api_key_masked": mask_secret(self._crypto.decrypt(r.api_key))}
             for r in rows
         ]

@@ -1,0 +1,698 @@
+{
+  "vector": {
+    "session_id": "eval2-vector-20260816",
+    "user_id": "241550d8be134b62b47895dbc59aaa88",
+    "turns": [
+      {
+        "question": "请检索知识库回答：SMS4 的线性密码分析主要有哪些方法？",
+        "answer": "根据知识库检索结果，关于 **SMS4（SM4）的线性密码分析**，检索到的主要方法如下：\n\n## 1. 多重线性密码分析（Multiple Linear Cryptanalysis）\n\nLiu Zhiqiang、Gu Dawu、Zhang Jing 在 *Chinese Journal of Electronics* 上发表了针对**减轮 SMS4** 的多重线性密码分析（Multiple linear cryptanalysis of reduced-round SMS4 block cipher）[8]。该方法在 Matsui 提出的线性密码分析[59]基础上，同时利用**多个线性近似**（multiple approximations）来提升攻击效率，其理论基础可追溯至 Kaliski 和 Robshaw 提出的多重近似线性分析方法[60]。\n\n## 2. 多维零相关线性分析（Multidimensional Zero-Correlation Linear Cryptanalysis）\n\n马猛、赵亚群、刘庆聪等人在《密码学报》上发表了 **SM4 算法的多维零相关线性分析**[9]。零相关线性分析利用迭代密码中**相关度为零**的线性逼近（zero-correlation linear hull）来构建区分器，并结合多维统计技术进行密钥恢复攻击，是近年来针对 SM4 的一种有效线性分析手段。\n\n## 3. 相关基础方法（可延伸应用于 SMS4）\n\n知识库背景资料还提到了线性密码分析的一般性方法体系，这些方法同样构成 SMS4 线性分析的基础：\n\n- **Matsui 线性密码分析**：1993 年欧密会上提出，是针对 DES 的首个线性攻击方法[59]；\n- **多重线性近似**：Kaliski 和 Robshaw 在 CRYPTO'94 上提出的使用多重线性近似的线性分析[60]；\n- **差分-线性密码分析**：Langford 和 Hellman 在 CRYPTO'94 上将差分分析与线性分析结合提出的方法[61]；\n- **线性密码分析的推广**：Harpes 等人对线性密码分析的一般化及 Matsui 堆积引理的适用性研究[62]。\n\n---\n\n**小结**：知识库中直接涉及 SMS4 线性密码分析的文献主要有两类——**多重线性密码分析**[8] 和 **多维零相关线性分析**[9]，前者侧重利用多条线性近似提高攻击威力，后者侧重利用零相关线性特征构建区分器。若需要进一步了解每种方法的具体轮数、数据/时间复杂度等细节，可检索对应文献原文。\n\n> 引用来源：知识库检索结果 [8]、[9]、[59]–[62]（public / 密码学-神经区分器）",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Yu-SM4.pdf",
+            "page": 5,
+            "score": null,
+            "distance": 0.4875922203063965,
+            "bm25_score": null,
+            "text": "ecurity\n \nand\n \nPrivacy.Berlin:Springer,2008:\n216-229.\n[4] 张美玲,刘景美,王新梅.22轮 SMS4的差分分析[J].\n中山大学学报:自然科学版,2010,49(2):43-47.\n"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Yu-SM4.pdf",
+            "page": 5,
+            "score": null,
+            "distance": 0.6308470964431763,
+            "bm25_score": null,
+            "text": ",2015,2(5):458-466.\n[10] LIU\n \nFen,JI\n \nWen,HU\n \nLei,et\n \nal.Analysis\n \nof\n \nthe\n \nSM4\n \nblock\n \ncipher[C]//Information\n"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Wang-LW.pdf",
+            "page": 105,
+            "score": null,
+            "distance": 0.6439089179039001,
+            "bm25_score": null,
+            "text": "lin: Springer, 2011, 6733: 35-54. \n[59] Matsui M. Linear cryptanalysis method for DES cipher[C]//Advances in Cryptology "
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Wang-LW.pdf",
+            "page": 38,
+            "score": null,
+            "distance": 0.662697970867157,
+            "bm25_score": null,
+            "text": "权\n衡方法，进行差分/线性分析。基于该方法找到 SIMON48的 17 轮线性近似值，采用\n相关矩阵方法，找到 SIMON32 的 14 轮线性近似 。利用线性区分器，进行了\nSIMON32的 24轮、SIMON48的 24轮密钥恢复攻击。"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Shan.pdf",
+            "page": 13,
+            "score": null,
+            "distance": 0.6676223278045654,
+            "bm25_score": null,
+            "text": "电子信息硕士专业学位论文 \n4 \n目前，SPECK 和 SIMON 密码已经被广泛应用[35-37]， 因此针对其进行的密码\n分析工作具有现实意义。 \n1.2.2 密码分析研究现状 \n1991 年 Biham 和 Shamir[38]针对 "
+          }
+        ],
+        "elapsed": 16.7
+      },
+      {
+        "question": "请检索知识库回答：HDND 是什么？",
+        "answer": "根据知识库检索结果，关于 **HDND** 的信息整理如下：\n\n## HDND 的基本定位\n\nHDND 是知识库所涉及论文中提出的一种**神经区分器（Neural Distinguisher）**，其全称在知识库片段中未显式展开，但从其技术特征看，很可能对应 **\"高阶差分神经区分器\"（Higher-order/Hybrid Differential Neural Distinguisher）** 一类的名称（该推断依据其核心引入\"二阶差分信息\"的特征）。\n\n## 知识库中 HDND 的关键特征\n\n1. **引入二阶差分信息**：知识库明确指出\"输入数据量的增加并非区分器精度提升的唯一原因，**二阶差分信息的引入**……\"（public / 密码学-神经区分器），说明 HDND 的核心创新在于利用二阶差分信息增强区分能力。\n\n2. **输入格式**：HDND 的每个输入样本是 **8×16 的二进制矩阵**，单个样本的数据量是\"单密文对\"方案的两倍（public / 密码学-神经区分器）。\n\n3. **训练过程与精度**：\n   - 在 **5 轮 Speck** 上训练约 200 epochs，精度约 0.85–0.91（Figure 3）；\n   - 在 **6 轮 Speck** 上训练约 200 epochs，精度约 0.86–0.91（Figure 4）；\n   - 在 **7 轮 Speck** 上训练约 200 epochs，精度约 0.56–0.66（Figure 5）；\n   - 在 **9 轮 HIGHT** 上训练约 40 epochs，精度约 0.9955–0.9990（Figure 7）；\n   - 在 **10 轮 HIGHT** 上训练约 40 epochs，精度约 0.75–0.95（Figure 8）。\n\n4. **性能对比**：\n   - 在与文献 [28] 使用相同明文差分的公平对比条件下，**HDND 在分类精度上一致优于现有工作**（public / 密码学-神经区分器）；\n   - 与采用\"多密文对作为单一输入样本\"的方案（如文献 [5]）相比，在**相同输入数据量**条件下，HDND 在 **5–7 轮**上的结果依然全面占优（public / 密码学-神经区分器）。\n\n## 小结\n\nHDND 是一个以**二阶差分信息**为核心、输入为 8×16 二进制矩阵的神经区分器，针对 Speck32/64（5–7 轮）和 HIGHT（9–10 轮）等轻量级密码取得了优于 DND、PDND、MDND 等既有神经区分器的分类精度。知识库未给出其缩写的显式定义，如需确认全称，建议查阅该论文原文（China Communications 相关文献）。\n\n> 引用来源：知识库检索结果（public / 密码学-神经区分器）：Figure 3–5、Figure 7–8 及对应正文描述。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "HDND.pdf",
+            "page": 9,
+            "score": null,
+            "distance": 1.003858208656311,
+            "bm25_score": null,
+            "text": "on Accuracy\nTrain Acc\nVal Acc\nFigure 3.Training Process of HDND on 5-Round Speck\n0 25 50 75 100 125 150 175 200\nEpoch\n0."
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2026Mirzaali.pdf",
+            "page": 18,
+            "score": null,
+            "distance": 1.0320807695388794,
+            "bm25_score": null,
+            "text": "t al. (2022a)\nDND 10 54.21 107 106 1+3+10+1 88 233.90 224  Lyu et al. (2022b)\nPDND 11 53.18 107 106 1+11+1 100† – – Sect"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2026Mirzaali.pdf",
+            "page": 18,
+            "score": null,
+            "distance": 1.0652563571929932,
+            "bm25_score": null,
+            "text": "– –  Yadav and Kumar \n(2021)\nMDND 8 92.30 107 106 1+2+8+1 55 231.19 218  Wu et al. (2024)\nDND 9 60 107 106 1+9+1 92 218."
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "HDND.pdf",
+            "page": 15,
+            "score": null,
+            "distance": 1.104251742362976,
+            "bm25_score": null,
+            "text": "0 5 10 15 20 25 30 35 40\nEpoch\n0.0075\n0.0100\n0.0125\n0.0150\n0.0175\n0.0200\n0.0225Loss\nTraining vs Validation Loss\nTrain Lo"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "HDND.pdf",
+            "page": 10,
+            "score": null,
+            "distance": 1.1083290576934814,
+            "bm25_score": null,
+            "text": "0 25 50 75 100 125 150 175 200\nEpoch\n0.61\n0.62\n0.63\n0.64\n0.65\n0.66\n0.67\n0.68Loss\nTraining vs Validation Loss\nTrain Loss\n"
+          }
+        ],
+        "elapsed": 27.7
+      },
+      {
+        "question": "请检索知识库回答：Gohr 的神经区分器方法是什么？",
+        "answer": "根据知识库检索结果，**Gohr 的神经区分器方法**可总结为以下几个核心环节：\n\n## 1. 问题转化：二分类任务\n\nGohr 在文献[19]（Crypto 2019）中将神经网络区分器的构建问题转化为**二分类问题**，并为 **SPECK32/64** 构建了有效的神经网络区分器。其核心思想是：让网络判断给定的密文对（差分对）来自**真实加密**（正例）还是**随机排列**（负例）。该方法具有通用性——\"用 Gohr 的方法可以为其他密码算法构建一个通用的网络结构\"[19]（public / 密码学-神经区分器）。\n\n## 2. 网络结构（残差网络，ResNet）\n\nGohr 使用的残差网络结构[1]（如图 4 所示）包含三大部分[19]：\n\n- **输入层**：网络输入为 4 个 n 比特字，即明文差分对应的两对密文 `CL‖CR‖C′L‖C′R`，表示为 **4×n 的矩阵**；输入经转置变形后进入网络。\n- **迭代层（残差卷积）**：\n  - 先经**初始卷积**：包含 32 个核大小 ks=1 的一维卷积核，用于在 n 比特字上**逐比特提取特征**；\n  - 再经 **m 个残差卷积块**（知识库中采用深度为 10 的网络，即 5 个残差块[19]），每个块依次进行 **2 层 32 个核、核大小 ks=3 的一维卷积**，用于提取**相邻比特间的特征**；\n  - 每个卷积块的输入通过**加法反馈到输出**上形成残差结构，以缓解神经网络的退化现象。\n- **预测层（全连接层）**：包含两层宽度为 d1=d2=64 的隐藏层，最终连接至神经元数量为 1 的输出层，经 **Sigmoid 激活函数**得到位于 (0,1) 区间的输出 Z。每个卷积层及全连接隐藏层后均进行**批标准化（BatchNorm）和 ReLU 激活**。（public / 密码学-神经区分器）\n\n## 3. 训练数据与训练过程\n\n- **数据集规模**：使用大小为 **10⁷ 的训练集**和 **10⁶ 的验证集**训练神经区分器，测试集大小为 10⁶；每个数据集均含约**一半正例、一半负例**（public / 密码学-神经区分器）。\n- **训练轮次与学习率**：共训练 **200 个轮次**；采用**循环学习率**，每 10 个训练轮次，学习率由 2×10⁻³ 线性降至 10⁻⁴；每轮数据以 5000 为一组（batch size）进入网络（public / 密码学-神经区分器）。\n- **有效性判定**：训练结束后在测试集上评估准确率，**若准确率大于 0.5** 则说明得到了有效的区分器（public / 密码学-神经区分器）。\n\n## 4. 主要结果\n\n- Gohr 对 **Speck32/64** 得到了有效的 **5～8 轮神经区分器**；与对应轮数下基于**全差分分布表（DDT）**构造的经典区分器相比，神经区分器均达到了**更高的区分准确率**（public / 密码学-神经区分器）。\n\n## 5. 应用：差分—神经攻击（密钥恢复）\n\n基于上述神经区分器，Gohr 在文献[1]中还构造了针对 Speck32/64 的**密钥恢复攻击**，称为**差分—神经攻击**：在 r₂ 轮的神经区分器（ND）前接一条概率为 p 的 r₁ 轮经典差分路线，最后再猜测一轮子密钥，从而构成 **r₁ + r₂ + 1 轮的密钥恢复攻击**（public / 密码学-神经区分器）。后续实验中采用深度为 10 的网络及与文献[1]相同的训练过程复现该区分器。\n\n---\n\n**小结**：Gohr 的方法本质上是\"将密码区分问题转化为二分类问题 + 用带残差结构的卷积神经网络自动提取差分特征 + 循环学习率训练\"，并在 Speck32/64 上取得优于 DDT 区分器的效果，进而衍生出差分—神经密钥恢复攻击范式。\n\n> 引用来源：知识库检索结果（public / 密码学-神经区分器），文献[19]、[1] 及申焱天等（中国科学：信息科学 2025, 55(6): 1452）对 Gohr 网络结构、训练过程的描述。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Li-LBlock.pdf",
+            "page": 33,
+            "score": null,
+            "distance": 0.6500321626663208,
+            "bm25_score": null,
+            "text": "k 区分器的训练结果与分析 \nGohr 在文献[19]中将神经网络区分器的构建问题转化为二分类问题，并 为\nSPECK32/64 构建了有效的神经网络区分器。用 Gohr 的方法可以为其他密码算法\n构建一个通用的网络结构。目前有多种神经网络"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2025Yuan-Rethink.pdf",
+            "page": 3,
+            "score": null,
+            "distance": 0.7232255339622498,
+            "bm25_score": null,
+            "text": "CK neural network distinguisher proposed by Gohr over classical distinguish-\n3"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Chen-DL.pdf",
+            "page": 67,
+            "score": null,
+            "distance": 0.7841631174087524,
+            "bm25_score": null,
+            "text": "轮神经区分器，基于以下 5 个明文差分训练得到：\n∆1 = ∆[64], ∆2 = ∆[76], ∆3 = ∆[90], ∆4 = ∆[105], ∆5 = ∆[117]. （4.5）\n针对 Speck96 的神经区分器组合包含 4 个 7"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2025Shen-MiF.pdf",
+            "page": 6,
+            "score": null,
+            "distance": 0.7868622541427612,
+            "bm25_score": null,
+            "text": "申焱天等\n中国科学 : 信息科学 2025 年 第 55 卷 第 6 期 1452\n本来自负例.\nGohr 使用的残差网络结构如图 4 所示. 网络输入为 4 个 n 比特字 CL||CR||C ′\nL||C ′\nR, 表示为 4 × n\n"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Wang.pdf",
+            "page": 1,
+            "score": null,
+            "distance": 0.7920466661453247,
+            "bm25_score": null,
+            "text": "1016\nIEICE TRANS. INF. & SYST., VOL.E107–D, NO.8 AUGUST 2024\nPAPER\nInvestigating and Enhancing the Neural Distinguisher "
+          }
+        ],
+        "elapsed": 19.5
+      },
+      {
+        "question": "请检索知识库回答：SPECK 算法的差分攻击有哪些研究？",
+        "answer": "根据知识库检索结果，SPECK 算法的差分攻击研究可归纳为以下几个层面：\n\n## 1. 经典（传统）差分密码分析\n\n- **差分分析方法的奠基**：1990 年以色列密码学家 E. Biham 和 A. Shamir[11] 针对 DES 类密码提出了差分密码分析方法。SPECK 作为迭代分组密码，其抗差分攻击能力被设计者作为重要安全性指标（public / 密码学-神经区分器，河北大学硕士学位论文）。\n- **首次差分攻击**：Abed 等人[8] 引入了对**几乎所有 Speck 变体**的首次差分攻击（public / 密码学-神经区分器，Appl. Sci. 2023）。该文献还指出，SPECK 设计者既未给出设计原理，也未提供安全评估或密码分析结果，这推动了密码学界对 SPECK 的进一步分析研究。\n\n## 2. 神经区分器辅助的差分攻击（Gohr 范式）\n\n- Gohr[19]（Crypto 2019）将深度学习方法应用于差分分析，**攻击了分组密码 SPECK32/64**，开创了深度学习辅助密码分析的先河（public / 密码学-神经区分器）。\n- 其攻击框架为**差分—神经攻击**：在 r₂ 轮神经区分器（ND）前接一条概率为 p 的 r₁ 轮经典差分路线，最后再猜测一轮子密钥，构成 **r₁ + r₂ + 1 轮的密钥恢复攻击**（public / 密码学-神经区分器）。\n\n## 3. Speck128 的改进差分神经攻击（多阶段密钥恢复）\n\n- Chen 等[4] 给出了对 **Speck128 的 17 轮理论攻击以及 12 轮实际攻击**。\n- 后续改进工作（申焱天等）使用与文献[4]相同的攻击框架，在**不同密文比特段建立 5 个 9 轮查找表区分器**（LT1～LT5），每个区分器负责恢复最后一轮子密钥 k⁻¹ 的若干比特，**改进了对 17 轮 Speck128 的 5 阶段密钥恢复攻击的计算复杂度**，并给出了 **14 轮实际攻击结果**（public / 密码学-神经区分器）。\n- 攻击构造：5 个区分器使用的明文差分约束分别为一比特差分 **∆[64]、∆[76]、∆[90]、∆[105]、∆[113]**；每个区分器前接一条 **6 轮差分路线**，形成 **1 + 6 + 9 + 1 = 17 轮**密钥恢复攻击。前置差分路线由基本差分路线\n  (0x4041041440401000; 0x024040240640d010) →(0x1; 0x0)（6 轮）经循环左移得来，**差分概率为 2⁻⁴⁵ 或 2⁻⁴⁶**。\n- 加速技巧：使用**中性比特（neutral bits）**扩展明文结构，各阶段取中性度最高的 10 个中性比特，总中性度记为 PNB1～PNB5；攻击总复杂度约为 **2⁹¹·⁰³**。\n\n## 4. Speck32/64 的神经区分器差分分析（研究深化）\n\n- 河北大学硕士学位论文对 **SPECK32/64 进行更深入的研究**，利用深度学习技术和密码分析技术对 SPECK32/64 进行差分分析，以期待获得更好的神经差分区分器的准确率，为该密码算法的后续研究提供基础（public / 密码学-神经区分器）。\n- 相关研究中还提出了引入**二阶差分信息**的神经区分器（HDND），在 **5～7 轮 Speck** 上训练，精度约 0.56–0.91，并在公平对比条件下**一致优于现有神经区分器工作**（public / 密码学-神经区分器）。\n\n---\n\n**小结**：SPECK 的差分攻击研究形成了\"**经典差分攻击 → Gohr 神经区分器差分攻击 → 多阶段密钥恢复（查找表区分器+中性比特）→ 二阶差分信息神经区分器**\"的演进脉络，攻击目标覆盖 Speck32/64 和 Speck128/256 等主要变体，实际攻击轮数已从 12 轮提升至 14 轮（Speck128）。\n\n> 引用来源：知识库检索结果（public / 密码学-神经区分器）：河北大学硕士学位论文；Appl. Sci. 2023, 13, 6994；申焱天等《中国科学：信息科学》2025, 55(6)。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Yue.pdf",
+            "page": 20,
+            "score": null,
+            "distance": 0.3661866784095764,
+            "bm25_score": null,
+            "text": "河北大学硕士学位论文\n12\n然 Speck 算法不同版本的 m 取值不同，但计算序列 iL 和子密钥 ik 的公式都表示为：\n  \n \n2\n1 1\ni m i i\ni i i m\nL L k i\nk k L\n\n\n \n "
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Yue.pdf",
+            "page": 1,
+            "score": null,
+            "distance": 0.3804907202720642,
+            "bm25_score": null,
+            "text": "tforms compared with other existing ciphers. However, the designers of Speck neither\nprovided the design rationale nor g"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2025Shen-MiF.pdf",
+            "page": 18,
+            "score": null,
+            "distance": 0.43376630544662476,
+            "bm25_score": null,
+            "text": ":03 × 248 = 2 91:03.\n5.3 改进 Speck128 的差分 { 神经攻击\nChen 等 [4] 给出了对 Speck128 的 17 轮理论攻击以及 12 轮实际攻击. 我们使用与其相同的攻击\n框架, 在不同的密文比特"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Shan.pdf",
+            "page": 20,
+            "score": null,
+            "distance": 0.44165903329849243,
+            "bm25_score": null,
+            "text": "2 预备知识 \n11 \n由图 2-3 可以看出， SPECK 密码的轮函数比较简单。给定第\ni 轮密文\n( , ),  , {0,1 }L R L R n\ni i i i iC C C C C=\n，轮密钥\n{0,1 }n\niK  ，其轮"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Chen-SPECK.pdf",
+            "page": 12,
+            "score": null,
+            "distance": 0.44977375864982605,
+            "bm25_score": null,
+            "text": "方法应用于现代密码的差分分\n析，攻击了分组密码 SPECK32/64 密码算法，同时开创了深度学习辅助密码分析\n的先河，使得密码研究人员对密码设计与分析空间彻底探索成为可能，密码学家\n开始致力于利用深度学习进行密码算法的分析。 \n基于上述研"
+          }
+        ],
+        "elapsed": 29.1
+      },
+      {
+        "question": "请检索知识库回答：残差网络在密码分析中如何应用？",
+        "answer": "根据知识库检索结果，**残差网络（ResNet）在密码分析中的应用**主要体现在神经区分器（Neural Distinguisher）的构建与改进上，具体如下：\n\n## 1. 开创性应用：Gohr 的神经区分器（Crypto 2019）\n\n- Gohr[19] 首次将深度学习应用于分组密码分析，其构建 Speck32/64 神经区分器时**直接采用了 ResNet 模型**（即 ILSVRC'15 竞赛的冠军模型 ResNet[6]）。\n- 该模型输入为两个 32 位数据块（密文对），输出判断输入是**密文还是随机数据**；输入层的 64 个节点分别对应两个 32 位序列中的每一位（public / 密码学-神经区分器）。\n\n## 2. 残差块（Residual Block）的核心机制\n\n残差网络在密码分析中的价值，源自其**跳跃连接（skip connection）**结构：\n\n- 残差块中，某一层的输出可以**直接跨过几层**作为后面某一层的输入，其意义在于**叠加多层网络而不降低模型准确率**（public / 密码学-神经区分器，河北大学论文）。\n- 如图 2-10 所示，残差块结构为：输入 x → weight layer → BN → ReLU → weight layer → BN → ReLU → ⊕，即输出为 **x + F(x)**（public / 密码学-神经区分器）。\n- 通过堆叠多个残差块可实现复杂的深层神经网络，这为密码分析中**提取深层差分特征**提供了基础。\n\n## 3. 在神经区分器中的具体架构应用\n\nGohr 的区分器网络中，残差结构体现在\"迭代层\"：\n\n- **初始卷积**：32 个核大小 ks=1 的一维卷积核，在 n 比特字上逐比特提取特征；\n- **m 个残差卷积块**（Gohr 采用深度为 10 的网络，即 **5 个残差块**）：每个块依次进行 2 层 32 个核、核大小 ks=3 的一维卷积，提取相邻比特间特征；\n- 每个卷积块的输入通过**加法反馈到输出**形成残差结构，缓解神经网络退化（public / 密码学-神经区分器，申焱天等，中国科学：信息科学 2025）。\n\n## 4. 残差网络上的结构改进\n\n知识库显示，后续研究在残差网络基础上做了多种增强：\n\n- **引入 Inception 结构**：在神经网络残差结构之前引入 Inception 结构，**扩大网络感受野**（public / 密码学-神经区分器）；\n- **加入门控线性单元（GLU）**：KIM 等人在神经网络结构中加入**残差连接和门控线性单元**（public / 密码学-神经区分器）；\n- **SE-ResNeXt 变体**：BAO 等人在 2022 年亚密会上采用 **SE-ResNeXt** 变体构造神经差分区分器，应用于 **SIMON32/64** 密码算法；其中 SE block 被应用于 ResNeXt 中（public / 密码学-神经区分器）；\n- **注意力机制结合**：DENG 等人在**残差网络的输出层引入多头注意力机制**，用于分析 SPECK 密码算法的安全性（public / 密码学-神经区分器）；\n- **二阶差分信息**：相关研究（HDND）在残差网络框架下引入二阶差分信息，在 5–7 轮 Speck、9–10 轮 HIGHT 上取得优于现有工作的精度（public / 密码学-神经区分器）。\n\n## 5. 应用成效\n\n- 在 Speck32/64 上，基于 ResNet 的神经区分器在 5～8 轮上均取得了**高于基于全差分分布表（DDT）经典区分器的准确率**（public / 密码学-神经区分器）；\n- 基于残差网络的区分器可进一步用于**密钥恢复攻击**（差分—神经攻击：r₁ 轮差分路线 + r₂ 轮神经区分器 + 1 轮子密钥猜测）（public / 密码学-神经区分器）。\n\n---\n\n**小结**：残差网络在密码分析中主要作为**神经区分器的骨干网络**，通过残差块的跳跃连接实现深层特征提取；后续研究通过叠加 Inception、门控线性单元、SE 模块、注意力机制等手段对其改进，并成功应用于 Speck、SIMON、HIGHT 等轻量级分组密码的区分与密钥恢复攻击。\n\n> 引用来源：知识库检索结果（public / 密码学-神经区分器）：Gohr 原文献描述、河北大学硕士学位论文（图 2-10）、申焱天等（中国科学：信息科学 2025, 55(6)）、Appl. Sci. 2023, 13, 6994。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Yang-XDU.pdf",
+            "page": 1,
+            "score": null,
+            "distance": 0.5540407299995422,
+            "bm25_score": null,
+            "text": "\n　\nＴ ｅ ｌ ｅ ｃ ｏ ｍ ｍ ｕ ｎ ｉ ｃ ａ ｔ ｉ ｏ ｎ ｓ\n　\nＥ ｎｇｉ ｎ ｅ ｅ ｒ ｉ ｎｇ\n，\nＸ ｉ ｄ ｉ ａ ｎ\n　\nＵ ｎ ｉ ｖ ｅ ｒ ｓ ｉ ｔｙ\n，\nＸ ｉ'ａ ｎ\n　\n７ １ ０ ０ ７ １\n，"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Wang-LW.pdf",
+            "page": 37,
+            "score": null,
+            "distance": 0.5632743835449219,
+            "bm25_score": null,
+            "text": "基于深度学习的轻量级分组密码安全性分析研究 \n 26 \n的线性叠加。图 2-10 显示了网络模型中残差块结构及跳过连接过程。这种残差跳跃\n式的结构使某一层的输出可以直接跨过几层作为后面某一层的输入，其意义在于叠\n加多层网络而不降低模型的准确"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2025Li-XDU.pdf",
+            "page": 4,
+            "score": null,
+            "distance": 0.5826711654663086,
+            "bm25_score": null,
+            "text": "经 网 络 残 差 结 构 之 前 引 入Inception\n结 构 ,扩 大 了 网 络 的 感 受 野 ;KIM 等 人 [21]在 神 经 网 络 结 构 中 加 入 残 差 连 接 和 门 控 线 性 单 元 ;在 改 进 输 入\n"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Tcydenova.pdf",
+            "page": 2,
+            "score": null,
+            "distance": 0.5921052098274231,
+            "bm25_score": null,
+            "text": "er. This marks the first time that conventional cryptanalysis has been combined with neural \nnetworks. The study utilize"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2021Polytope.pdf",
+            "page": 1,
+            "score": null,
+            "distance": 0.5966948866844177,
+            "bm25_score": null,
+            "text": "\nAbstract: Since the birth of AlphaGo, deep learning has made wide applications. At CRYPTO 2019,\nIt was reported that de"
+          }
+        ],
+        "elapsed": 34.7
+      },
+      {
+        "question": "请检索知识库回答：CPDI-ND 是什么？",
+        "answer": "根据知识库检索结果，**CPDI-ND** 是知识库论文提出的**基于自注意力跨对差分交互的神经区分器**（Cross-Pair Differential Interaction Neural Distinguisher），是针对多密文对神经区分器缺陷提出的改进方案。\n\n## 1. 提出的动机（解决什么问题）\n\n多密文对神经区分器（如 MDND）虽然通过输入多个密文对提升了区分精度，但存在**核心缺陷：密文对信息孤立、缺乏全局交互**——各密文对的特征在样本内被独立编码、简单聚合，无法充分利用多密文对之间共享的差分一致性信号（public / 密码学-神经区分器）。\n\n## 2. 核心方法（怎么解决）\n\nCPDI-ND 突破了以往\"**单对独立编码 + 全局简单聚合**\"的处理范式，具体包含两大核心组件：\n\n1. **跨对自注意力机制**：将单样本内的多个密文对特征视为**序列输入**，通过**多层多头自注意力机制**实现密文对之间的**双向信息交互**，自动挖掘并强化多密文对共享的差分一致性信号。\n2. **样本级对比损失**：作为辅助优化目标，从特征空间结构层面约束**类内紧凑性与类间可分性**，与跨对交互机制形成正向反馈，同步提升区分准确率与分类平衡性（public / 密码学-神经区分器）。\n\n## 3. 主要实验结果\n\n**（1）区分准确率**\n- 7–9 轮 CPDI-ND 的区分准确率均随训练时单样本密文对数量 k 的增加而增加（表4）；k=64 时训练曲线损失贴合、无明显过拟合（图4、图5）。\n- 训练过程损失与验证损失全程几乎贴合，未出现分离或震荡崩溃（public / 密码学-神经区分器）。\n\n**（2）跨 k 值泛化能力**（表5）\n- **向上泛化**：训练 k≥16 时，测试 k 大于训练 k 仍保持有效性能，如 k=32 训练的模型在 k=64 测试时与 k=64 训练的模型仅差 0.43%，k=128 时差距缩小至 0.18%；\n- **向下兼容**：测试 k 小于训练 k 时，准确率与对应 k 值的基线模型相当甚至略有提升；\n- 结论：**仅需中等规模 k 值训练即可适配不同推理场景**，显著降低多场景部署训练成本（public / 密码学-神经区分器）。\n\n**（3）消融实验**（表6、表7）\n- 对比损失（exp2）在所有测试 k 值下准确率最高，增益随 k 增大扩大（k=8 时 +0.38%，k=128 时 +3.09%）；\n- 自注意力模块是核心驱动力，去除后所有 k 值下准确率均下降，且增益随 k 增大持续扩大（public / 密码学-神经区分器）。\n\n## 4. 密钥恢复攻击验证（10 轮 Speck32/64）\n\n利用 **k=32 训练的 8 轮 CPDI-ND** 对 10 轮 Speck32/64 进行末轮子密钥恢复攻击（算法2）：\n\n- **攻击成功率**：单个样本含 32 对密文、选取 32 组样本时，100 次攻击成功率达 **92%**，正确密钥排名中位数为 **1**（即超过一半概率直接命中正确密钥）；\n- **数据复杂度**：所需选择明文总量为 **32×32×2**；\n- **计算复杂度**：以一次完整 10 轮 Speck32/64 加密为 1 个标准单位，总计算量约为 2¹¹ 次完整 10 轮加密，理论在家用计算机上数十至数百毫秒内完成；\n- **实际开销**：主要集中于神经区分器推理，实验设备上单次攻击约 **33 秒**（public / 密码学-神经区分器）。\n\n## 5. 可解释性验证\n\n注意力权重可视化表明（图8）：模型在密文对之间建立了结构化交互（浅层选择性聚合、深层全局融合）；跨对交互信息量与自身信息相当，是特征更新的核心组成部分；多头机制提供差异化关注模式（局部强信号 + 全局弱一致性），与消融实验结果相互印证（public / 密码学-神经区分器）。\n\n---\n\n**小结**：CPDI-ND 是一个以**多层多头自注意力实现跨密文对差分交互**、以**样本级对比损失**辅助优化的多密文对神经区分器，在 Speck32/64 上实现了 7–9 轮高精度区分、跨 k 值泛化，并对 10 轮 Speck32/64 实现成功率 92% 的密钥恢复攻击（正确密钥排名中位数为 1）。\n\n> 引用来源：知识库检索结果（public / 密码学-神经区分器）：总结部分、表4–表7、图4–图8、算法2 及密钥恢复攻击章节。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": null,
+            "distance": 1.0195541381835938,
+            "bm25_score": null,
+            "text": "为：正确密钥的得分排序在10以内。当单个多密文对样本包含32对密文、选取32组样本时，执行100次密钥恢复攻击，成功率达到92%，正确密钥排名中位数为1，这意味着通过CPDI-ND评分后，有超过一半的概率能够直接命中正确密钥。数据复杂度方面"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": null,
+            "distance": 1.0385854244232178,
+            "bm25_score": null,
+            "text": "一致，多头机制使模型在不同特征子空间下并行建模跨对交互，同时兼顾局部强信号与全局弱一致性，多视角互补地提取差分交互特征，提升了整体特征表达的丰富度。\n\n图8   Layer 0各注意力头的独立热力图(正样本)\n综上所述，注意力权重可视化从以"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": null,
+            "distance": 1.0592209100723267,
+            "bm25_score": null,
+            "text": "是将第一阶段微调后的模型迁移至9轮主任务，通过超大规模数据让模型捕捉9轮加密中微弱的非随机特征，完成对源任务的适配。\n表4  不同密文对数量k下训练得到的CPDI-ND准确率\n最终获得的CPDI-ND在对应各k取值的105样本测试集上的准确"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": null,
+            "distance": 1.0737016201019287,
+            "bm25_score": null,
+            "text": "性能基本持平。\n2） CPDI-ND具有良好的向下兼容特性\n各训练配置下的区分器均展现出向下兼容能力：当测试所使用的密文对数量k小于训练时的k值时，模型准确率与以对应k值单独训练的基线模型相当，部分场景下甚至略有提升。\n上述结果表明，仅需采"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": null,
+            "distance": 1.0912379026412964,
+            "bm25_score": null,
+            "text": "果也直观验证了自注意力机制确实在密文对之间建立了有效交互。\n4)密钥恢复攻击验证了CPDI-ND的实际攻击效果，对10轮Speck32/64进行最后一轮子密钥恢复攻击， 当单个多密文对样本包含32对密文且选取32组样本时， 100次攻击中的"
+          }
+        ],
+        "elapsed": 34.9
+      }
+    ]
+  },
+  "hybrid": {
+    "session_id": "eval2-hybrid-20260816",
+    "user_id": "241550d8be134b62b47895dbc59aaa88",
+    "turns": [
+      {
+        "question": "请检索知识库回答：SMS4 的线性密码分析主要有哪些方法？",
+        "answer": "根据知识库（public / 密码学-神经区分器）中检索到的文献，SMS4（即 SM4）的线性密码分析方法主要包括以下几类：\n\n## 1. 多重线性密码分析（Multiple Linear Cryptanalysis）\nLiu Zhiqiang、Gu Dawu、Zhang Jing 在 *Chinese Journal of Electronics*（2010）上发表了对低轮 SMS4 的多重线性密码分析，利用**多条线性逼近**同时进行统计，以提高攻击的样本利用率和效率 [8]。\n\n> 来源：LIU Zhiqiang, GU Dawu, ZHANG Jing. Multiple linear cryptanalysis of reduced-round SMS4 block cipher[J]. Chinese Journal of Electronics, 2010, 19(3):389-393.（public）\n\n## 2. 多维零相关线性分析（Multidimensional Zero-Correlation Linear Analysis）\n马猛、赵亚群、刘庆聪等人在《密码学报》（2015）上对 SM4 算法进行了**多维零相关线性分析**，利用相关系数严格为零的线性逼近构建区分器，进而对算法进行安全性评估 [9]。\n\n> 来源：马猛, 赵亚群, 刘庆聪, 等. SM4算法的多维零相关线性分析[J]. 密码学报, 2015, 2(5):458-466.（public）\n\n## 3. 线性密码分析的一般框架及其衍生方法\n知识库在分组密码安全性分析背景部分指出，线性密码分析由 Matsui 在分析 DES 时提出 [59]，随后衍生出一系列方法，包括**多重线性密码分析** [60]、**差分-线性密码分析** [61] 和**非线性密码分析** [62][63] 等。这些方法同样构成了 SMS4 线性类安全性分析的方法论基础（如多重线性分析即直接应用于 SMS4 [8]）。\n\n> 来源：知识库“第一章 绪论 §1.2.3 分组密码安全性分析”（public）。\n\n---\n\n**补充说明**：以上结论严格基于知识库检索结果。若需更完整的最新进展（如更高轮数的线性攻击），建议进一步检索相关文献；知识库中另一篇综述《SM4分组密码算法综述》[14] 也可作为系统性参考。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Yu-SM4.pdf",
+            "page": 5,
+            "score": 0.016393,
+            "distance": 0.4875922203063965,
+            "bm25_score": null,
+            "text": "ecurity\n \nand\n \nPrivacy.Berlin:Springer,2008:\n216-229.\n[4] 张美玲,刘景美,王新梅.22轮 SMS4的差分分析[J].\n中山大学学报:自然科学版,2010,49(2):43-47.\n"
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "2023Wang-LW.pdf",
+            "page": 16,
+            "score": 0.016393,
+            "distance": null,
+            "bm25_score": 33.209056,
+            "text": "第一章 绪论 \n 5 \n模式，认证加密有：ASCON-128、ASCON-128a和 ASCON-80pq。2023年，ASCON\n算法被 NIST选为用于物联网设备，如智能家居、智慧医疗等的数据加密算法。 \n§1.2.3 分组密码安全性分"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Yu-SM4.pdf",
+            "page": 5,
+            "score": 0.016129,
+            "distance": 0.6308470964431763,
+            "bm25_score": null,
+            "text": ",2015,2(5):458-466.\n[10] LIU\n \nFen,JI\n \nWen,HU\n \nLei,et\n \nal.Analysis\n \nof\n \nthe\n \nSM4\n \nblock\n \ncipher[C]//Information\n"
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "2023Wang-LW.pdf",
+            "page": 13,
+            "score": 0.016129,
+            "distance": null,
+            "bm25_score": 30.509965,
+            "text": "基于深度学习的轻量级分组密码安全性分析研究 \n 2 \n会将问题反馈回轻量级分组密码的设计和分析之中。因此，可以将轻量级分组密码\n学视为一个螺旋式上升的模式。 \n在过去的几十年中，伴随着分组密码的发展和密码学安全分析技术的日臻成熟，\n提出了大"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Wang-LW.pdf",
+            "page": 105,
+            "score": 0.015873,
+            "distance": 0.6439089179039001,
+            "bm25_score": null,
+            "text": "lin: Springer, 2011, 6733: 35-54. \n[59] Matsui M. Linear cryptanalysis method for DES cipher[C]//Advances in Cryptology "
+          }
+        ],
+        "elapsed": 28.8
+      },
+      {
+        "question": "请检索知识库回答：HDND 是什么？",
+        "answer": "根据知识库（public / 密码学-神经区分器）中的检索结果：\n\n## HDND 的定义\n\n**HDND（Higher-order Differential Neural Distinguisher，高阶差分神经区分器）** 是一种将**神经网络**与**高阶差分密码分析**相结合的神经区分器模型。\n\n知识库中明确给出了其构建思路：通过引入**高阶差分信息**（特别是二阶差分信息）来增强**特征表示能力**，从而建立 HDND [关键词部分]：\n\n> \"The introduction of second-order differential information ... of feature representation, thereby establishing a HDND.\"\n\n## 主要性能表现\n\n知识库的实验结果部分报告了 HDND 在多个密码算法上的区分精度提升：\n\n| 目标密码 | 轮数 | 相对经典 NDD 的提升 |\n|---|---|---|\n| Speck32/64 | 5–7 轮 | 区分精度提升 **4%–10%** |\n| HIGHT | 9–10 轮 | 区分精度提升约 **20%** |\n\n具体精度数据包括：\n- **6 轮 Speck32/64**：精度达到 **90.93%±0.07%**，最佳实验结果 91.00%\n- **7 轮 Speck32/64**：精度 **66.23%±0.13%**，最高 66.36%\n\n（来源：public / 密码学-神经区分器，摘要及第 5 章实验结果部分）\n\n## 输入与训练特征\n\n- **输入样本格式**：每个输入样本是一个 **8×16 的二进制矩阵**，数据量是单密文对方案的 2 倍（来源：public，第 5 章比较分析部分）。\n- **训练过程**：在 5/6/7 轮 Speck32/64 与 9/10 轮 HIGHT 上，训练损失与验证损失曲线几乎完全贴合、无明显分离，**未出现过拟合**；在 200 个 epoch 的训练中曲线波动符合循环学习率的预期行为，无异常振荡与训练崩溃（来源：public，Figures 3–8 及第 5.3 节分析）。\n- **公平性比较**：在与采用相同明文差分的已有工作对比中，HDND 在分类精度上一致优于现有工作；且在相同输入数据量条件下，也全面优于采用多密文对输入范式的相关工作（如文献 [5]）（来源：public，第 5 章）。\n\n## 研究定位与延伸\n\n该工作为\"神经网络与高阶差分密码分析\"的融合提供了新视角，并具有延伸到**密钥恢复攻击**的潜力，对分组密码安全评估具有理论价值与实践意义（来源：public，摘要）。\n\n> 关键词：deep learning; higher-order differential cryptanalysis; neural differential distinguisher; key recovery attack\n\n---\n\n需要说明的是，知识库中 HDND 相关结果均为**公开（public）**来源。若需要更详细的方法细节（如网络结构、高阶差分构造方式），可进一步检索或查阅原文。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "HDND.pdf",
+            "page": 9,
+            "score": 0.032266,
+            "distance": 1.003858208656311,
+            "bm25_score": 9.494558,
+            "text": "on Accuracy\nTrain Acc\nVal Acc\nFigure 3.Training Process of HDND on 5-Round Speck\n0 25 50 75 100 125 150 175 200\nEpoch\n0."
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "HDND.pdf",
+            "page": 1,
+            "score": 0.031054,
+            "distance": 1.1770734786987305,
+            "bm25_score": 9.89815,
+            "text": "n of feature representation, thereby es-\ntablishing a HDND. Experimental results demonstrate\nthat the proposed HDND sign"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "HDND.pdf",
+            "page": 15,
+            "score": 0.030331,
+            "distance": 1.104251742362976,
+            "bm25_score": 9.004401,
+            "text": "0 5 10 15 20 25 30 35 40\nEpoch\n0.0075\n0.0100\n0.0125\n0.0150\n0.0175\n0.0200\n0.0225Loss\nTraining vs Validation Loss\nTrain Lo"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "HDND.pdf",
+            "page": 9,
+            "score": 0.030331,
+            "distance": 1.1789911985397339,
+            "bm25_score": 9.487007,
+            "text": "ck32/64 cipher, the HDND attains an accuracy\nof 90.93±0.07%, with the best experimental result\nreaching 91.00%. For the "
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "HDND.pdf",
+            "page": 10,
+            "score": 0.03031,
+            "distance": 1.1083290576934814,
+            "bm25_score": 9.263583,
+            "text": "0 25 50 75 100 125 150 175 200\nEpoch\n0.61\n0.62\n0.63\n0.64\n0.65\n0.66\n0.67\n0.68Loss\nTraining vs Validation Loss\nTrain Loss\n"
+          }
+        ],
+        "elapsed": 12.4
+      },
+      {
+        "question": "请检索知识库回答：Gohr 的神经区分器方法是什么？",
+        "answer": "根据知识库（public / 密码学-神经区分器）检索结果，Gohr 的神经区分器方法可以概括如下：\n\n## 1. 核心思想：将区分器构建转化为二分类问题\n\nGohr 在文献 [19] 中**将神经网络区分器的构建问题转化为一个二分类问题**，并成功为 **SPECK32/64** 构建了有效的神经网络区分器（来源：public / 密码学-神经区分器，第 4 章\"神经区分器的训练\"）。\n\n其基本思路是：训练一个神经网络来区分**真实密文对**（由正确密钥加密产生的、具有特定差分特征的密文对）与**随机密文对**，从而替代或辅助传统差分密码分析中的统计区分器。\n\n## 2. 通用性与可扩展性\n\n- Gohr 的方法**不局限于特定算法**——\"用 Gohr 的方法可以为其他密码算法构建一个通用的网络结构\"（来源：public，第 4 章引言）。\n- 可选的神经网络模型包括 **MLP [62]** 和 **ResNet** 等，知识库所述工作选择了 **ResNet** 进行神经区分器训练。\n\n## 3. 网络结构：三层架构\n\n知识库描述的网络包含三个部分（来源：public，第 4 章）：\n\n- **输入层**：接收**固定长度**的训练数据（针对 Speck32/64 的 Gohr 神经区分器，输入长度是 **64 比特**，即一对 32 比特密文）。\n- **迭代层**：使用 **5 个残差块（Residual Block）**，每个残差块包含 **两个卷积层**，之后是 **批量归一化层（Batch Normalization）** 和 **激活函数层**。\n- **预测层**：数据送入由**一个隐藏层 + 一个输出单元**组成的**密集连接层（Dense Layer）**，输出二分类概率。\n\n> 注：知识库检索结果中附有\"图 4-1 神经区分器网络结构\"（也见于申焱天等《中国科学：信息科学》2025 年综述中的图 4），该图对上述三层结构进行了可视化。\n\n## 4. 输入差分约束与数据格式\n\n- 知识库其他条目提到，后续工作中使用的 Gohr 式区分器建立在特定差分约束（如 Δ = (0x40; 0x0)）之上，用于 Speck32/64。\n- 在 NDAFL（神经区分器辅助的特征检测）框架中，研究者采用\"比特敏感性测试\"过滤输入中的冗余比特，以缩小输入空间，这同样基于对 Gohr 神经区分器的分析。\n\n## 5. 局限性（来自知识库相关工作的讨论）\n\n- **访问开销高**：Gohr 原始神经区分器是\"计算式\"访问（由神经网络计算得到输出），且输入空间巨大（64 比特 → 2⁶⁴ 表项），无法直接打表存储（来源：public，NDAFL 框架与查找表替代部分）。\n- 后续工作（如用查找表代替神经区分器）正是为了规避这一开销。\n\n---\n\n**总结**：Gohr 方法的核心是**用深度残差网络将密码算法的差分区分问题建模为二分类学习问题**，以数据驱动方式学习密文对中的统计偏差，可泛化到多种密码算法，并为后续密钥恢复攻击提供基础。以上均来自知识库（public）检索结果；如需 Gohr 原文（*\"Cryptanalysis of the Speck Family of Block Ciphers based on Deep Learning\"*, CRYPTO 2019）的更多技术细节（如 CNN 结构、训练超参数、密钥恢复攻击流程），建议进一步查阅原始文献。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Li-LBlock.pdf",
+            "page": 33,
+            "score": 0.016393,
+            "distance": 0.6500321626663208,
+            "bm25_score": null,
+            "text": "k 区分器的训练结果与分析 \nGohr 在文献[19]中将神经网络区分器的构建问题转化为二分类问题，并 为\nSPECK32/64 构建了有效的神经网络区分器。用 Gohr 的方法可以为其他密码算法\n构建一个通用的网络结构。目前有多种神经网络"
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "2025Shen-MiF.pdf",
+            "page": 7,
+            "score": 0.016393,
+            "distance": null,
+            "bm25_score": 29.26664,
+            "text": "申焱天等\n中国科学 : 信息科学 2025 年 第 55 卷 第 6 期 1453\n图 4 神经区分器网络结构.\nFigure\n4 Network architecture of neural distinguishers.\n3 神经区分器"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2025Yuan-Rethink.pdf",
+            "page": 3,
+            "score": 0.016129,
+            "distance": 0.7232255339622498,
+            "bm25_score": null,
+            "text": "CK neural network distinguisher proposed by Gohr over classical distinguish-\n3"
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "2023KeyRecovery.pdf",
+            "page": 7,
+            "score": 0.016129,
+            "distance": null,
+            "bm25_score": 28.066846,
+            "text": "174 Journal of Cryptologic Research 密码学报 Vol.10, No.1, Feb. 2023\n表 2 100 次实验中访问神经区分器的平均次数\nT able 2 Average number of tim"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Chen-DL.pdf",
+            "page": 67,
+            "score": 0.015873,
+            "distance": 0.7841631174087524,
+            "bm25_score": null,
+            "text": "轮神经区分器，基于以下 5 个明文差分训练得到：\n∆1 = ∆[64], ∆2 = ∆[76], ∆3 = ∆[90], ∆4 = ∆[105], ∆5 = ∆[117]. （4.5）\n针对 Speck96 的神经区分器组合包含 4 个 7"
+          }
+        ],
+        "elapsed": 40.4
+      },
+      {
+        "question": "请检索知识库回答：SPECK 算法的差分攻击有哪些研究？",
+        "answer": "根据知识库（public / 密码学-神经区分器）的检索结果，针对 SPECK（Speck）算法的差分攻击研究可归纳为以下几类：\n\n## 1. 经典差分密码分析\n\n- **差分密码分析被公认为攻击 Speck 最有前景的方法**。Appl. Sci. 2023 综述明确指出：\"among this cryptanalytic research, **differential cryptanalysis is the most promising attack**\"（来源：public，Appl. Sci. 2023, 13, 6994）。\n- **Abed et al. [8]** 首次对几乎所有 Speck 变体引入了差分攻击：\"Abed et al. introduced the first differential attack for almost all Speck variants\"（来源：public，同上）。\n- 背景：差分密码分析由 Biham 和 Shamir 于 1990 年提出（用于破解 DES），后被推广应用于 Speck 等分组密码（来源：public，Appl. Sci. 2023；河北大学硕士论文 §2.2）。\n\n## 2. 深度学习 / 神经差分区分器攻击\n\n- **Gohr (2019) [16]**：通过构建**带有残差块的卷积神经网络搜索差分区分器**，针对 Speck 算法构建了 **5~8 轮差分区分器**，并进一步用于密钥恢复攻击（来源：public，《通信技术》2023 综述背景部分）。\n- **Hou 等 [20]**：通过模拟 Gohr 文献 [16] 的深度学习差分攻击方式开展后续研究（来源：public，同上）。\n- **对 Speck32/64 的神经辅助攻击**：知识库相关论文在第 3 章展示了\"神经辅助统计区分器、神经辅助统计攻击模型及验证实验\"，并给出\"对 Speck32/64 的辅助攻击\"实验（来源：public，论文结构安排）。\n- **神经区分器相关研究主题**（用户研究背景）：包括区分器精度改进、注意力机制、密钥恢复攻击、迁移学习等，均围绕 Speck32/64 神经区分器展开（来源：public 与用户记忆）。\n\n## 3. 对 Speck 大状态成员的差分-神经攻击\n\n- 知识库第 4 章专门研究**大状态密码的深度学习辅助密钥恢复框架**，内容包括\"对 Speck 大状态成员的差分-神经攻击\"和\"对 Speck 大状态成员的神经辅助统计攻击\"（来源：public，论文结构安排）。\n\n## 4. 改进的 Speck128 差分-神经攻击（17 轮理论 / 14 轮实际）\n\n- **Chen 等 [4]** 给出了对 **Speck128 的 17 轮理论攻击以及 12 轮实际攻击**（来源：public，§5.3）。\n- 后续工作在此基础上改进：在不同密文比特段建立 **5 个 9 轮查找表区分器（LT1~LT5）**，通过 **NDAFL** 将神经区分器转化为查找表，改进 17 轮 Speck128 的 **5 阶段密钥恢复攻击**的计算复杂度，并给出 **14 轮实际攻击**结果（来源：public，§5.3）。\n- 攻击结构：每个区分器前接一条 **6 轮差分路线**，形成 **1 + 6 + 9 + 1 = 17 轮**密钥恢复攻击；明文差分约束为一比特差分 ∆[64]、∆[76]、∆[90]、∆[105]、∆[113]；前置差分路线具有旋转对称性，由基本差分路线 (0x4041041440401000; 0x024040240640d010) 6 轮 → (0x1; 0x0) 循环左移得到，**差分概率为 2⁻⁴⁵ 或 2⁻⁴⁶**；每个阶段使用 **10 个中性度最高的中性比特**（中性度 > 0.7）（来源：public，§5.3）。\n\n## 5. 差分-线性攻击\n\n- 知识库第 5 章还展示了 **差分-线性攻击** 研究成果，包括\"对 Speck32 和 Speck48 的差分-线性攻击\"（来源：public，论文结构安排）。\n- 其中为 **Speck32、Speck48** 找到的区分器复杂度低于以前最好的区分器（来源：public，绪论部分）。\n\n---\n\n**小结**：知识库中 Speck 的差分攻击研究呈现\"**经典差分 → Gohr 神经差分区分器 → 神经辅助统计攻击 → 大状态差分-神经攻击（Speck128）→ 差分-线性攻击**\"的发展脉络，其中 Gohr（2019）基于残差卷积神经网络构建 5~8 轮差分区分器的方法是该领域的核心出发点，后续研究（包括 NDAFL 查找表化、多阶段密钥恢复、中性比特技术）在此基础上不断扩展攻击轮数与效率。\n\n> 以上内容均来源于知识库（public / 密码学-神经区分器）检索结果。如需各方法的详细参数（网络结构、训练设置等），建议进一步查阅对应原文。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Yue.pdf",
+            "page": 20,
+            "score": 0.016393,
+            "distance": 0.3661866784095764,
+            "bm25_score": null,
+            "text": "河北大学硕士学位论文\n12\n然 Speck 算法不同版本的 m 取值不同，但计算序列 iL 和子密钥 ik 的公式都表示为：\n  \n \n2\n1 1\ni m i i\ni i i m\nL L k i\nk k L\n\n\n \n "
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "2023Yu-SM4.pdf",
+            "page": 1,
+            "score": 0.016393,
+            "distance": null,
+            "bm25_score": 24.252663,
+            "text": "分 析[8-9]、积 分 分\n析[10-11]、代数攻击[12]、矩形攻击[13]等。2016年,吕述\n望等[14]对SM4的原理和安全性分析进行了算法综\n述;此后,针对SM4算法的侧信道攻击及掩码防护方\n法也相继被提出[15]。\n另一方面"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Yue.pdf",
+            "page": 1,
+            "score": 0.016129,
+            "distance": 0.3804907202720642,
+            "bm25_score": null,
+            "text": "tforms compared with other existing ciphers. However, the designers of Speck neither\nprovided the design rationale nor g"
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "2024Chen-DL.pdf",
+            "page": 21,
+            "score": 0.016129,
+            "distance": null,
+            "bm25_score": 23.63736,
+            "text": "第 1 章 绪论\n17 轮的差分­线性区分器。 和以前最好的区分器相比， 本文为Speck32、Speck48 找\n到的区分器复杂度更低， 而为LEA 找到的区分器则比之前的区分器多 1 轮。 此外，\n本文针对 LEA­128、LEA­19"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2025Shen-MiF.pdf",
+            "page": 18,
+            "score": 0.015873,
+            "distance": 0.43376630544662476,
+            "bm25_score": null,
+            "text": ":03 × 248 = 2 91:03.\n5.3 改进 Speck128 的差分 { 神经攻击\nChen 等 [4] 给出了对 Speck128 的 17 轮理论攻击以及 12 轮实际攻击. 我们使用与其相同的攻击\n框架, 在不同的密文比特"
+          }
+        ],
+        "elapsed": 24.3
+      },
+      {
+        "question": "请检索知识库回答：残差网络在密码分析中如何应用？",
+        "answer": "根据知识库（public / 密码学-神经区分器）的检索结果，残差网络（Residual Network，ResNet）在密码分析中的应用主要体现在以下几个方面：\n\n## 1. 作为神经差分区分器的骨干网络结构\n\n残差网络最核心的应用是作为**神经网络差分区分器**的主干网络。其基本结构如下（图 2-10 残差学习中的残差块）：\n\n- **残差块结构**：输入 x 依次经过 weight layer → BN（批量归一化）→ ReLU → weight layer → BN → ReLU，得到 F(x)，再与原始输入 x 相加（x + F(x)），形成\"跳过连接\"（skip connection）。\n- **设计意义**：这种残差跳跃式结构使某一层的输出可以直接跨过几层作为后面某一层的输入，其意义在于**叠加多层网络而不降低模型的准确率**。因此，通过堆叠多个残差块可以实现复杂的深层神经网络（来源：public，第二章 图 2-10 及说明）。\n\n## 2. 在神经区分器构建中的典型应用\n\n### （1）Gohr 方法（Speck32/64）\nGohr 使用**带有残差块的卷积神经网络**搜索差分区分器，网络结构为三层架构：\n- 输入层接收固定长度数据（64 比特密文对）；\n- 迭代层使用 **5 个残差块**，每个残差块包含 **两个卷积层**，之后接 **批量归一化层** 和 **激活函数层**；\n- 预测层为密集连接层（Dense Layer）输出二分类概率。\n\n该网络成功为 Speck32/64 构建了 5~8 轮差分区分器，并支持后续密钥恢复攻击（来源：public，第 4 章；《通信技术》2023 综述）。\n\n### （2）轻量级分组密码的改进（杨小雪、陈杰等）\n- 利用**深度残差网络**和传统差分密码分析技术，构造并改进了 PRESENT、KLEIN、LBlock、SIMECK32/64 等轻量级分组密码的神经网络差分区分器；\n- 基于 SPN 结构特点对 PRESENT 和 KLEIN 的区分器进行改进，**最多可提高约 5.12% 的准确率**；\n- 并验证了这种改进方式不适用于 Feistel 结构的算法（来源：public，《通信技术》2023）。\n\n### （3）SM4 算法的卷积残差网络分析（余玥琳等）\n- 采用**卷积残差网络**构建模型，搜索 SM4 算法差分区分器；\n- 基于选择的明文差值和数据集进行训练，通过数据处理、参数与函数优化，构造了 **3~8 轮差分区分器**；\n- 测试表明：模型可对 SM4 低轮数加密的密文对与随机数据进行区分，但随轮数增加无法有效区分，从而验证 SM4 具有良好的安全性（来源：public，桂林电子科技大学学报 2023）。\n\n## 3. 残差网络与其他技术的结合改进\n\n知识库还记载了残差网络在密码分析中的多种改进方向：\n\n- **Inception + 残差**：在神经网络残差结构之前引入 Inception 结构，**扩大网络的感受野**；\n- **残差 + 门控线性单元（GLU）**：KIM 等人在神经网络结构中加入残差连接和门控线性单元；\n- **SE-ResNeXt 变体**：BAO 等人在 2022 年亚密会上采用 SE-ResNeXt 变体构造神经区分器，应用于 SIMON32/64；\n- **注意力机制 + 残差**：DENG 等人在**残差网络的输出层引入注意力机制**（多头注意力）分析 SPECK 算法；BAO 等人将 SE block 应用于 ResNeXt，两者均旨在为神经网络提取更多特征，进一步提高神经区分器性能（来源：public，绪论部分）。\n\n## 4. 高阶差分神经区分器（HDND）\n\n- 通过引入**二阶差分信息**增强特征表示能力，建立 HDND（Higher-order Differential Neural Distinguisher）；\n- 在 Speck32/64（5–7 轮）区分精度提升 4%–10%，在 HIGHT（9–10 轮）提升约 20%（来源：public，HDND 相关条目）。\n\n---\n\n**总结**：残差网络在密码分析中主要作为**神经差分区分器的深层骨干网络**，通过残差块的跳过连接解决深层网络训练退化问题，从而在 Speck、PRESENT、KLEIN、LBlock、SIMECK、SM4、SIMON、HIGHT 等多种分组密码上构建/改进差分区分器；同时与注意力机制、SE 模块、门控线性单元、Inception 等结构结合，持续提升区分精度与攻击轮数。\n\n> 以上均基于知识库（public / 密码学-神经区分器）检索结果。如需某个具体工作（如 Gohr 原文或 SM4 卷积残差网络细节）的更深入参数，建议查阅对应原文。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2024Yang-XDU.pdf",
+            "page": 1,
+            "score": 0.016393,
+            "distance": 0.5540407299995422,
+            "bm25_score": null,
+            "text": "\n　\nＴ ｅ ｌ ｅ ｃ ｏ ｍ ｍ ｕ ｎ ｉ ｃ ａ ｔ ｉ ｏ ｎ ｓ\n　\nＥ ｎｇｉ ｎ ｅ ｅ ｒ ｉ ｎｇ\n，\nＸ ｉ ｄ ｉ ａ ｎ\n　\nＵ ｎ ｉ ｖ ｅ ｒ ｓ ｉ ｔｙ\n，\nＸ ｉ'ａ ｎ\n　\n７ １ ０ ０ ７ １\n，"
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "2024Yang-XDU.pdf",
+            "page": 1,
+            "score": 0.016393,
+            "distance": null,
+            "bm25_score": 32.027458,
+            "text": "收稿日期\n：\n２ ０ ２ ２\n－\n１ ２\n－\n０ ６\n　　　　\n网络出版时间\n：\n２ ０ ２ ３\n－\n０ ８\n－\n２ ２\n基金项目\n：\n陕西省自然科学基础研究计划\n（\n２ ０ ２ １ Ｊ Ｍ\n－\n１ ２ ６\n） ；\n河南省网络密码技术重点实"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2023Wang-LW.pdf",
+            "page": 37,
+            "score": 0.016129,
+            "distance": 0.5632743835449219,
+            "bm25_score": null,
+            "text": "基于深度学习的轻量级分组密码安全性分析研究 \n 26 \n的线性叠加。图 2-10 显示了网络模型中残差块结构及跳过连接过程。这种残差跳跃\n式的结构使某一层的输出可以直接跨过几层作为后面某一层的输入，其意义在于叠\n加多层网络而不降低模型的准确"
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "2023Yu-SM4.pdf",
+            "page": 1,
+            "score": 0.016129,
+            "distance": null,
+            "bm25_score": 29.808026,
+            "text": "第43卷 第1期 桂\n \n林\n \n电\n \n子\n \n科\n \n技\n \n大\n \n学\n \n学\n \n报 Vol.43,No.1\n 2023年2月 Journal\n \nof\n \nGuilin\n \nUniversity\n \nof\n \nElectronic"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "2025Li-XDU.pdf",
+            "page": 4,
+            "score": 0.015873,
+            "distance": 0.5826711654663086,
+            "bm25_score": null,
+            "text": "经 网 络 残 差 结 构 之 前 引 入Inception\n结 构 ,扩 大 了 网 络 的 感 受 野 ;KIM 等 人 [21]在 神 经 网 络 结 构 中 加 入 残 差 连 接 和 门 控 线 性 单 元 ;在 改 进 输 入\n"
+          }
+        ],
+        "elapsed": 23.6
+      },
+      {
+        "question": "请检索知识库回答：CPDI-ND 是什么？",
+        "answer": "根据知识库（public / 密码学-神经区分器）的检索结果：\n\n## CPDI-ND 是什么\n\n**CPDI-ND（Cross-Pair Differential Interaction Neural Distinguisher，基于自注意力跨对差分交互的神经区分器）** 是一种面向 **Speck32/64** 分组密码的多密文对神经差分区分器，其全称对应英文摘要中的表述：\n\n> \"CPDI-ND, a **cross-pair differential interaction neural distinguisher based on self-attention**\"（来源：public，摘要）\n\n## 1. 提出动机\n\n知识库明确指出，CPDI-ND 针对**多密文对神经区分器中密文对信息孤立、缺乏全局交互的核心缺陷**而提出：\n\n- 以往方案采用\"**单对独立编码 + 全局简单聚合**\"的处理范式，各密文对特征之间缺乏交互；\n- CPDI-ND 突破了这一范式，将单样本内的**多个密文对特征视为序列输入**，通过**多层多头自注意力机制**实现密文对之间的**双向信息交互**，自动挖掘并强化多密文对**共享的差分一致性信号**；\n- 同时引入**样本级对比损失**作为辅助优化目标，从特征空间结构层面约束**类内紧凑性与类间可分性**，与跨对交互机制形成正向反馈，同步提升区分准确率与分类平衡性（来源：public，总结部分）。\n\n## 2. 模型结构与技术要点\n\n- **跨对自注意力**：模型通过多头自注意力实现密文对之间的全局交互建模（global interactive modeling among ciphertext pairs via multi-head self-attention）；\n- **对比损失**：以样本级对比损失（sample-level contrastive loss）增强特征可分性（feature separability）；\n- **k 值泛化设计**：跨对自注意力结构**天然支持可变长度的序列输入**，具备跨 k 值（单样本密文对数量）泛化的潜力，可有效缓解\"精度提升 vs 计算开销\"的矛盾（来源：public，§5.2 与英文摘要）。\n\n## 3. 主要实验结果\n\n### （1）区分准确率（表4）\n- CPDI-ND 在 **7–9 轮 Speck32/64** 上达到 **state-of-the-art 准确率**；\n- **7–9 轮的区分准确率均随训练时单样本密文对数量 k 的增加而增加**——k 增大时，密文对之间一致性的统计证据更充分，区分器性能随之增强；\n- k=64 时 7 轮和 8 轮的训练过程曲线显示：训练集损失与验证集损失全程几乎完全贴合，差值极小、无分离，**未发生过拟合**，也无异常震荡或崩溃（来源：public，表4、图4、图5）。\n\n### （2）跨 k 泛化能力（表5，基于 8 轮 Speck32/64）\n- **显著向上泛化能力**：当训练 k≥16 时，即使测试密文对数量大于训练 k，区分器仍保持有效性能，且准确率随测试 k 增大持续提升。例如：k=32 训练的模型在 k=64 测试条件下与 k=64 训练的模型仅差 0.43%；测试 k 增至 128 时差距缩小至 **0.18%**，性能基本持平；\n- **良好向下兼容特性**：测试 k 小于训练 k 时，模型准确率与对应 k 单独训练的基线相当，部分场景甚至略有提升；\n- 结论：**仅需中等规模 k 值训练，即可适配不同 k 值的推理场景**，显著降低多场景部署训练成本（来源：public，§5.2）。\n\n## 4. 密钥恢复攻击验证\n\n利用 **k=32 训练的 8 轮 CPDI-ND** 对 **10 轮 Speck32/64** 进行最后一轮子密钥恢复攻击：\n\n- 利用 Speck 轮函数\"非线性模加先于子密钥异或\"的结构特性，通过**无密钥逆运算**（等价于假设子密钥为 0 的单轮解密）将 8 轮区分器扩展覆盖至 10 轮攻击能力；\n- 当单个多密文对样本包含 **32 对密文**、选取 **32 组样本**时，**100 次攻击中成功率可达 92%，正确密钥排名中位数为 1**（超过一半概率直接命中正确密钥）；\n- 数据复杂度：所需选择明文总量为 32×32×2 = 2¹¹ 个；计算复杂度约合数次完整 10 轮 Speck32/64 加密（主要开销集中在神经区分器推理，本实验设备上单次攻击约 33 秒）（来源：public，密钥恢复攻击章节）。\n\n## 5. 可解释性：注意力可视化\n\n注意力权重可视化从三个角度验证了跨对自注意力交互的有效性：\n1. 模型在密文对之间建立了**结构化交互**——浅层执行选择性聚合，深层实现全局融合；\n2. 跨对交互的信息总量与自身信息相当，构成特征更新的**核心组成部分**而非次要因素；\n3. **多头机制**提供差异化的关注模式，增强交互特征的表达能力；\n该结论与消融实验相互印证，表明**自注意力模块是 CPDI-ND 实现高性能区分及 k 值泛化的核心支撑**（来源：public，注意力可视化部分）。\n\n## 6. 核心结论（总结）\n\n1. **跨对自注意力是多密文对区分性能提升的核心驱动力**——相较去除注意力的模型，CPDI-ND 在所有 k 值下均取得准确率提升，且增益随 k 增大持续扩大；从根本上缓解了多密文对区分器的 k 值依赖问题；\n2. **对比损失与自注意力具有天然协同效应**——规整特征空间分布、放大一致性特征的判别价值，同时改善正负样本分类失衡；\n3. **跨对交互机制具备清晰可解释性与实用价值**（来源：public，总结部分）。\n\n相关代码公开于：**https://github.com/culture-flask/CPDI-ND**；该研究获国家自然科学基金（62302285）与陕西省自然科学基础研究计划（20240124）资助（来源：public，英文摘要）。\n\n---\n\n**一句话概括**：CPDI-ND 是基于**多层多头自注意力实现密文对跨对差分交互**、并以**对比损失**辅助优化的多密文对神经差分区分器，在 Speck32/64 7–9 轮上达到 SOTA 精度，具备跨 k 泛化能力，并支撑了 10 轮密钥恢复攻击（92% 成功率）。以上均来自知识库（public / 密码学-神经区分器）检索结果。",
+        "retrievals": [
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": 0.032266,
+            "distance": 1.0619690418243408,
+            "bm25_score": 13.977233,
+            "text": "是将第一阶段微调后的模型迁移至9轮主任务，通过超大规模数据让模型捕捉9轮加密中微弱的非随机特征，完成对源任务的适配。\n表4  不同密文对数量k下训练得到的CPDI-ND准确率\n最终获得的CPDI-ND在对应各k取值的105样本测试集上的准确"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": 0.031258,
+            "distance": 1.092272400856018,
+            "bm25_score": 11.174966,
+            "text": "果也直观验证了自注意力机制确实在密文对之间建立了有效交互。\n4)密钥恢复攻击验证了CPDI-ND的实际攻击效果，对10轮Speck32/64进行最后一轮子密钥恢复攻击， 当单个多密文对样本包含32对密文且选取32组样本时， 100次攻击中的"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": 0.031054,
+            "distance": 1.039770483970642,
+            "bm25_score": 9.47324,
+            "text": "一致，多头机制使模型在不同特征子空间下并行建模跨对交互，同时兼顾局部强信号与全局弱一致性，多视角互补地提取差分交互特征，提升了整体特征表达的丰富度。\n\n图8   Layer 0各注意力头的独立热力图(正样本)\n综上所述，注意力权重可视化从以"
+          },
+          {
+            "type": "chunk",
+            "method": "vector",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": 0.016393,
+            "distance": 1.0215624570846558,
+            "bm25_score": null,
+            "text": "为：正确密钥的得分排序在10以内。当单个多密文对样本包含32对密文、选取32组样本时，执行100次密钥恢复攻击，成功率达到92%，正确密钥排名中位数为1，这意味着通过CPDI-ND评分后，有超过一半的概率能够直接命中正确密钥。数据复杂度方面"
+          },
+          {
+            "type": "chunk",
+            "method": "bm25",
+            "source": "CPDI-ND.docx",
+            "page": null,
+            "score": 0.016129,
+            "distance": null,
+            "bm25_score": 12.261351,
+            "text": "n inference k mismatches training k.\nTo tackle the above problem, this paper proposes CPDI-ND, a cross-pair differential"
+          }
+        ],
+        "elapsed": 48.5
+      }
+    ]
+  }
+}

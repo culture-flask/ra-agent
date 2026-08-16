@@ -1,0 +1,1523 @@
+{
+  "summary": {
+    "vector": {
+      "P@5": 0.171,
+      "R@5": 0.446,
+      "P@10": 0.1,
+      "R@10": 0.542,
+      "MRR": 0.529
+    },
+    "hybrid": {
+      "P@5": 0.157,
+      "R@5": 0.464,
+      "P@10": 0.086,
+      "R@10": 0.5,
+      "MRR": 0.667
+    }
+  },
+  "cases": [
+    {
+      "query": "HDND 是什么",
+      "gold": [
+        "HDND.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2023Yu-Id.pdf",
+          "2024Chen-SPECK.pdf",
+          "HDND.pdf",
+          "2025Li-XDU.pdf",
+          "2024Chen-SPECK.pdf",
+          "2023Tcydenova.pdf",
+          "2023Shan.pdf",
+          "2024Chen-SPECK.pdf",
+          "2019Gohr.pdf",
+          "2024Yang-XDU.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.9633,
+          0.9668,
+          0.9795,
+          0.9923,
+          1.0106,
+          1.0107,
+          1.0142,
+          1.0232,
+          1.0254,
+          1.0259
+        ],
+        "snippets": [
+          "y of different",
+          "m",
+          "on Accuracy\nTrain Acc\nVal Acc\nFigure 3.Training Process of HDND on 5-Round Speck",
+          "区分器输入差分的 汉 明 权 重 与 对 应 的 最 大 轮 数 之 间 的 关 系,也 改 进 了 差 分 密 码 分 析 的 数 据 复 杂 度 下 界。\n",
+          "f the"
+        ],
+        "P@5": 0.2,
+        "R@5": 1.0,
+        "P@10": 0.1,
+        "R@10": 1.0,
+        "MRR": 0.333
+      },
+      "hybrid": {
+        "top10_docs": [
+          "HDND.pdf",
+          "2023Yu-Id.pdf",
+          "HDND.pdf",
+          "2024Chen-SPECK.pdf",
+          "HDND.pdf",
+          "2025Li-XDU.pdf",
+          "HDND.pdf",
+          "2023Tcydenova.pdf",
+          "HDND.pdf",
+          "2024Chen-SPECK.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector"
+        ],
+        "scores": [
+          0.0317,
+          0.0164,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0154,
+          0.0152
+        ],
+        "snippets": [
+          "on Accuracy\nTrain Acc\nVal Acc\nFigure 3.Training Process of HDND on 5-Round Speck",
+          "y of different",
+          "guishers focuses\non classic differential cryptanalysis, with insufficient\nexplor",
+          "m",
+          "n of feature representation, thereby es-\ntablishing a HDND. Experimental results"
+        ],
+        "P@5": 0.2,
+        "R@5": 1.0,
+        "P@10": 0.1,
+        "R@10": 1.0,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "CPDI-ND 是什么",
+      "gold": [
+        "CPDI-ND.docx"
+      ],
+      "vector": {
+        "top10_docs": [
+          "CPDI-ND.docx",
+          "2023Yu-Id.pdf",
+          "CPDI-ND.docx",
+          "CPDI-ND.docx",
+          "2023Shan.pdf",
+          "CPDI-ND.docx",
+          "CPDI-ND.docx",
+          "CPDI-ND.docx",
+          "2024Yang-XDU.pdf",
+          "2024Chen-SPECK.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.9139,
+          0.9224,
+          0.9277,
+          0.9442,
+          0.9468,
+          0.9621,
+          0.9621,
+          0.9646,
+          0.9715,
+          0.9722
+        ],
+        "snippets": [
+          "为：正确密钥的得分排序在10以内。当单个多密文对样本包含32对密文、选取32组样本时，执行100次密钥恢复攻击，成功率达到92%，正确密钥排名中位数为1，这意味",
+          "y of different",
+          "是将第一阶段微调后的模型迁移至9轮主任务，通过超大规模数据让模型捕捉9轮加密中微弱的非随机特征，完成对源任务的适配。\n表4  不同密文对数量k下训练得到的CPD",
+          "果也直观验证了自注意力机制确实在密文对之间建立了有效交互。\n4)密钥恢复攻击验证了CPDI-ND的实际攻击效果，对10轮Speck32/64进行最后一轮子密钥恢",
+          "电子信息硕士专业学位论文 \n46 \n不需要更高的数据复杂度，这是传统差分分析所不具备的优势。但 8 轮\n1ND 的\n准确率仅为 57.64%，保持数据复杂度为"
+        ],
+        "P@5": 0.2,
+        "R@5": 1.0,
+        "P@10": 0.1,
+        "R@10": 1.0,
+        "MRR": 1.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "CPDI-ND.docx",
+          "CPDI-ND.docx",
+          "CPDI-ND.docx",
+          "CPDI-ND.docx",
+          "CPDI-ND.docx",
+          "2023Yu-Id.pdf",
+          "CPDI-ND.docx",
+          "2023Shan.pdf",
+          "CPDI-ND.docx",
+          "CPDI-ND.docx"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "bm25",
+          "vector",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0323,
+          0.031,
+          0.0309,
+          0.0303,
+          0.0303,
+          0.0161,
+          0.0161,
+          0.0156,
+          0.0154,
+          0.0152
+        ],
+        "snippets": [
+          "是将第一阶段微调后的模型迁移至9轮主任务，通过超大规模数据让模型捕捉9轮加密中微弱的非随机特征，完成对源任务的适配。\n表4  不同密文对数量k下训练得到的CPD",
+          "sNets结构中，在单个密文对的卷积特征图内部引入通道注意力，对每个比特位置计算一组权重并对通道加权，作用域为单个密文对的内部特征，让模型学习这个密文对的哪些通",
+          "为：正确密钥的得分排序在10以内。当单个多密文对样本包含32对密文、选取32组样本时，执行100次密钥恢复攻击，成功率达到92%，正确密钥排名中位数为1，这意味",
+          "损失作用于最终的分类输出，直接优化决策边界；对比损失作用于Self-Attention模块输出的中间特征，间接提升特征表示的质量。\n4.6  实验设置\n本文模型",
+          "一致，多头机制使模型在不同特征子空间下并行建模跨对交互，同时兼顾局部强信号与全局弱一致性，多视角互补地提取差分交互特征，提升了整体特征表达的丰富度。\n\n图8  "
+        ],
+        "P@5": 0.2,
+        "R@5": 1.0,
+        "P@10": 0.1,
+        "R@10": 1.0,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "DBitNet 是什么",
+      "gold": [
+        "2024Bellini-SALSA.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2024Chen-SPECK.pdf",
+          "2024Chen-DL.pdf",
+          "2023Chen-LargeState.pdf",
+          "2025Li-XDU.pdf",
+          "2024Chen-SPECK.pdf",
+          "2024Chen-DL.pdf",
+          "2024Chen-DL.pdf",
+          "2021Polytope.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.8076,
+          0.8478,
+          0.9019,
+          0.9207,
+          0.9236,
+          0.9317,
+          0.9332,
+          0.9358,
+          0.9406,
+          0.941
+        ],
+        "snippets": [
+          "在构建基于神经网络的区分器时,一个核心要素是确保神经网络接受 到 充 足 且 多 样 化 的 训 练 样 本。这\n些样本被精心划分为两大类别,每类各占总样本量的",
+          "C'=F\nr(P')。 如 果 C􀱇C'=Δout,\n则称(P,P')是符合差分路径Δin→Δout的。设e0,e1,…,en-1为 F\nn\n2 的标准基,i为",
+          "m",
+          "第 2 章 预备知识\n为了方便使用该技术， 本文采用以下约定： （1） 不对以上三个概念做具体的区\n分， 即将NB、PNB、SNBS 统称为中性比特； （2） ",
+          "ge of the diﬀerential weights of the trails that can be obtained by rotating\nthe"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.0,
+        "R@10": 0.0,
+        "MRR": 0.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2025Sun.pdf",
+          "2023Bellini.pdf",
+          "2025Sun.pdf",
+          "2024Bellini-SALSA.pdf",
+          "2024Chen-SPECK.pdf",
+          "2024Bellini-SALSA.pdf",
+          "2024Chen-DL.pdf",
+          "2023Bellini.pdf",
+          "2023Chen-LargeState.pdf",
+          "2026Ren.pdf"
+        ],
+        "methods": [
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0164,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0154
+        ],
+        "snippets": [
+          "在构建基于神经网络的区分器时,一个核心要素是确保神经网络接受 到 充 足 且 多 样 化 的 训 练 样 本。这\n些样本被精心划分为两大类别,每类各占总样本量的",
+          "000 10 0.7511 DBitNet 10 0.7511 DBitNet\nHIGHTRK 0x800000000...(a) 13 0.9648 DBit",
+          "C'=F\nr(P')。 如 果 C􀱇C'=Δout,\n则称(P,P')是符合差分路径Δin→Δout的。设e0,e1,…,en-1为 F\nn\n2 的标准基,i为",
+          ":Summary of the best distinguishers for each target cipher for oursimple trainin",
+          "m"
+        ],
+        "P@5": 0.2,
+        "R@5": 1.0,
+        "P@10": 0.1,
+        "R@10": 1.0,
+        "MRR": 0.333
+      }
+    },
+    {
+      "query": "Improving Attacks on Round-Reduced Speck32/64 Using Deep Learning",
+      "gold": [
+        "2019Gohr.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2022Bao-AS.pdf",
+          "2024Yang-XDU.pdf",
+          "2025Bellini-SoK.pdf",
+          "2026Gauthier.pdf",
+          "2026Xu-SKNet.pdf",
+          "2025Shen-MiF.pdf",
+          "2026Mirzaali.pdf",
+          "2025Sun.pdf",
+          "2019Gohr.pdf",
+          "2024Shen.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.2964,
+          0.3181,
+          0.3244,
+          0.3375,
+          0.341,
+          0.3426,
+          0.3493,
+          0.3633,
+          0.3687,
+          0.3779
+        ],
+        "snippets": [
+          "A. Joux\nand A. M. Youssef, editors, SAC 2014 , volume 8781 of LNCS, pages 147–16",
+          "，\n４ ８\n（\n１\n）：\n１ ４\n－\n２ １ ．\n［\n１ ９\n］\nＧ Ｏ Ｈ Ｒ\n　\nＡ． Ｉ ｍｐｒ ｏ ｖ ｉ ｎｇ\n　\nＡ ｔ ｔ ａ ｃ ｋ ｓ\n　\nｏ",
+          "Aron Gohr. Improving attacks on round-reduced speck32/64 using deep\nlearning. In",
+          "Neural Computing and Applications (2026) 38:305\nhttps://doi.org/10.1007/s00521-0",
+          " 0.5507 +0.0014\n \nReferences \n A. Gohr, “Improving attacks on round-reduced Spec"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.1,
+        "R@10": 1.0,
+        "MRR": 0.111
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2022Bao-AS.pdf",
+          "2025Bellini-SoK.pdf",
+          "2024Shen.pdf",
+          "2024Yang-XDU.pdf",
+          "2023Bao-MI.pdf",
+          "2025Bellini-SoK.pdf",
+          "2026Gauthier.pdf",
+          "2023Chen-LW.pdf",
+          "2025Shen-MiF.pdf",
+          "2026Xu-SKNet.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "bm25",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.0328,
+          0.0313,
+          0.0294,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0152
+        ],
+        "snippets": [
+          "A. Joux\nand A. M. Youssef, editors, SAC 2014 , volume 8781 of LNCS, pages 147–16",
+          "Aron Gohr. Improving attacks on round-reduced speck32/64 using deep\nlearning. In",
+          "ernational conference, taipei, Taiwan, September 25-28,\n2017, proceedings. Sprin",
+          "，\n４ ８\n（\n１\n）：\n１ ４\n－\n２ １ ．\n［\n１ ９\n］\nＧ Ｏ Ｈ Ｒ\n　\nＡ． Ｉ ｍｐｒ ｏ ｖ ｉ ｎｇ\n　\nＡ ｔ ｔ ａ ｃ ｋ ｓ\n　\nｏ",
+          "ced speck. In: Selected\nAreas in Cryptography. Lecture Notes in Computer Science"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.0,
+        "R@10": 0.0,
+        "MRR": 0.0
+      }
+    },
+    {
+      "query": "Gimli 置换 神经区分器",
+      "gold": [
+        "2023Wang-LW.pdf",
+        "2024Chen-SPECK.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2025Li-XDU.pdf",
+          "2023Wang-LW.pdf",
+          "2023Wang-LW.pdf",
+          "2025Li-XDU.pdf",
+          "2023Wang-LW.pdf",
+          "2025Li-XDU.pdf",
+          "2021Polytope.pdf",
+          "2025Sun.pdf",
+          "2023Wang-LW.pdf",
+          "2025Sun.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.8211,
+          0.831,
+          0.8348,
+          0.8378,
+          0.8383,
+          0.8492,
+          0.8601,
+          0.8614,
+          0.8616,
+          0.864
+        ],
+        "snippets": [
+          " 0x0008/0000 0.554\n0x0948/0000 0.555 0x0000/0004 0.561 0x0000/0100 0.558\n0x0001/",
+          "基于深度学习的轻量级分组密码安全性分析研究 \n 66 \n \n(c) 4轮（输入结构 ′I ） \n图 5-4 ASCON置换区分器的准确率 \n模型的损失也叫模型的",
+          "基于深度学习的轻量级分组密码安全性分析研究 \n 64 \n试准确率。 \n本文提出的 ASCON置换神经区分器模型的输出描述为以下后验概率 Pr( 1| )YS= ",
+          "提高了 SIMON32/64神经网络差分区分器加密的最大轮数。\n4.7 实验结果对比\n文中构造的9轮 SIMON32/64神经网络差分 区 分 器 与 文 献 ",
+          "第五章 基于深度学习的 ASCON密码算法区分器研究 \n 69 \n文献[85]中，作者在选择 GIMLI 置换的区分器时，列举了若干种深度学习模型\n进行训练，本"
+        ],
+        "P@5": 0.2,
+        "R@5": 0.5,
+        "P@10": 0.1,
+        "R@10": 0.5,
+        "MRR": 0.5
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2023Wang-LW.pdf",
+          "2023Wang-LW.pdf",
+          "2023Wang-LW.pdf",
+          "2025Li-XDU.pdf",
+          "2023Wang-LW.pdf",
+          "2023Wang-LW.pdf",
+          "2025Li-XDU.pdf",
+          "2023Wang-LW.pdf",
+          "2025Li-XDU.pdf",
+          "2023Wang-LW.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "bm25",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0323,
+          0.0308,
+          0.0304,
+          0.0164,
+          0.0164,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0152,
+          0.0152
+        ],
+        "snippets": [
+          "基于深度学习的轻量级分组密码安全性分析研究 \n 66 \n \n(c) 4轮（输入结构 ′I ） \n图 5-4 ASCON置换区分器的准确率 \n模型的损失也叫模型的",
+          "第五章 基于深度学习的 ASCON密码算法区分器研究 \n 69 \n文献[85]中，作者在选择 GIMLI 置换的区分器时，列举了若干种深度学习模型\n进行训练，本",
+          "基于深度学习的轻量级分组密码安全性分析研究 \n 64 \n试准确率。 \n本文提出的 ASCON置换神经区分器模型的输出描述为以下后验概率 Pr( 1| )YS= ",
+          " 0x0008/0000 0.554\n0x0948/0000 0.555 0x0000/0004 0.561 0x0000/0100 0.558\n0x0001/",
+          "器，让区分器学习隐藏在密文之中的统计规律和结构特征。本文\n构建的基于深度学习的区分器，也 称为差分神经区分器、神经网络区分器或神经区\n分器。 \n§3.3.2 基"
+        ],
+        "P@5": 0.2,
+        "R@5": 0.5,
+        "P@10": 0.1,
+        "R@10": 0.5,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "SIMON 矩形攻击 rectangle attack",
+      "gold": [
+        "2022Lu.pdf",
+        "2024Yuan-Simeck.pdf",
+        "2025Sun.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2025Sun.pdf",
+          "2026Xu-SKNet.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2023Wang-LW.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2025Li-XDU.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.6401,
+          0.7121,
+          0.7528,
+          0.7596,
+          0.7706,
+          0.7884,
+          0.7951,
+          0.7966,
+          0.8015,
+          0.8021
+        ],
+        "snippets": [
+          "表2 SPECK 算法和 SIMON 算法的参数\n分组长度2n 密钥长度 mn 轮数(SPECK/SIMON) 分组长度2n 密钥长度 mn 轮数(SPECK/",
+          " and Simon 1249",
+          "全重合。这一现象充分表明,模型的训练过程极为稳\n定,优化效果良好,且具备了较强的泛化能力,既未出现过拟合现象,也未发生 欠 拟 合 的 情 况,表 现 出 高 ",
+          "转常数均为α=8和β=3。SPECK 系列密码算法加密轮函数\n如图1(a)所示,由循环移位操 作、异 或 操 作、模 加 操 作 构 成。SIMON 算 法 是",
+          "表8 SIMON32/64区分器的准确率汇总\n区分器\n密文对数量\n轮数 来源 2 4 8 16\nSIMON32/64 9 文献[18] 0.7300 0.811"
+        ],
+        "P@5": 0.2,
+        "R@5": 0.333,
+        "P@10": 0.1,
+        "R@10": 0.333,
+        "MRR": 1.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2026Xu-SKNet.pdf",
+          "CPDI-ND.docx",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0328,
+          0.0288,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0154
+        ],
+        "snippets": [
+          "表2 SPECK 算法和 SIMON 算法的参数\n分组长度2n 密钥长度 mn 轮数(SPECK/SIMON) 分组长度2n 密钥长度 mn 轮数(SPECK/",
+          "加密场景下区分器的准确率;其次,如何有效融合传统密码分析理论与深度学习 技 术,从 而 强 化 密 码 的 分 析\n能力。\n基于上述问题,文中进行了以下3项工作",
+          " and Simon 1249",
+          "cing construction. Journal of Information Security and Applications, 2023, 74: 1",
+          "全重合。这一现象充分表明,模型的训练过程极为稳\n定,优化效果良好,且具备了较强的泛化能力,既未出现过拟合现象,也未发生 欠 拟 合 的 情 况,表 现 出 高 "
+        ],
+        "P@5": 0.2,
+        "R@5": 0.333,
+        "P@10": 0.1,
+        "R@10": 0.333,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "SMS4 线性密码分析",
+      "gold": [
+        "2023Wang-SM4.pdf",
+        "2023Yu-SM4.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2023Yu-SM4.pdf",
+          "2022DiffAttacks.pdf",
+          "2022DiffAttacks.pdf",
+          "2022DiffAttacks.pdf",
+          "2023Yu-SM4.pdf",
+          "2023Wang-SM4.pdf",
+          "2023Yu-SM4.pdf",
+          "2023Wang-LW.pdf",
+          "2024Chen-DL.pdf",
+          "2023Yu-SM4.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.3745,
+          0.3847,
+          0.3896,
+          0.3918,
+          0.4753,
+          0.5013,
+          0.5036,
+          0.5233,
+          0.5242,
+          0.5242
+        ],
+        "snippets": [
+          "ecurity\n \nand\n \nPrivacy.Berlin:Springer,2008:\n216-229.\n[4] 张美玲,刘景美,王新梅.22轮 SMS4的",
+          "关于分组密码抵抗差分类攻击的研究",
+          "关于分组密码抵抗差分类攻击的研究",
+          "关于分组密码抵抗差分类攻击的研究",
+          ",2015,2(5):458-466.\n[10] LIU\n \nFen,JI\n \nWen,HU\n \nLei,et\n \nal.Analysis\n \nof\n \nthe"
+        ],
+        "P@5": 0.4,
+        "R@5": 1.0,
+        "P@10": 0.2,
+        "R@10": 1.0,
+        "MRR": 1.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2023Yu-SM4.pdf",
+          "2023Wang-LW.pdf",
+          "2022DiffAttacks.pdf",
+          "2024Chen-SPECK.pdf",
+          "2022DiffAttacks.pdf",
+          "2024Li-LBlock.pdf",
+          "2022DiffAttacks.pdf",
+          "2023Yu-SM4.pdf",
+          "2024Li-LBlock.pdf",
+          "2023Wang-SM4.pdf"
+        ],
+        "methods": [
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "vector",
+          "bm25",
+          "vector"
+        ],
+        "scores": [
+          0.032,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0154,
+          0.0154,
+          0.0152
+        ],
+        "snippets": [
+          "ecurity\n \nand\n \nPrivacy.Berlin:Springer,2008:\n216-229.\n[4] 张美玲,刘景美,王新梅.22轮 SMS4的",
+          "第一章 绪论 \n 5 \n模式，认证加密有：ASCON-128、ASCON-128a和 ASCON-80pq。2023年，ASCON\n算法被 NIST选为用于物联",
+          "关于分组密码抵抗差分类攻击的研究",
+          "0]，积分分析被认为是除了差分\n攻击和线性攻击之外最有效的攻击手段。 \n除了高阶差分分析 [53]和积分分析，差分分析在发展和分析中还诞生了许多\n新的攻击手段，",
+          "关于分组密码抵抗差分类攻击的研究"
+        ],
+        "P@5": 0.2,
+        "R@5": 0.5,
+        "P@10": 0.2,
+        "R@10": 1.0,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "相关密钥差分神经区分器 related-key",
+      "gold": [
+        "2020Yuan.pdf",
+        "2022Lu.pdf",
+        "2024Wang Related-Key.pdf",
+        "2025RelatedKey.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2022Lu.pdf",
+          "2025Li-XDU.pdf",
+          "2025Sun.pdf",
+          "2023KeyRecovery.pdf",
+          "2024Chen-DL.pdf",
+          "2025Shen-MiF.pdf",
+          "2025Sun.pdf",
+          "2025Li-XDU.pdf",
+          "CPDI-ND.docx",
+          "2025Sun.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.335,
+          0.3591,
+          0.3909,
+          0.3952,
+          0.408,
+          0.4084,
+          0.4158,
+          0.4164,
+          0.4168,
+          0.4192
+        ],
+        "snippets": [
+          "le/\nImproved-Related-key-Differential-based-Neural-Distinguishers",
+          "DP(Λ)= #{X|E(X)􀱇 E(X 􀱇α)=β}\n2\nn   。 (1)\n差分分析是研究满足特定差分值α 的输入明文对(X,X 􀱇α),在每一 步 加 密",
+          "0.5,则判定为真实密文对;若分数小于或等于0.5,则视为随机数据。\n图3 矩形差分神经区分器的网络结构\n3.2 基于矩形神经网络差分区分器的训练与验证\n3.2",
+          "合 fi1; i2; \u0001 \u0001 \u0001 ; idg, 对于任意符合上述差分的明文对 (P; P \b ∆), 如果同时翻转 P 和 P \b ∆ 的 d\n个比特, 得到的",
+          "第 2 章 预备知识\n训练后在测试集上的区分准确率大于 0.5，这个神经网络就是一个有效的神经区分\n器。在文献 [15] 中采用的神经网络是第 2.4 节介绍的"
+        ],
+        "P@5": 0.2,
+        "R@5": 0.25,
+        "P@10": 0.1,
+        "R@10": 0.25,
+        "MRR": 1.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2022Lu.pdf",
+          "CPDI-ND.docx",
+          "2025Li-XDU.pdf",
+          "2021Polytope.pdf",
+          "2025Sun.pdf",
+          "2024Yue.pdf",
+          "2023KeyRecovery.pdf",
+          "2024Yue.pdf",
+          "2025Shen-MiF.pdf",
+          "2024Yue.pdf"
+        ],
+        "methods": [
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0164,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0154
+        ],
+        "snippets": [
+          "le/\nImproved-Related-key-Differential-based-Neural-Distinguishers",
+          "确率达到99.70.\n在可解释性方面，目相关研究仍较为有限。2021年，Benamira等人[22]在EUROCRYPT 2021上借助部分依赖图分析 Gohr",
+          "DP(Λ)= #{X|E(X)􀱇 E(X 􀱇α)=β}\n2\nn   。 (1)\n差分分析是研究满足特定差分值α 的输入明文对(X,X 􀱇α),在每一 步 加 密",
+          "e of 9-round\n3-polytopic differential neural network distinguisher\n图 5 单差分神经网络区分",
+          "0.5,则判定为真实密文对;若分数小于或等于0.5,则视为随机数据。\n图3 矩形差分神经区分器的网络结构\n3.2 基于矩形神经网络差分区分器的训练与验证\n3.2"
+        ],
+        "P@5": 0.2,
+        "R@5": 0.25,
+        "P@10": 0.1,
+        "R@10": 0.25,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "神经区分器的密钥恢复 key recovery",
+      "gold": [
+        "2022Ebrahimi-Partial.pdf",
+        "2023KeyRecovery.pdf",
+        "2024Li-LBlock.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2024Li-LBlock.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2024Li-LBlock.pdf",
+          "2023KeyRecovery.pdf",
+          "2023Wang-LW.pdf",
+          "2023Chen-LargeState.pdf",
+          "2024Chen-DL.pdf",
+          "2023Chen-LargeState.pdf",
+          "2024Chen-DL.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.3679,
+          0.3988,
+          0.405,
+          0.4184,
+          0.4201,
+          0.4344,
+          0.4425,
+          0.444,
+          0.4475,
+          0.4542
+        ],
+        "snippets": [
+          "西北师范大学硕士学位论文 \n22 \n本节给出了利用神经网络区分器进行密钥恢复攻击的方案，并给出了基于训\n练得到的 9 轮神经网络区分器对 LBlock 进行 1",
+          "此过程中,不仅实施了攻击操作,还详尽地阐述了密钥恢复攻击的内在机理与具体流程。\n4.1 密钥恢复过程\n基于矩形神经网络差分区分器的密钥恢复攻击过程如图7所示,其",
+          "表8 SIMON32/64区分器的准确率汇总\n区分器\n密文对数量\n轮数 来源 2 4 8 16\nSIMON32/64 9 文献[18] 0.7300 0.811",
+          "lock 的 r - 1 轮局部最优神经网络区分器， 基于该区分\n器的密钥恢复攻击方案如算法 2 所示。 \n算法：2 密钥恢复攻击 \n输入：样本数量 n ，输入",
+          "en 等人发现 Gohr 提出的密\n钥恢复攻击严重依赖于实际实验, 无法用于理论分析. 为了解决这个问题, Chen 等人提出了一种神经辅助\n统计攻击 [9]."
+        ],
+        "P@5": 0.4,
+        "R@5": 0.667,
+        "P@10": 0.2,
+        "R@10": 0.667,
+        "MRR": 1.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2023KeyRecovery.pdf",
+          "2023Chen-LargeState.pdf",
+          "2024Li-LBlock.pdf",
+          "2023Wang-LW.pdf",
+          "2025Sun.pdf",
+          "2023Chen-LargeState.pdf",
+          "2025Sun.pdf",
+          "2024Chen-DL.pdf",
+          "2024Li-LBlock.pdf",
+          "2023Chen-LargeState.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0306,
+          0.0301,
+          0.0164,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0154,
+          0.0154
+        ],
+        "snippets": [
+          "en 等人发现 Gohr 提出的密\n钥恢复攻击严重依赖于实际实验, 无法用于理论分析. 为了解决这个问题, Chen 等人提出了一种神经辅助\n统计攻击 [9].",
+          "质思想是通过多阶段过程恢复完整的子密钥. 每个阶段采用单独的神经区分器 (前面\n可以加一个前置差分) 来恢复部分密钥比特. 为了达到这个目的, 需要选择一组神经",
+          "西北师范大学硕士学位论文 \n22 \n本节给出了利用神经网络区分器进行密钥恢复攻击的方案，并给出了基于训\n练得到的 9 轮神经网络区分器对 LBlock 进行 1",
+          "..................................... 33 \n§ 3.4 实验与结果分析 ........................",
+          "此过程中,不仅实施了攻击操作,还详尽地阐述了密钥恢复攻击的内在机理与具体流程。\n4.1 密钥恢复过程\n基于矩形神经网络差分区分器的密钥恢复攻击过程如图7所示,其"
+        ],
+        "P@5": 0.4,
+        "R@5": 0.667,
+        "P@10": 0.2,
+        "R@10": 0.667,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "SPECK 差分攻击",
+      "gold": [
+        "2023Yue.pdf",
+        "2024Chen-SPECK.pdf",
+        "2024Yuan-Simeck.pdf",
+        "2024Yue.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2025Shen-MiF.pdf",
+          "2023Shan.pdf",
+          "2023Chen-LargeState.pdf",
+          "2025Shen-MiF.pdf",
+          "2025Sun.pdf",
+          "2023Chen-LargeState.pdf",
+          "2025Sun.pdf",
+          "2025Shen-MiF.pdf",
+          "2025Sun.pdf",
+          "2025Li-XDU.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.3389,
+          0.3799,
+          0.3818,
+          0.3871,
+          0.4119,
+          0.4166,
+          0.4307,
+          0.4337,
+          0.4398,
+          0.4399
+        ],
+        "snippets": [
+          "申焱天等\n中国科学 : 信息科学 2025 年 第 55 卷 第 6 期 1449\n表 1 对 Speck32, Speck96 和 Speck128 算法不同",
+          "2 预备知识 \n11 \n由图 2-3 可以看出， SPECK 密码的轮函数比较简单。给定第\ni 轮密文\n( , ),  , {0,1 }L R L R n\ni ",
+          "ge of the diﬀerential weights of the trails that can be obtained by rotating\nthe",
+          ":03 × 248 = 2 91:03.\n5.3 改进 Speck128 的差分 { 神经攻击\nChen 等 [4] 给出了对 Speck128 的 17 轮理",
+          "表2 SPECK 算法和 SIMON 算法的参数\n分组长度2n 密钥长度 mn 轮数(SPECK/SIMON) 分组长度2n 密钥长度 mn 轮数(SPECK/"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.0,
+        "R@10": 0.0,
+        "MRR": 0.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2025Shen-MiF.pdf",
+          "2024Chen-DL.pdf",
+          "2023Shan.pdf",
+          "2022DiffAttacks.pdf",
+          "2023Chen-LargeState.pdf",
+          "2023Shan.pdf",
+          "2025Shen-MiF.pdf",
+          "2022DiffAttacks.pdf",
+          "2025Sun.pdf",
+          "2022DiffAttacks.pdf"
+        ],
+        "methods": [
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0164,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0154
+        ],
+        "snippets": [
+          "申焱天等\n中国科学 : 信息科学 2025 年 第 55 卷 第 6 期 1449\n表 1 对 Speck32, Speck96 和 Speck128 算法不同",
+          "第 2 章 预备知识\n文献 [45] 中的工作，攻击者可以用如下公式推导出轮密钥 𝑘𝑗−𝑚−1：\n𝑙𝑗+𝑚−3 = 𝑘 𝑗−1 ⊕ (𝑘𝑗−2 ⋘ 𝑏),\n𝑙𝑗",
+          "2 预备知识 \n11 \n由图 2-3 可以看出， SPECK 密码的轮函数比较简单。给定第\ni 轮密文\n( , ),  , {0,1 }L R L R n\ni ",
+          "关于分组密码抵抗差分类攻击的研究\n构比原来的分组密码的抵抗积分攻击的能力都强。\n6．5小结\n本章主要对图2．3的分组密码进行改进，改进后的分组密码在第6．I节具",
+          "ge of the diﬀerential weights of the trails that can be obtained by rotating\nthe"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.0,
+        "R@10": 0.0,
+        "MRR": 0.0
+      }
+    },
+    {
+      "query": "如何用神经网络区分加密输出与随机数据",
+      "gold": [
+        "2019Gohr.pdf",
+        "2020Benamira.pdf",
+        "2025Yuan-Rethink.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2025Sun.pdf",
+          "2021Ge.pdf",
+          "2024Yang-XDU.pdf",
+          "2023Yu-SM4.pdf",
+          "2025Sun.pdf",
+          "2025Li-XDU.pdf",
+          "2021Polytope.pdf",
+          "2021Ge.pdf",
+          "2021Ge.pdf",
+          "2024Chen-SPECK.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.3711,
+          0.4221,
+          0.4373,
+          0.4672,
+          0.4756,
+          0.476,
+          0.4769,
+          0.4811,
+          0.4829,
+          0.4836
+        ],
+        "snippets": [
+          "0.5,则判定为真实密文对;若分数小于或等于0.5,则视为随机数据。\n图3 矩形差分神经区分器的网络结构\n3.2 基于矩形神经网络差分区分器的训练与验证\n3.2",
+          "226 Journal of Cryptologic Research 密码学报 Vol.8, No.2, Apr. 2021\n角度考虑密码学问题. 最具有代表",
+          "\n） ，\n其概率大于\n２\n－\nｎ\n，\n就可以将\nｒ\n轮的加密算法和随机置换区分开\n，\n即找到了一个\nｒ\n轮 差 分 区 分 器\n。\n在 找 到\n区分器的基础上向",
+          "_round为算法减轮轮数;\n输出返回的结果为密文对 X 及标签Y。具体过程\n如下:\n1)随机生成n 个字节,并将其存放在标签Y 中,\nY[i]表示第i个标签;",
+          "在构建基于神经网络的区分器时,一个核心要素是确保神经网络接受 到 充 足 且 多 样 化 的 训 练 样 本。这\n些样本被精心划分为两大类别,每类各占总样本量的"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.0,
+        "R@10": 0.0,
+        "MRR": 0.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2021Polytope.pdf",
+          "2025Sun.pdf",
+          "2021Ge.pdf",
+          "2021Ge.pdf",
+          "2024Yang-XDU.pdf",
+          "2022ARX.pdf",
+          "2023Yu-SM4.pdf",
+          "2023Yu-SM4.pdf",
+          "2025Sun.pdf",
+          "2023Yang-LBlock.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0313,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0154
+        ],
+        "snippets": [
+          " . 数据复杂度与 n 值\n相关.\n当 d = 2 时神经网络区分器为 3 面体神经网络区分器, 当 d = 3 时神经网络区分器为 4 面体神经网\n络区分器,",
+          "0.5,则判定为真实密文对;若分数小于或等于0.5,则视为随机数据。\n图3 矩形差分神经区分器的网络结构\n3.2 基于矩形神经网络差分区分器的训练与验证\n3.2",
+          "226 Journal of Cryptologic Research 密码学报 Vol.8, No.2, Apr. 2021\n角度考虑密码学问题. 最具有代表",
+          "葛钊成 等: 神经网络与密码学的交叉研究 221\n并重新生成完整且准确的密钥. 与常用的 BCH 码相比, 该方案可更快纠正错误位并重建密钥.\n作为密码算法的基",
+          "\n） ，\n其概率大于\n２\n－\nｎ\n，\n就可以将\nｒ\n轮的加密算法和随机置换区分开\n，\n即找到了一个\nｒ\n轮 差 分 区 分 器\n。\n在 找 到\n区分器的基础上向"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.0,
+        "R@10": 0.0,
+        "MRR": 0.0
+      }
+    },
+    {
+      "query": "轻量级分组密码的深度学习攻击方法",
+      "gold": [
+        "2023Chen-LW.pdf",
+        "2023Shan.pdf",
+        "2023Wang-LW.pdf",
+        "2024Chen-DL.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2022DiffAttacks.pdf",
+          "2022DiffAttacks.pdf",
+          "2022DiffAttacks.pdf",
+          "2025Sun.pdf",
+          "2023Wang-LW.pdf",
+          "2023Chen-LW.pdf",
+          "2024Yang-XDU.pdf",
+          "2023Wang-LW.pdf",
+          "2025Sun.pdf",
+          "2023Chen-LW.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.3717,
+          0.3722,
+          0.3731,
+          0.4059,
+          0.4163,
+          0.4242,
+          0.4312,
+          0.4317,
+          0.4349,
+          0.4361
+        ],
+        "snippets": [
+          "关于分组密码抵抗差分类攻击的研究",
+          "关于分组密码抵抗差分类攻击的研究",
+          "关于分组密码抵抗差分类攻击的研究",
+          "。 进 一 步 地,SPECK32/64 算 法 的 线 性 操 作 所 产 生 的 特 征 往 往 呈 现 局\n部化的特点。这意味着,3×3的卷积核足以覆盖并",
+          "密 级             公开               \n \n \n \n博 士 学 位 论 文 \n \n题目       基于深度学习的轻量级分组密码安全"
+        ],
+        "P@5": 0.4,
+        "R@5": 0.5,
+        "P@10": 0.2,
+        "R@10": 0.5,
+        "MRR": 0.333
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2023Wang-LW.pdf",
+          "2022DiffAttacks.pdf",
+          "2023Wang-LW.pdf",
+          "2022DiffAttacks.pdf",
+          "2024Yue.pdf",
+          "2022DiffAttacks.pdf",
+          "2023Wang-LW.pdf",
+          "2025Sun.pdf",
+          "2025Sun.pdf",
+          "2023Wang-LW.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector"
+        ],
+        "scores": [
+          0.0296,
+          0.0164,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154
+        ],
+        "snippets": [
+          "基于深度学习的轻量级分组密码安全性分析研究 \n 2 \n会将问题反馈回轻量级分组密码的设计和分析之中。因此，可以将轻量级分组密码\n学视为一个螺旋式上升的模式。 \n",
+          "关于分组密码抵抗差分类攻击的研究",
+          "\n和深度学习之间的各种切合性，并提出可以将深度学习方法应用于密码 分析之中。\nGohr[34]在 CRYPTO 2019将深度学习方法应用于黑箱密码分析，这开创",
+          "关于分组密码抵抗差分类攻击的研究",
+          "河北大学硕士学位论文\n2\n了衡量一个分组密码是否安全的一个重要指标，其主要的核心思想是通过分析特定明文\n差分对相对应密文差分影响，以此来恢复密钥的信息。差分密码"
+        ],
+        "P@5": 0.2,
+        "R@5": 0.25,
+        "P@10": 0.1,
+        "R@10": 0.25,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "模型压缩技术加速神经网络推理",
+      "gold": [
+        "2021Liang-PruningQuantization.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2021Liang-PruningQuantization.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2022Hou.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.6881,
+          0.6944,
+          0.7196,
+          0.7202,
+          0.7282,
+          0.7343,
+          0.7348,
+          0.7433,
+          0.7544,
+          0.7588
+        ],
+        "snippets": [
+          "p:\n//arxiv.org/abs/2003.03033.\n[25] Bolukbasi, T., Wang, J., Dekel, O., Saligram",
+          "sion. Ruan Jian Xue\nBao/JournalofSoftware29,251–266.URL: https://www.scopus.com/",
+          "Pruning and Quantization for Deep Neural Network Acceleration: A\nSurvey\nTailin L",
+          "Frontiers of Information Technology & Electronic Engineering\n19, 64–77. URL:http",
+          ", Buli/uni0107, P., Risojevi/uni0107, V., 2018. Compression of convolu-\ntional n"
+        ],
+        "P@5": 0.2,
+        "R@5": 1.0,
+        "P@10": 0.1,
+        "R@10": 1.0,
+        "MRR": 1.0
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2021Liang-PruningQuantization.pdf",
+          "2024Li-LBlock.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2022Hou.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2023Chen-LW.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2024Yue.pdf",
+          "2021Liang-PruningQuantization.pdf",
+          "2022Hou.pdf"
+        ],
+        "methods": [
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0164,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0154
+        ],
+        "snippets": [
+          "p:\n//arxiv.org/abs/2003.03033.\n[25] Bolukbasi, T., Wang, J., Dekel, O., Saligram",
+          "随着深度学\n习技术的快速发展， 现在有许多不同的网络模型可以使用， 因此研究更合适的网络\n模型来提高神经网络区分器的性能具有重要意义。 \n（2）影响神经网络区分",
+          "sion. Ruan Jian Xue\nBao/JournalofSoftware29,251–266.URL: https://www.scopus.com/",
+          "得益于互联网及计算机硬件的发展, 人工智能技术广泛应用于生活的各个场景之中. 作为人工智能得以迅速\n发展的一个重要原因, 深度学习技术作为人工智能的重点研究领域",
+          "Frontiers of Information Technology & Electronic Engineering\n19, 64–77. URL:http"
+        ],
+        "P@5": 0.2,
+        "R@5": 1.0,
+        "P@10": 0.1,
+        "R@10": 1.0,
+        "MRR": 1.0
+      }
+    },
+    {
+      "query": "差分特征与神经网络结合的攻击",
+      "gold": [
+        "2022DiffAttacks.pdf",
+        "2023DiffLin.pdf",
+        "2024Yue.pdf"
+      ],
+      "vector": {
+        "top10_docs": [
+          "2024Yang-XDU.pdf",
+          "2024Chen-DL.pdf",
+          "2025Sun.pdf",
+          "2022ARX.pdf",
+          "2023Chen-LW.pdf",
+          "2024Yang-XDU.pdf",
+          "2025Li-XDU.pdf",
+          "2023Yang-LBlock.pdf",
+          "2025Li-XDU.pdf",
+          "2024Yue.pdf"
+        ],
+        "methods": [
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector",
+          "vector"
+        ],
+        "scores": [
+          0.4949,
+          0.5202,
+          0.5258,
+          0.5394,
+          0.5443,
+          0.5465,
+          0.5503,
+          0.5517,
+          0.5557,
+          0.5557
+        ],
+        "snippets": [
+          "２ ０ ．\n［\n２ ４\n］\n付超辉\n，\n段明\n，\n魏强\n，\n等\n．\n基于深度学习的多面体差分攻击及其应用\n［\nＪ\n］\n．\n密码学报\n，\n２ ０ ２ １\n，\n８\n",
+          "第 1 章 绪论\n种攻击的局限性。本文的研究将有助于扩大这两种攻击的使用场景、增强它们的\n性能，从而帮助更好地评估密码算法对机器学习辅助攻击、差分­线性攻击的抵",
+          "0.5,则判定为真实密文对;若分数小于或等于0.5,则视为随机数据。\n图3 矩形差分神经区分器的网络结构\n3.2 基于矩形神经网络差分区分器的训练与验证\n3.2",
+          "文对数为 28 时, 在 1000 次\n攻击中的成功率为 95.6%.\n2 神经网络差分区分器模型\n传统差分区分器的构造就是找到一条高概率的差分 . 在输入差分",
+          "分组密码算法LBlock的差分故障攻击[J]. 密码学\n报,2019,6(01):18-26. \n[8] 陈伟建，赵思宇，邹瑞杰，张晓宁. PRESENT密码的"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.1,
+        "R@10": 0.333,
+        "MRR": 0.125
+      },
+      "hybrid": {
+        "top10_docs": [
+          "2024Yang-XDU.pdf",
+          "2023Shan.pdf",
+          "2024Chen-DL.pdf",
+          "2025Wu.pdf",
+          "2025Sun.pdf",
+          "2023Shan.pdf",
+          "2022ARX.pdf",
+          "2025Wu.pdf",
+          "2023Chen-LW.pdf",
+          "2025Wu.pdf"
+        ],
+        "methods": [
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25",
+          "vector",
+          "bm25"
+        ],
+        "scores": [
+          0.0164,
+          0.0164,
+          0.0161,
+          0.0161,
+          0.0159,
+          0.0159,
+          0.0156,
+          0.0156,
+          0.0154,
+          0.0154
+        ],
+        "snippets": [
+          "２ ０ ．\n［\n２ ４\n］\n付超辉\n，\n段明\n，\n魏强\n，\n等\n．\n基于深度学习的多面体差分攻击及其应用\n［\nＪ\n］\n．\n密码学报\n，\n２ ０ ２ １\n，\n８\n",
+          " ND 的准确\n率受输入差分的汉明重量影响，即使基于相同概率的差分特征得到的差分区分器\n的准确率也不一定相同。王等人[66]分别采用前馈神经网络和卷积神经网络模",
+          "第 1 章 绪论\n种攻击的局限性。本文的研究将有助于扩大这两种攻击的使用场景、增强它们的\n性能，从而帮助更好地评估密码算法对机器学习辅助攻击、差分­线性攻击的抵",
+          "出神经\n网络差分区分器的性能不仅依赖于密文对的差分分布，\n倒数第二轮的差分特征也是影响神经网络差分区分器准\n确率的关键因素。在文献[15,23]的基础上，结合 ",
+          "0.5,则判定为真实密文对;若分数小于或等于0.5,则视为随机数据。\n图3 矩形差分神经区分器的网络结构\n3.2 基于矩形神经网络差分区分器的训练与验证\n3.2"
+        ],
+        "P@5": 0.0,
+        "R@5": 0.0,
+        "P@10": 0.0,
+        "R@10": 0.0,
+        "MRR": 0.0
+      }
+    }
+  ]
+}

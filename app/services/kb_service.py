@@ -3,11 +3,13 @@
 - KB 元数据 → Postgres
 - 文档解析 → 多格式（parsing.py）
 - chunk → 本地盘"对象存储"（data/chunks/{kb_id}/，便于重建复用免解析）
+- 源文件归档 → data/docs/{kb_id}/{doc_id}__文件名（原始上传件留底）
 - 状态机：indexing → ready（文件上传走后台异步入库）
 """
 
 import hashlib
 import json
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -61,6 +63,17 @@ def _clean_text(text: str) -> str:
     return text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="ignore")
 
 
+def _safe_filename(name: str) -> str:
+    """上传文件名 → 可安全落盘的名字：去路径成分（防目录穿越）、
+    替换文件系统特殊字符、限长。\w 默认含中文等 unicode 字母，中文名保留。
+    """
+    base = Path(name.replace("\\", "/")).name.strip()
+    if base in ("", ".", ".."):               # Path('..').name 仍是 '..'，需显式兜底
+        base = "upload.bin"
+    safe = re.sub(r"[^\w.\-]+", "_", base)
+    return safe[:150] or "upload.bin"
+
+
 class KBService:
     """两级知识库管理：元数据在 Postgres，chunk 在本地盘，向量在 Chroma。"""
 
@@ -68,6 +81,8 @@ class KBService:
         self._settings = settings
         self._chunk_dir = Path(settings.data_dir) / "chunks"
         self._chunk_dir.mkdir(parents=True, exist_ok=True)
+        self._docs_dir = Path(settings.data_dir) / "docs"   # 上传源文件归档目录
+        self._docs_dir.mkdir(parents=True, exist_ok=True)
         self._crypto = SecretCrypto(settings.jwt_secret)      # 库级嵌入密钥加解密
         self._embedding_secrets = {
             **{p: settings.embedding_api_key for p in settings.embedding_cloud},
@@ -244,6 +259,15 @@ class KBService:
                 col.delete(where={"doc_id": doc_id})
         except Exception as e:
             logger.warning("delete chroma chunks failed kb=%s: %s", kb_id, e)
+        # 2.5) 归档的源文件（data/docs/{kb_id}/{doc_id}__*，与 chunk 同生命周期）
+        kb_docs = self._docs_dir / kb_id
+        if kb_docs.exists():
+            for doc_id in doc_set:
+                for f in kb_docs.glob(f"{doc_id}__*"):
+                    try:
+                        f.unlink()
+                    except OSError as e:
+                        logger.warning("remove source file failed %s: %s", f, e)
         # 3) Postgres 元数据：source_doc_ids 移除
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
@@ -270,8 +294,9 @@ class KBService:
             client.delete_collection(f"kb_{kb_id}")
         except Exception as e:
             logger.warning("delete collection failed kb=%s: %s", kb_id, e)
-        # 2) 磁盘 chunk 目录
+        # 2) 磁盘 chunk 目录 + 源文件归档目录
         shutil.rmtree(self._chunk_dir / kb_id, ignore_errors=True)
+        shutil.rmtree(self._docs_dir / kb_id, ignore_errors=True)
         self._bm25_cache.pop(kb_id, None)              # 3.5) BM25/父块 chunk 缓存失效
         self._chunks_cache.pop(kb_id, None)
         # 3) Postgres 元数据
@@ -282,6 +307,23 @@ class KBService:
                 db.commit()
 
     # ---------- 入库流水线 ----------
+    def _save_source_file(self, kb_id: str, doc_id: str,
+                          filename: str, content: bytes) -> None:
+        """源文件归档：data/docs/{kb_id}/{doc_id}__文件名（原始上传件留底）。
+
+        doc_id（内容哈希）做前缀保证唯一：同内容换名重传时先清旧档再写新名，
+        一个 doc 恒占一个文件。归档失败只记日志，不影响入库主流程。
+        """
+        try:
+            kb_docs = self._docs_dir / kb_id
+            kb_docs.mkdir(parents=True, exist_ok=True)
+            for old in kb_docs.glob(f"{doc_id}__*"):
+                old.unlink()
+            (kb_docs / f"{doc_id}__{_safe_filename(filename)}").write_bytes(content)
+        except OSError as e:
+            logger.warning("save source file failed kb=%s doc=%s: %s",
+                           kb_id, doc_id, e)
+
     def add_documents(self, kb_id: str, texts: list[str]) -> int:
         """文本入库：分块 → 存 chunk → 向量化 → ready。"""
         return self._ingest(kb_id, [("text.txt", t.encode("utf-8")) for t in texts])
@@ -367,6 +409,7 @@ class KBService:
                 # 整个文件成功后才登记 doc_id + chunks，避免半截文件污染批次
                 doc_ids.append(digest)
                 chunks.extend(file_chunks)
+                self._save_source_file(kb_id, digest, filename, content)
             except Exception as e:
                 # 单文件容错：坏文件只跳过并记日志，不影响同批其他文件入库
                 logger.warning("skip file %s (kb=%s): %s", filename, kb_id, e)
@@ -442,9 +485,12 @@ class KBService:
             logger.warning("embedding mismatch kb=%s: %s", kb_id, warn)
 
         if mode == "hybrid":
+            # 每腿取 max(k, 15)：候选池略深于输出 k，避免一路深位（第 9~15 名）
+            # 的好命中在 RRF 融合时被另一路浅位挤出（26 查询网格实验最优值，
+            # 见 rag_test/hparam_eval_report_v4.md）
             vec_hits = self._vector_store(kb).search(
-                query, k=max(k, 8), scope=kb.scope, user_id=user_id)
-            bm_hits = self._bm25_index(kb).search(query, k=max(k, 8))
+                query, k=max(k, 15), scope=kb.scope, user_id=user_id)
+            bm_hits = self._bm25_index(kb).search(query, k=max(k, 15))
             hits = rrf_fuse([self._annotate(kb, h) for h in vec_hits],
                             [self._annotate(kb, h) for h in bm_hits],
                             top=k)
@@ -542,6 +588,11 @@ class KBService:
             src_dir = self._chunk_dir / src_kb_id
             if src_dir.exists():
                 shutil.copytree(src_dir, self._chunk_dir / new_kb.kb_id,
+                                dirs_exist_ok=True)
+            # 源文件归档目录同样复制一份（新库文件管理/留底不受源库删除影响）
+            src_docs = self._docs_dir / src_kb_id
+            if src_docs.exists():
+                shutil.copytree(src_docs, self._docs_dir / new_kb.kb_id,
                                 dirs_exist_ok=True)
             chunks = self._read_chunks(new_kb.kb_id, new_kb)   # 读自己的目录
             self._vector_store(new_kb).add(chunks)            # 新 collection 重向量化

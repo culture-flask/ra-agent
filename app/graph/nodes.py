@@ -175,7 +175,7 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
         window = int(await asyncio.to_thread(svc.context_window_for,
                                              state["user_id"]))
     else:
-        window = int(getattr(ctx.settings, "llm_context_window", 32768))
+        window = int(getattr(ctx.settings, "llm_context_window", 256000))
     rounds = _round_count(messages)
     # token 占用优先取上一轮 generate 的真实用量（含系统提示词+检索结果，
     # 比 _estimate_tokens 准）；没有时（首轮/假模型）回退字符估算

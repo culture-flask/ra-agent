@@ -52,6 +52,9 @@ async def lifespan(app: FastAPI):
                           "last_used_at TIMESTAMPTZ"))
         conn.execute(text("UPDATE memories SET last_used_at = updated_at "
                           "WHERE last_used_at IS NULL"))
+        # 用户自定义上下文窗口：旧表幂等补列（空 = 自动探测/兜底默认）
+        conn.execute(text("ALTER TABLE user_llm_config ADD COLUMN IF NOT EXISTS "
+                          "context_window INTEGER"))
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)

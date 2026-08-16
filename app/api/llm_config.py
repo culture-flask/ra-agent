@@ -4,9 +4,12 @@
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 router = APIRouter(prefix="/api/v1/llm", tags=["llm"])
+
+# 上下文窗口允许范围（token）：下限防误填过小立刻触发压缩，上限覆盖长窗口模型
+_CTX_WINDOW_MIN, _CTX_WINDOW_MAX = 1024, 10_000_000
 
 
 class LLMConfigRequest(BaseModel):
@@ -16,6 +19,8 @@ class LLMConfigRequest(BaseModel):
     model_id: str
     api_key: str
     is_default: bool = False
+    context_window: int | None = Field(
+        None, ge=_CTX_WINDOW_MIN, le=_CTX_WINDOW_MAX)   # None = 自动（探测/兜底）
 
 
 class LLMModelsRequest(BaseModel):
@@ -25,11 +30,24 @@ class LLMModelsRequest(BaseModel):
 
 
 class LLMConfigUpdateRequest(BaseModel):
-    """更新已保存配置：只传要改的字段，None 表示保持原值。"""
+    """更新已保存配置：只传要改的字段，None 表示保持原值。
+
+    context_window 例外：0 = 清除（恢复自动），正整数 = 显式设置。
+    """
     provider: str | None = None
     base_url: str | None = None
     model_id: str | None = None
     api_key: str | None = None
+    context_window: int | None = Field(None, ge=0, le=_CTX_WINDOW_MAX)
+
+    @field_validator("context_window")
+    @classmethod
+    def _ctx_window_valid(cls, v: int | None) -> int | None:
+        """0（清除）以外的正数必须落在允许区间——过小会轮轮触发压缩。"""
+        if v is not None and v != 0 and v < _CTX_WINDOW_MIN:
+            raise ValueError(f"context_window 需为 0（清除为自动）"
+                             f"或 {_CTX_WINDOW_MIN} ~ {_CTX_WINDOW_MAX}")
+        return v
 
 
 async def _fetch_models(settings, provider: str, base_url: str,
@@ -79,7 +97,7 @@ async def save_config(req: LLMConfigRequest, request: Request):
         config_id = await run_in_threadpool(
             request.app.state.llm_service.set_user_config,
             req.user_id, req.provider, req.base_url, req.model_id,
-            req.api_key, req.is_default)
+            req.api_key, req.is_default, req.context_window)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"invalid config: {e}")
     return {"id": config_id, "api_key_masked": _mask(req.api_key)}
@@ -141,7 +159,8 @@ async def update_config(config_id: str, req: LLMConfigUpdateRequest,
         request.app.state.llm_service.update_config,
         user_id, config_id,
         provider=req.provider, base_url=req.base_url,
-        model_id=req.model_id, api_key=req.api_key)
+        model_id=req.model_id, api_key=req.api_key,
+        context_window=req.context_window)
     if not ok:
         raise HTTPException(status_code=404, detail="config not found")
     return {"updated": config_id}
