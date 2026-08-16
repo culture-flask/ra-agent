@@ -1,14 +1,15 @@
 from dataclasses import dataclass
 import asyncio
 import json
+import random
 import re
 import uuid
 
-from langchain_core.messages import AIMessage, RemoveMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 
 from app.core.events import emit
 from app.core.logging import get_logger
-from app.services.memory_service import MAX_MEMORIES_PER_USER
+from app.services.memory_service import MEMORY_MAX
 from app.graph.state import AgentState
 
 logger = get_logger("graph_nodes")
@@ -25,30 +26,49 @@ class WorkflowContext:
     memory_service: object = None  
 
 # ---------- 长记忆----------
-EXTRACT_PROMPT = """从这段对话中提取值得长期记住的用户信息（研究主题、偏好、
-项目背景等），输出 JSON：{"memories":[{"key":"snake_case键名","value":"简短值"}]}
-如果没有值得记住的信息，输出 {"memories":[]}。只输出 JSON，不要其他文字。"""
+EXTRACT_PROMPT = """从这段对话中提取值得记住的用户信息（研究主题、偏好、
+项目背景等），输出 JSON：
+{"memories":[{"key":"snake_case键名","value":"简短值",
+              "tier":"core或short","topic":"主题标签（如 研究方向/项目/偏好）"}]}
+tier 判定：研究方向、领域、稳定偏好、身份信息等长期有效 → core；
+有时效性的事实（正在写某论文、本周任务、当前项目阶段）→ short。
+没有值得记住的信息输出 {"memories":[]}。只输出 JSON，不要其他文字。"""
+
+MERGE_PROMPT = """你是记忆整理助手。下面按主题分组了同一用户的多条长期记忆（JSON）。
+请把每组内的多条合并为一条：保留全部要点、去掉重复表述，120 字以内，
+key 沿用该组第一条的 key。输出 JSON：
+{"merged":[{"topic":"原主题","key":"组内第一条的key","value":"合并后文本"}]}
+只输出 JSON。"""
 
 KEY_RE = re.compile(r"^[a-z0-9_]{2,32}$")     # 键名白名单：小写/数字/下划线
+
+# 时效词：值里出现且 LLM 标为 core 时强制降级 short（LLM 标注的规则兜底）
+TIME_WORDS = ("本周", "正在", "当前", "目前", "暂时", "最近在", "这几天", "今天", "这周")
+
+
+def _loads_fuzzy(text: str) -> dict | None:
+    """容错 JSON 解析：去围栏/从夹带文字里抠 JSON 对象，失败返回 None。"""
+    text = text.strip()
+    if "```" in text:
+        text = re.sub(r"```(?:json)?", "", text).strip("` \n")
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
 
 
 def _parse_memories(text: str) -> list[dict]:
     """解析 LLM 返回的记忆 JSON（容忍围栏/夹带文字）。解析失败返回空列表。"""
-    text = text.strip()
-    if "```" in text:                            # 去掉 markdown 围栏
-        text = re.sub(r"```(?:json)?", "", text).strip("` \n")
-    try:
-        data = json.loads(text)                  # 直接解析
-    except json.JSONDecodeError:
-        # 兜底：从文本里抠出第一个 { ... } 子串再解析（LLM 常夹带说明文字）
-        m = re.search(r"\{[^{}]*\}", text, re.S) if False else re.search(r"\{.*\}", text, re.S)
-        if not m:
-            return []
-        try:
-            data = json.loads(m.group(0))
-        except json.JSONDecodeError:
-            return []
-    return data.get("memories", []) if isinstance(data, dict) else []
+    data = _loads_fuzzy(text)
+    return data.get("memories", []) if data else []
 
 
 def _review(memory: dict) -> bool:
@@ -59,6 +79,19 @@ def _review(memory: dict) -> bool:
     if not isinstance(value, str) or len(value.strip()) < 4:
         return False
     return len(value) <= 200
+
+
+def _normalize_memory(m: dict) -> dict:
+    """LLM 输出归一化：tier 白名单 + 时效词强制降级 + topic 兜底。"""
+    tier = m.get("tier") if m.get("tier") in ("core", "short") else "core"
+    value = m.get("value", "")
+    if tier == "core" and any(w in value for w in TIME_WORDS):
+        tier = "short"                      # 临时性事实不进常驻层（标注兜底）
+    topic = str(m.get("topic") or "").strip()[:64]
+    if not topic:
+        topic = m.get("key", "").split("_")[0]     # 兜底：key 首段（research_x → research）
+    return {"key": m.get("key", ""), "value": value,
+            "tier": tier, "topic": topic}
 
 
 # ---------- 自动上下文压缩 ----------
@@ -243,10 +276,19 @@ def _resolve_selected_kbs(kbs: list, picks: list) -> list:
 
 
 async def load_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """跨会话读取：把该用户的长记忆载入状态（图的第一站）。"""
+    """跨会话读取：只把 core 层注入状态（short 不进 prompt，省 token 防噪音）。"""
     if ctx.memory_service is None:
         return {"memory": {}}
-    memory = await asyncio.to_thread(ctx.memory_service.get_all, state["user_id"])
+    uid = state["user_id"]
+    memory = await asyncio.to_thread(ctx.memory_service.get_all, uid, "core")
+    if memory:
+        # 注入即使用：刷新 last_used_at（LRU 依据；core 因此永不被淘汰 = 常驻）
+        await asyncio.to_thread(ctx.memory_service.touch, uid, list(memory))
+    if random.random() < 0.05:                # 惰性清理（约 1/20 概率，避免每轮扫表）
+        try:
+            await asyncio.to_thread(ctx.memory_service.expire_short, uid)
+        except Exception as e:
+            logger.warning("memory expire_short failed: %s", e)
     emit("memory_load", {"count": len(memory)})
     return {"memory": memory}
 
@@ -273,25 +315,76 @@ async def extract_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
 
 
 async def save_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """写入前审核 → 落库：审核不过的丢弃，超上限的丢弃。"""
+    """写入前审核 → 归一化（tier/topic）→ 落库 → 超限触发膨胀控制管线。"""
     if ctx.memory_service is None:
         return {}
     saved = 0
     for m in state.get("new_memories", []):
         if not _review(m):
             continue                                   # 审核不通过，丢弃
-        count = await asyncio.to_thread(ctx.memory_service.count,
-                                        state["user_id"])
-        if count >= MAX_MEMORIES_PER_USER:
-            break                                      # 达到上限，停止
+        m = _normalize_memory(m)
         try:
             await asyncio.to_thread(ctx.memory_service.set,
-                                    state["user_id"], m["key"], {"v": m["value"]})
+                                    state["user_id"], m["key"], {"v": m["value"]},
+                                    tier=m["tier"], topic=m["topic"])
             saved += 1
         except Exception:
             pass          # 记忆写入失败绝不影响主对话（锦上添花原则）
-    emit("memory_save", {"saved": saved})
+    stat = {"compressed": 0, "evicted": 0}
+    try:
+        count = await asyncio.to_thread(ctx.memory_service.count, state["user_id"])
+        if count > MEMORY_MAX:                         # 超限：压缩 → LRU，而非丢弃新记忆
+            stat = await _maintain_memories(ctx, state["user_id"])
+            emit("memory_maintain", {"before": count, **stat})
+    except Exception as e:
+        logger.warning("memory maintain failed: %s", e)
+    emit("memory_save", {"saved": saved, **stat})
     return {}
+
+
+async def _maintain_memories(ctx: WorkflowContext, user_id: str) -> dict:
+    """膨胀控制管线：①LLM 主题压缩（同类合并）→ ②LRU 淘汰（先 short 后 core 兜底）。
+
+    每步失败降级到下一步，绝不打挂主对话。
+    """
+    ms = ctx.memory_service
+    stat = {"compressed": 0, "evicted": 0}
+    # ① 主题压缩：同 topic ≥2 条交给 LLM 合并成 1 条
+    try:
+        groups = await asyncio.to_thread(ms.topic_groups, user_id)
+        if groups:
+            payload = {t: g for t, g in groups.items()}
+            merged = await _merge_memories_llm(ctx, user_id, payload)
+            if merged:
+                # 附上组内 key 列表，apply_merge 据此删除被合并的旧条目
+                for item in merged:
+                    topic = item.get("topic")
+                    if topic in payload:
+                        item["group_keys"] = [r["key"] for r in payload[topic]]
+                stat["compressed"] = await asyncio.to_thread(
+                    ms.apply_merge, user_id, merged)
+    except Exception as e:
+        logger.warning("memory topic merge failed, fallback LRU: %s", e)
+    # ② LRU 淘汰到上限内（先 short；全 short 不够 core 兜底）
+    if await asyncio.to_thread(ms.count, user_id) > MEMORY_MAX:
+        stat["evicted"] = await asyncio.to_thread(ms.evict_overflow, user_id)
+    return stat
+
+
+async def _merge_memories_llm(ctx: WorkflowContext, user_id: str,
+                              groups: dict) -> list[dict] | None:
+    """一次 LLM 调用批处理所有分组的合并；失败返回 None（降级 LRU）。"""
+    try:
+        model = await asyncio.to_thread(
+            ctx.llm_service.get_chat_model, user_id, temperature=0.0)
+        resp = await model.ainvoke([
+            SystemMessage(content=MERGE_PROMPT),
+            HumanMessage(content=json.dumps(groups, ensure_ascii=False))])
+        data = _loads_fuzzy(str(resp.content or ""))
+        return data.get("merged", []) if data else None
+    except Exception as e:
+        logger.warning("memory merge LLM call failed: %s", e)
+        return None
 
 def _build_system_prompt(state: AgentState) -> str:
     """组装系统提示词：有检索结果 → 基于知识库作答；没有 → 直接用自己的知识作答。

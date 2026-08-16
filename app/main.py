@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from app.abstractions.llm import LLMService
 from app.api.auth import router as auth_router
@@ -23,7 +24,7 @@ from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter
 from app.mcp.host import MCPHost
-from app.models import Conversation
+from app.models import Conversation, Memory
 from app.services.kb_service import KBService
 from app.services.memory_service import MemoryService
 from app.api.memories import router as memories_router
@@ -40,6 +41,17 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     # 会话登记表（跨设备同步）：幂等建表，已有表不动
     Conversation.__table__.create(engine, checkfirst=True)
+    # 记忆分层列（膨胀控制）：新建表含新列；旧表幂等补列 + 存量回填
+    Memory.__table__.create(engine, checkfirst=True)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
+                          "tier VARCHAR(8) NOT NULL DEFAULT 'core'"))
+        conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
+                          "topic VARCHAR(64) NOT NULL DEFAULT ''"))
+        conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
+                          "last_used_at TIMESTAMPTZ"))
+        conn.execute(text("UPDATE memories SET last_used_at = updated_at "
+                          "WHERE last_used_at IS NULL"))
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)

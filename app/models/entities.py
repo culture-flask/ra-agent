@@ -98,12 +98,19 @@ class ToolCallLog(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class Memory(Base):
-    """长记忆：用户级命名空间，跨会话读取。"""
-    __tablename__ = "memories"
+    """长记忆：用户级命名空间，跨会话读取。
 
+    分层（膨胀控制）：tier=core 常驻并注入每轮 prompt；tier=short 临时性
+    事实，不注入且 TTL 过期自动清除。topic 供主题压缩分组，last_used_at
+    供 LRU 淘汰（注入即使用，见 load_memory_node）。
+    """
+    __tablename__ = "memories"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     key: Mapped[str] = mapped_column(String(64))         # 记忆条目名，如 research_topic
     value: Mapped[dict] = mapped_column(JSON, default=dict)
+    tier: Mapped[str] = mapped_column(String(8), default="core")     # core | short
+    topic: Mapped[str] = mapped_column(String(64), default="")       # 主题（压缩分组用）
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                  onupdate=utcnow)

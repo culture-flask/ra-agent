@@ -63,6 +63,21 @@ import pytest
 from sqlalchemy import text
 
 from app.core.db import engine
+from app.models import Conversation, Memory
+
+# 测试库 schema 迁移（与 app.main lifespan 相同的幂等 DDL）：
+# service 级测试不走 lifespan，先在这里补表/补列，否则查询新列直接报错
+Conversation.__table__.create(engine, checkfirst=True)
+Memory.__table__.create(engine, checkfirst=True)
+with engine.begin() as conn:
+    conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
+                      "tier VARCHAR(8) NOT NULL DEFAULT 'core'"))
+    conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
+                      "topic VARCHAR(64) NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
+                      "last_used_at TIMESTAMPTZ"))
+    conn.execute(text("UPDATE memories SET last_used_at = updated_at "
+                      "WHERE last_used_at IS NULL"))
 
 
 @pytest.fixture(autouse=True)

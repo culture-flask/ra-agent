@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     no_proxy: str = "localhost,127.0.0.1"
     mcp_servers: dict = Field(default_factory=dict)
     llm_providers: dict = Field(default_factory=dict)
+    memory_max: int = 50                      # 每用户长期记忆条数上限（超限触发压缩/LRU）
+    memory_short_ttl_days: int = 14           # short 层记忆过期天数（未更新自动清除）
 
     @classmethod
     def load(cls) -> "Settings":
@@ -81,6 +83,8 @@ class Settings(BaseSettings):
                 "embedding_local_default_dim": raw["embedding"]["local"]["default_dim"],
                 "mcp_servers": raw.get("mcp_servers", {}),
                 "llm_providers": raw.get("llm", {}).get("providers", {}),   # 容错:缺段用空目录
+                "memory_max": raw.get("memory", {}).get("max", 50),
+                "memory_short_ttl_days": raw.get("memory", {}).get("short_ttl_days", 14),
             }
             for key, value in yaml_values.items():
                 if key not in merged.model_fields_set:
