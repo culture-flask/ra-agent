@@ -64,6 +64,41 @@ def test_register_and_list():
         _del_rows("conv-list-a", "conv-list-b", "conv-list-c")
 
 
+def test_rename_conversation():
+    """会话改名：PATCH title 生效；改名后再发消息登记不覆盖；权限与空名校验。"""
+    _register_conversation("conv-u1", "conv-ren-a", "自动标题：量子计算入门")
+    try:
+        with TestClient(app) as c:
+            # 改名
+            r = c.patch("/api/v1/conversations/conv-ren-a",
+                        params={"user_id": "conv-u1"},
+                        json={"title": "量子计算资料整理"})
+            assert r.status_code == 200
+            assert r.json()["title"] == "量子计算资料整理"
+            # 列表可见新名
+            convs = c.get("/api/v1/conversations",
+                          params={"user_id": "conv-u1"}).json()["conversations"]
+            a = next(x for x in convs if x["session_id"] == "conv-ren-a")
+            assert a["title"] == "量子计算资料整理"
+            # 改名后再登记（发消息）：title 不被自动标题覆盖
+            _register_conversation("conv-u1", "conv-ren-a", "自动标题不该赢")
+            with SessionLocal() as db:
+                assert db.get(Conversation, "conv-ren-a").title == "量子计算资料整理"
+            # 空名 → 400
+            assert c.patch("/api/v1/conversations/conv-ren-a",
+                           params={"user_id": "conv-u1"},
+                           json={"title": "   "}).status_code == 400
+            # 非本人 → 403；不存在 → 404
+            assert c.patch("/api/v1/conversations/conv-ren-a",
+                           params={"user_id": "conv-u2"},
+                           json={"title": "x"}).status_code == 403
+            assert c.patch("/api/v1/conversations/ghost",
+                           params={"user_id": "conv-u1"},
+                           json={"title": "x"}).status_code == 404
+    finally:
+        _del_rows("conv-ren-a")
+
+
 class _FakeModel:
     def bind_tools(self, schemas):
         return self

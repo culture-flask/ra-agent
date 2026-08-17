@@ -39,6 +39,8 @@ class ChatRequest(BaseModel):
     parent_groups: int | None = None
     # 对话附件：/chat/files 上传解析后返回的 file_id 列表，内容拼进本轮用户消息
     attachments: list[str] = []
+    # 会话标题：本地已改名的会话首次登记时用（None=自动取首条消息截断）
+    title: str | None = None
 
 
 def _initial_state(req: ChatRequest, append_message: bool = True) -> dict:
@@ -225,7 +227,7 @@ async def chat(req: ChatRequest, request: Request):
     try:
         await run_in_threadpool(_register_conversation, req.user_id,
                                 req.session_id,
-                                _conv_title(result.get("messages", [])))
+                                req.title or _conv_title(result.get("messages", [])))
     except Exception as e:
         logger.warning("conversation register failed: %s", e)
     return {
@@ -261,7 +263,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             try:
                 await asyncio.to_thread(_register_conversation, req.user_id,
                                         req.session_id,
-                                        _conv_title(result.get("messages", [])))
+                                        req.title or _conv_title(result.get("messages", [])))
             except Exception as e:
                 logger.warning("conversation register failed: %s", e)
             # 上下文占用推流：窗口（模型响应探测/默认）+ 压缩后的消息估测 tokens

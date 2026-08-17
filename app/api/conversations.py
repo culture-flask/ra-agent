@@ -10,6 +10,7 @@ import re
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.chat import _ATT_MARK
@@ -93,6 +94,35 @@ async def conversation_messages(session_id: str, request: Request,
             if text.strip():                     # 跳过纯工具调用（content 为空）的中间轮
                 out.append({"role": "assistant", "content": text})
     return {"session_id": session_id, "messages": out}
+
+
+class ConversationRenameRequest(BaseModel):
+    """会话改名（用户自定义标题，方便后续找到对话）。"""
+    title: str
+
+
+@router.patch("/{session_id}")
+async def rename_conversation(session_id: str, req: ConversationRenameRequest,
+                              user_id: str = "u1"):
+    """修改会话名称（仅本人）。改名后不被自动标题覆盖——
+    发消息只刷新 updated_at，title 仅首次登记时生成（见 chat._register_conversation）。
+    """
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="会话名称不能为空")
+    row = await run_in_threadpool(_get_row, session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    if row.user_id != user_id:
+        raise HTTPException(status_code=403, detail="not conversation owner")
+
+    def _rename():
+        with SessionLocal() as db:
+            obj = db.get(Conversation, session_id)
+            obj.title = title[:128]
+            db.commit()
+    await run_in_threadpool(_rename)
+    return {"session_id": session_id, "title": title[:128]}
 
 
 @router.delete("/{session_id}")

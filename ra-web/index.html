@@ -1,0 +1,2294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>科研助手 · Research Assistant</title>
+<style>
+:root{
+  --bg:#f2f5fa; --surface:#ffffff; --panel:#f7f9fc; --ink:#1f2733; --muted:#5b6776;
+  --line:#d8e0ea; --accent:#2f6df0; --accent2:#11a87a; --warn:#e0820b;
+  --user:#7c4dff; --session:#00a5b8; --chip:#eef3fb; --tool:#d6336c; --danger:#e03131;
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}   /* 让 hidden 属性优先于 #app/#auth-view 的 display:flex */
+html,body{height:100%}
+body{margin:0;font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--ink);background:var(--bg);font-size:14px;line-height:1.6}
+button{font-family:inherit;cursor:pointer}
+input,select,textarea{font-family:inherit;font-size:14px;color:var(--ink)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#c7d2e2;border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- 通用组件 ---------- */
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;
+  color:var(--ink);padding:8px 14px;border-radius:8px;font-size:13.5px;transition:.15s}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:#2460d8;color:#fff}
+.btn.danger{color:var(--danger)}
+.btn.danger:hover{border-color:var(--danger);color:var(--danger)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.sm{padding:4px 10px;font-size:12.5px;border-radius:6px}
+.badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:600}
+.badge.blue{background:var(--chip);color:var(--accent)}
+.badge.green{background:#e8f7f1;color:var(--accent2)}
+.badge.purple{background:#f1ebff;color:var(--user)}
+.badge.pink{background:#fbe8f0;color:var(--tool)}
+.badge.orange{background:#fdf1e0;color:var(--warn)}
+.badge.red{background:#fdecec;color:var(--danger)}
+.badge.gray{background:#eef1f6;color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+.field .hint{font-size:12px;color:var(--muted);font-weight:400;margin-top:4px}
+.input,select.input,textarea.input{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:8px;
+  background:#fff;outline:none;transition:.15s}
+.input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(47,109,240,.12)}
+textarea.input{resize:vertical;min-height:80px}
+.muted{color:var(--muted)}
+.empty{text-align:center;padding:48px 20px;color:var(--muted)}
+.empty .big{font-size:15px;font-weight:600;color:var(--ink);margin-bottom:6px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.ok{background:var(--accent2)}
+.dot.bad{background:var(--danger)}
+.dot.warn{background:var(--warn)}
+
+/* ---------- 登录页 ---------- */
+#auth-view{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-card{width:400px;background:var(--surface);border:1px solid var(--line);border-radius:16px;
+  padding:34px 34px 28px;box-shadow:0 12px 40px rgba(31,39,51,.08)}
+.auth-logo{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.auth-logo svg{width:34px;height:34px}
+.auth-title{font-size:20px;font-weight:700}
+.auth-sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+.auth-tabs{display:flex;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-bottom:20px}
+.auth-tabs button{flex:1;padding:9px;border:none;background:#fff;font-size:13.5px;color:var(--muted)}
+.auth-tabs button.active{background:var(--accent);color:#fff;font-weight:600}
+.auth-err{display:none;background:#fdecec;color:var(--danger);border-radius:8px;
+  padding:9px 12px;font-size:13px;margin-bottom:14px}
+.advanced{margin-top:16px;border-top:1px dashed var(--line);padding-top:14px}
+.advanced summary{cursor:pointer;font-size:13px;color:var(--muted)}
+
+/* ---------- 应用骨架 ---------- */
+#app{display:flex;height:100vh;overflow:hidden}
+aside{width:252px;min-width:252px;background:var(--surface);border-right:1px solid var(--line);
+  display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:9px;padding:18px 18px 14px;border-bottom:1px solid var(--line)}
+.brand svg{width:28px;height:28px}
+.brand .t1{font-weight:700;font-size:15.5px}
+.brand .t2{font-size:11px;color:var(--muted);margin-top:-2px}
+nav{padding:12px 12px 6px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;cursor:pointer;
+  color:var(--muted);font-size:13.5px;margin-bottom:2px;transition:.12s;user-select:none}
+.nav-item svg{width:17px;height:17px;flex:none}
+.nav-item:hover{background:var(--panel);color:var(--ink)}
+.nav-item.active{background:var(--chip);color:var(--accent);font-weight:600}
+#session-zone{flex:1;overflow-y:auto;padding:4px 12px 12px;display:none}
+#session-zone.show{display:block}
+.sess-head{display:flex;align-items:center;justify-content:space-between;margin:8px 0 6px}
+.sess-head span{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.5px}
+.sess-item{padding:8px 10px;border-radius:8px;font-size:13px;cursor:pointer;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px;border:1px solid transparent}
+.sess-item:hover{background:var(--panel)}
+.sess-item.active{background:var(--chip);border-color:#c9d9f8}
+.sess-item .del{float:right;color:var(--muted);opacity:0;font-size:12px;padding:0 4px}
+.sess-item:hover .del{opacity:1}
+.sess-item .del:hover{color:var(--danger)}
+.sess-item .sid{float:right;color:var(--muted);opacity:0;font-size:11px;padding:0 4px;margin-right:2px}
+.sess-item:hover .sid{opacity:.85}
+.sess-item .sid:hover{color:var(--accent)}
+.sess-item .ren{float:right;color:var(--muted);opacity:0;font-size:11px;padding:0 4px;margin-right:2px}
+.sess-item:hover .ren{opacity:.85}
+.sess-item .ren:hover{color:var(--accent)}
+.side-foot{border-top:1px solid var(--line);padding:12px 14px;font-size:12.5px}
+.api-status{display:flex;align-items:center;gap:7px;color:var(--muted);margin-bottom:10px;cursor:pointer}
+.api-status:hover{color:var(--accent)}
+.user-row{display:flex;align-items:center;justify-content:space-between}
+.user-row .name{font-weight:600;font-size:13px}
+.user-row .role{color:var(--muted);font-size:11.5px}
+.linkbtn{border:none;background:none;color:var(--muted);font-size:12.5px;padding:2px 4px}
+.linkbtn:hover{color:var(--danger)}
+
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+main>header{background:var(--surface);border-bottom:1px solid var(--line);padding:16px 28px;
+  display:flex;align-items:center;justify-content:space-between;gap:16px}
+main>header h1{font-size:17px;margin:0}
+main>header .sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+.view{flex:1;overflow-y:auto;padding:22px 28px;display:none}
+.view.active{display:block}
+
+/* ---------- 对话视图 ---------- */
+#view-chat{display:none;flex-direction:column;padding:0;overflow:hidden}
+#view-chat.active{display:flex}
+#messages{flex:1;overflow-y:auto;padding:24px 28px 12px}
+/* 上下文占用条 + 检索模式切换：输入框上方一行 */
+#chat-toolbar{max-width:820px;margin:0 auto;padding:2px 28px 0;display:flex;align-items:center;gap:10px}
+.ctx-meter{flex:1;min-width:0;font-size:11.5px;color:var(--muted);
+  display:flex;align-items:center;gap:10px;user-select:none}
+.ctx-meter.hidden{display:none}
+.ctx-meter .ctx-bar{flex:1;height:4px;border-radius:2px;background:#eef1f6;overflow:hidden;min-width:80px}
+.ctx-meter .ctx-bar i{display:block;height:100%;width:0;background:var(--accent2);transition:width .3s}
+.ctx-meter.mid .ctx-bar i{background:var(--warn)}
+.ctx-meter.warn .ctx-bar i{background:var(--danger)}
+/* 检索模式切换：向量 / 混合(BM25) */
+.retrieval-switch{display:inline-flex;align-items:center;gap:4px;background:#eef1f6;
+  border-radius:14px;padding:2px;flex:none}
+.retrieval-switch .rs-btn{border:none;background:none;padding:3px 10px;font-size:11.5px;
+  border-radius:12px;color:var(--muted);cursor:pointer;transition:.12s}
+.retrieval-switch .rs-btn.on{background:#fff;color:var(--accent);font-weight:600;
+  box-shadow:0 1px 3px rgba(31,39,51,.12)}
+/* 检索数量输入：每库几条 / 总共几条 */
+.rk-input{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--muted);flex:none}
+.rk-input input{width:42px;padding:2px 5px;border:1px solid var(--line);border-radius:6px;
+  font-size:12px;text-align:center;background:#fff;outline:none}
+.rk-input input:focus{border-color:var(--accent)}
+.msg{max-width:820px;margin:0 auto 18px}
+.msg .row{display:flex;gap:10px}
+.msg.user .row{justify-content:flex-end}
+/* 消息操作条：hover 显示（分支 / 重新生成） */
+.msg-actions{display:none;gap:6px;margin-top:6px;padding-left:40px}
+.msg.user .msg-actions{padding-left:0;justify-content:flex-end}
+.msg:hover .msg-actions{display:flex}
+.msg-actions .btn{padding:2px 10px;font-size:12px;border-radius:6px}
+.msg-actions .btn:hover{border-color:var(--accent);color:var(--accent)}
+.avatar{width:30px;height:30px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;color:#fff;margin-top:2px}
+.msg.user .avatar{background:var(--accent)}
+.msg.assistant .avatar{background:var(--accent2)}
+.bubble-wrap{max-width:calc(100% - 44px)}
+.msg.user .bubble{background:var(--accent);color:#fff;border-radius:12px 12px 4px 12px;padding:10px 14px;
+  white-space:pre-wrap;word-break:break-word}
+.msg.assistant .bubble{background:#fff;border:1px solid var(--line);border-radius:12px 12px 12px 4px;
+  padding:12px 16px;word-break:break-word}
+.bubble pre{background:#0f172a;color:#e6edf7;padding:12px 14px;border-radius:8px;overflow:auto;
+  font-size:12.5px;line-height:1.55;margin:8px 0}
+.bubble code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12.5px;
+  font-family:"SFMono-Regular",Consolas,Monaco,monospace}
+.bubble pre code{background:none;color:inherit;padding:0}
+.bubble p{margin:6px 0}
+.cursor{display:inline-block;width:8px;height:15px;background:var(--accent2);vertical-align:-2px;
+  margin-left:2px;animation:blink 1s step-end infinite}
+@keyframes blink{50%{opacity:0}}
+.steps{margin-bottom:8px}
+.steps summary{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;
+  color:var(--muted);padding:4px 10px;background:#fff;border:1px solid var(--line);border-radius:16px;
+  list-style:none;user-select:none}
+.steps summary::-webkit-details-marker{display:none}
+.steps summary:hover{border-color:var(--accent);color:var(--accent)}
+.steps[open] summary{border-color:var(--accent);color:var(--accent)}
+.step-list{background:#fff;border:1px solid var(--line);border-radius:10px;margin-top:6px;padding:8px 12px}
+.step{display:flex;gap:9px;padding:6px 0;font-size:12.5px;align-items:flex-start}
+.step+.step{border-top:1px dashed #edf1f7}
+.step .sdot{width:7px;height:7px;border-radius:50%;margin-top:6px;flex:none}
+.step .slabel{font-weight:600;flex:none}
+.step .sdesc{color:var(--muted);word-break:break-all}
+.step .sdesc code{background:var(--chip);padding:0 4px;border-radius:4px;font-size:11.5px}
+details.cites{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+details.cites summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);
+  list-style:none;display:inline-flex;align-items:center;gap:6px;user-select:none}
+details.cites summary::-webkit-details-marker{display:none}
+details.cites summary::before{content:"▸";transition:.15s;font-size:11px}
+details.cites[open] summary::before{content:"▾"}
+details.cites summary:hover{color:var(--accent)}
+details.cites .cites-body{margin-top:8px}
+.cite{font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:8px 10px;margin-bottom:6px}
+.cite.parent{background:#eef7f3;border-color:#bfe3d6}   /* 聚合父块：完整段落，浅绿标识 */
+.cite .ch{display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap}
+.cite .txt{color:var(--muted);white-space:pre-wrap}
+#composer{border-top:1px solid var(--line);background:var(--surface);padding:14px 28px 18px}
+.composer-inner{max-width:820px;margin:0 auto;display:flex;gap:10px;align-items:flex-end}
+#chat-input{flex:1;min-height:46px;max-height:160px;padding:11px 14px;border:1px solid var(--line);
+  border-radius:12px;resize:none;outline:none}
+#chat-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(47,109,240,.12)}
+#send-btn{padding:11px 22px;border-radius:12px}
+.btn.sm{padding:4px 10px;font-size:12px;border-radius:8px}
+.btn.danger{border-color:#e5484d;color:#e5484d}
+.mem-toolbar{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;margin-bottom:10px;flex-wrap:wrap}
+#attach-btn{padding:11px 14px;border-radius:12px;flex:none}
+#attach-bar{max-width:820px;margin:0 auto 8px;display:flex;flex-wrap:wrap;gap:6px}
+#attach-bar:empty{display:none}
+.att-chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;
+  border:1px solid var(--line);border-radius:14px;background:var(--surface);max-width:260px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.att-chip.ok{border-color:var(--accent)}
+.att-chip.err{border-color:#e5484d;color:#e5484d}
+.att-chip .x{cursor:pointer;color:var(--muted);font-size:11px}
+.msg-files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.msg-files .att-chip{background:rgba(47,109,240,.08)}
+.chat-empty{max-width:820px;margin:40px auto;padding:0 28px}
+.chat-empty h2{font-size:19px;margin:0 0 4px}
+.chat-empty .muted{margin-bottom:22px}
+.hint-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.hint-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+  cursor:pointer;transition:.15s;font-size:13px}
+.hint-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 6px 18px rgba(47,109,240,.10)}
+.hint-card .hc-t{font-weight:600;margin-bottom:4px;display:flex;gap:7px;align-items:center}
+.hint-card .hc-d{color:var(--muted);font-size:12.5px}
+
+/* ---------- 知识库视图 ---------- */
+.kb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-top:16px}
+.kb-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+  cursor:pointer;transition:.15s;border-top:4px solid var(--accent);position:relative}
+.kb-del{position:absolute;top:9px;right:10px;border:none;background:none;color:var(--muted);
+  font-size:13px;opacity:0;transition:.15s;padding:3px 7px;border-radius:6px}
+.kb-card:hover .kb-del{opacity:1}
+.kb-del:hover{color:var(--danger);background:#fdecec}
+.kb-card:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(31,39,51,.08);border-color:var(--accent)}
+.kb-card.private{border-top-color:var(--user)}
+.kb-card h3{margin:0 0 8px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.kb-meta{font-size:12.5px;color:var(--muted);display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.kb-meta .row{display:flex;justify-content:space-between;gap:10px}
+.kb-meta code{background:var(--chip);padding:0 6px;border-radius:4px;font-size:11.5px}
+.pulse{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.45}}
+
+/* ---------- 表格 ---------- */
+table.tbl{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);
+  border-radius:12px;overflow:hidden;font-size:13px}
+.tbl th{background:var(--panel);text-align:left;padding:10px 12px;font-weight:600;border-bottom:1px solid var(--line)}
+.tbl td{padding:10px 12px;border-bottom:1px solid #eef1f7;vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr.expander{cursor:pointer}
+.tbl tr.expander:hover{background:var(--panel)}
+.tbl tr.detail td{background:var(--panel)}
+.tbl pre{background:#0f172a;color:#e6edf7;border-radius:8px;padding:10px 12px;font-size:12px;
+  overflow:auto;max-height:220px;margin:4px 0}
+.mono{font-family:"SFMono-Regular",Consolas,Monaco,monospace;font-size:12px}
+.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+.toolbar .spacer{flex:1}
+.toolbar .input{width:auto}
+
+/* ---------- LLM 配置视图 ---------- */
+.llm-layout{display:grid;grid-template-columns:400px 1fr;gap:18px;align-items:start}
+@media(max-width:1100px){.llm-layout{grid-template-columns:1fr}}
+.model-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:180px;overflow-y:auto}
+.model-chip{padding:4px 11px;border:1px solid var(--line);border-radius:16px;font-size:12.5px;
+  cursor:pointer;background:#fff}
+.model-chip:hover{border-color:var(--accent);color:var(--accent)}
+.model-chip.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+/* ---------- 弹窗 / Toast ---------- */
+#modal-root{position:fixed;inset:0;display:none;z-index:100}
+#modal-root.show{display:block}
+.modal-overlay{position:absolute;inset:0;background:rgba(15,23,42,.45)}
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(660px,92vw);
+  max-height:86vh;overflow-y:auto;background:#fff;border-radius:14px;padding:22px 24px;
+  box-shadow:0 20px 60px rgba(15,23,42,.25)}
+.modal h2{margin:0 0 4px;font-size:16.5px}
+.modal .msub{font-size:12.5px;color:var(--muted);margin-bottom:16px}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+.modal .close-x{position:absolute;top:14px;right:16px;border:none;background:none;font-size:18px;color:var(--muted)}
+.modal .close-x:hover{color:var(--ink)}
+.section-t{font-size:13px;font-weight:700;margin:18px 0 8px;padding-left:9px;border-left:3px solid var(--accent)}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:6px 12px;font-size:13px}
+.kv .k{color:var(--muted)}
+.kv code{background:var(--chip);padding:1px 6px;border-radius:4px;font-size:12px}
+.search-hit{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+  margin-bottom:8px;font-size:12.5px}
+.search-hit .txt{white-space:pre-wrap;color:var(--ink);margin-top:4px}
+#toast-root{position:fixed;bottom:22px;right:22px;z-index:200;display:flex;flex-direction:column;gap:10px}
+.toast{background:#fff;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;
+  padding:11px 16px;font-size:13px;box-shadow:0 8px 26px rgba(15,23,42,.14);max-width:380px;
+  animation:slidein .25s ease}
+.toast.ok{border-left-color:var(--accent2)}
+.toast.err{border-left-color:var(--danger)}
+@keyframes slidein{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
+
+/* ================= Dark Academia / Candlelit Study ================= */
+:root{
+  --bg:#110f12; --surface:#1a1717; --panel:#201b1a; --ink:#f2ead8; --muted:#b9ad99;
+  --line:rgba(198,164,102,.24); --accent:#c99a4a; --accent2:#8b9d77; --warn:#d18b4a;
+  --user:#a77bba; --session:#9c8b67; --chip:rgba(201,154,74,.12); --tool:#c47b72; --danger:#d8786b;
+}
+html{background:#110f12}
+body{font-family:"Crimson Pro","Noto Serif SC","Songti SC","SimSun",serif;color:var(--ink);background:
+  radial-gradient(circle at 72% 10%,rgba(216,157,75,.09),transparent 22rem),
+  radial-gradient(circle at 18% 88%,rgba(94,74,48,.12),transparent 26rem),#110f12;letter-spacing:.01em}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.12;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.28'/%3E%3C/svg%3E");mix-blend-mode:screen}
+#particle-canvas{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;opacity:.72}
+#auth-view,#app{position:relative;z-index:1}
+button,input,select,textarea{font-family:"Atkinson Hyperlegible","Noto Sans SC","Microsoft YaHei",sans-serif}
+.btn{background:rgba(201,154,74,.06);border-color:var(--line);color:var(--ink);border-radius:7px;transition:transform .2s ease,border-color .2s ease,background .2s ease,box-shadow .2s ease}
+.btn:hover{border-color:var(--accent);color:#f5d99e;background:rgba(201,154,74,.12);box-shadow:0 0 18px rgba(201,154,74,.12);transform:translateY(-1px)}
+.btn.primary{background:linear-gradient(135deg,#b58136,#d3aa5e);border-color:#d3aa5e;color:#21170d;box-shadow:0 5px 18px rgba(201,154,74,.18)}
+.btn.primary:hover{background:linear-gradient(135deg,#d3aa5e,#e2c47e);color:#21170d}
+.card,.kb-card,.hint-card,.tbl,.modal,.auth-card{background:linear-gradient(135deg,rgba(42,34,29,.94),rgba(25,22,22,.96));border-color:var(--line);box-shadow:0 14px 36px rgba(0,0,0,.22)}
+.input,select.input,textarea.input,#chat-input{background:rgba(12,11,12,.72);border-color:var(--line);color:var(--ink)}
+.input::placeholder,#chat-input::placeholder{color:#b9ad99;opacity:.9}
+.muted,.field .hint,.auth-sub,.brand .t2,.side-foot,.api-status,.rk-input,.ctx-meter,.view-sub{color:#c8bba7}
+.input:focus,#chat-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(201,154,74,.15)}
+#auth-view{background:radial-gradient(circle at 50% 43%,rgba(201,154,74,.10),transparent 24rem)}
+.auth-card{width:min(440px,calc(100vw - 32px));border-radius:3px;padding:38px 36px 30px;position:relative}
+.auth-card:before,.modal:before{content:"";position:absolute;inset:8px;border:1px solid rgba(201,154,74,.14);pointer-events:none}
+.auth-title,.main>header h1,.chat-empty h2,.modal h2{font-family:"Crimson Pro","Noto Serif SC",serif;letter-spacing:.03em}
+.auth-logo svg,.brand svg{filter:sepia(.5) saturate(.8);border-radius:50%}
+.wax-seal{width:29px;height:29px;border-radius:50%;display:grid;place-items:center;flex:none;background:radial-gradient(circle at 35% 30%,#bd5a4f,#6e211f 70%);border:2px solid #d77b69;color:#f6d2a1;font:700 10px "Crimson Pro",serif;letter-spacing:.08em;box-shadow:0 2px 8px rgba(0,0,0,.4),inset 0 0 0 2px rgba(63,10,8,.4)}
+.auth-tabs{border-color:var(--line);background:#0f0d0e}.auth-tabs button{background:transparent;color:var(--muted)}
+.auth-tabs button.active{background:rgba(201,154,74,.2);color:#f3d18d;border-bottom:2px solid var(--accent)}
+aside{background:rgba(23,20,20,.92);border-right-color:var(--line);backdrop-filter:blur(12px)}
+.brand{border-bottom-color:var(--line);padding:21px 18px 17px}.brand .t1{color:#f3d18d}.brand .t2{color:#c8bba7}
+.nav-item{color:#b4a894;border-radius:5px}.nav-item:hover{background:rgba(201,154,74,.09);color:#f3d18d}.nav-item.active{background:rgba(201,154,74,.14);color:#f3d18d;box-shadow:inset 3px 0 var(--accent)}
+.sess-item{color:#d4c7b2;border-radius:4px}.sess-item:hover,.sess-item.active{background:rgba(201,154,74,.09)}.sess-item.active{border-color:rgba(201,154,74,.28)}
+.side-foot,main>header,#composer{border-color:var(--line);background:rgba(23,20,20,.88);backdrop-filter:blur(12px)}
+main>header{padding:20px 30px}main>header h1{font-size:21px;color:#f0d49b}.view{padding:26px 30px}
+.msg.assistant .bubble,.steps summary,.step-list,.hint-card,.kb-card,.tbl{background:rgba(37,31,28,.96);border-color:var(--line);color:#f2ead8}
+.steps summary:hover,details.cites summary:hover{color:#f3d18d}
+.msg.user .bubble{background:linear-gradient(135deg,#76518a,#a77bba);color:#fffaf0}.msg.assistant .avatar{background:#7f8f6c}.msg.user .avatar{background:#8c668f}
+#chat-toolbar{padding-top:8px}.retrieval-switch{background:#0f0d0e;border:1px solid var(--line)}.retrieval-switch .rs-btn.on{background:rgba(201,154,74,.18);color:#f3d18d;box-shadow:none}
+.rk-input input{background:#0f0d0e;border-color:var(--line);color:var(--ink)}
+.hint-card:hover,.kb-card:hover{border-color:var(--accent);box-shadow:0 10px 26px rgba(201,154,74,.12)}
+.kb-card{border-top-color:var(--accent)}.kb-card.private{border-top-color:var(--user)}
+.tbl th{background:rgba(201,154,74,.16);border-bottom-color:var(--line);color:#f3d9a0}.tbl td{border-bottom-color:rgba(198,164,102,.16);color:#f2ead8}
+.bubble pre,.tbl pre{background:#0a0909}.bubble code,.step .sdesc code,.kv code{background:rgba(201,154,74,.12);color:#e8c77f}
+.toast{background:#211c1a;border-color:var(--line);color:#f2ead8}
+.toast .muted{color:#c8bba7}
+.modal-overlay{background:rgba(7,6,7,.72);backdrop-filter:blur(5px)}
+@media(max-width:780px){aside{width:72px;min-width:72px}.brand{justify-content:center;padding:16px 8px}.brand>div,nav .nav-item span,#session-zone,.side-foot .user-row{display:none}.nav-item{justify-content:center;padding:12px 8px}.side-foot{padding:10px}.api-status{justify-content:center}.view{padding:18px 16px}main>header{padding:16px}.theme-toggle{font-size:0;padding:8px 10px}.theme-toggle .theme-icon{font-size:17px}.msg{max-width:100%}#messages{padding:18px 16px 10px}#chat-toolbar{padding:6px 16px;flex-wrap:wrap}.ctx-meter{order:10;flex-basis:100%}#composer{padding:12px 16px}.composer-inner{gap:6px}.rk-input{font-size:10px}}
+/* Light parchment theme: inspired by the supplied green reference, but normalized for readable contrast. */
+html[data-theme="light"]{background:#e9ece7;--bg:#e9ece7;--surface:#fbfcf8;--panel:#e2ebe3;--ink:#17251d;--muted:#304d3a;--line:#8ea995;--accent:#1d6638;--accent2:#2d7046;--chip:#dbe9dd;--danger:#9f3028}
+html[data-theme="light"] body{color:#26342e;background:radial-gradient(circle at 82% 8%,rgba(96,133,103,.14),transparent 24rem),linear-gradient(135deg,#f4f1eb,#e8ece5)}
+html[data-theme="light"] body:before{opacity:.07;mix-blend-mode:multiply}
+html[data-theme="light"] #particle-canvas{opacity:.82;mix-blend-mode:multiply}
+html[data-theme="dark"] #particle-canvas{opacity:.9}
+html[data-theme="light"] .card,html[data-theme="light"] .kb-card,html[data-theme="light"] .hint-card,html[data-theme="light"] .tbl,html[data-theme="light"] .modal,html[data-theme="light"] .auth-card{background:rgba(250,249,245,.96);border-color:rgba(64,92,73,.22);box-shadow:0 14px 32px rgba(43,63,49,.12)}
+html[data-theme="light"] aside,html[data-theme="light"] .side-foot,html[data-theme="light"] main>header,html[data-theme="light"] #composer{background:rgba(245,247,242,.94);border-color:rgba(64,92,73,.2)}
+html[data-theme="light"] .brand .t1,html[data-theme="light"] main>header h1,html[data-theme="light"] .auth-title{color:#123d24}
+html[data-theme="light"] .brand .t2,html[data-theme="light"] .muted,html[data-theme="light"] .field .hint,html[data-theme="light"] .auth-sub,html[data-theme="light"] .side-foot,html[data-theme="light"] .api-status,html[data-theme="light"] .rk-input,html[data-theme="light"] .ctx-meter,html[data-theme="light"] .view-sub{color:#304d3a}
+html[data-theme="light"] .nav-item{color:#294b37}html[data-theme="light"] .nav-item:hover{background:#dcebdd;color:#123d24}html[data-theme="light"] .nav-item.active{background:#cfe4d1;color:#123d24;box-shadow:inset 3px 0 #1d6638}
+html[data-theme="light"] .sess-item{color:#203d2b}html[data-theme="light"] .sess-item:hover,html[data-theme="light"] .sess-item.active{background:#dcebdd}html[data-theme="light"] .sess-item.active{border-color:#8eaf94}
+html[data-theme="light"] .input,html[data-theme="light"] select.input,html[data-theme="light"] textarea.input,html[data-theme="light"] #chat-input,html[data-theme="light"] .rk-input input,html[data-theme="light"] .btn,html[data-theme="light"] .model-chip,html[data-theme="light"] .att-chip{background:#ffffff;color:#17251d;border-color:#789681}
+html[data-theme="light"] .model-chip.sel{background:#1d6638!important;color:#ffffff!important;border-color:#124b27!important;box-shadow:0 3px 10px rgba(29,102,56,.28)}
+html[data-theme="light"] .model-chip.sel .muted{color:#e5f4e7!important}
+html[data-theme="light"] .model-chip:hover:not(.sel){background:#e3f0e5;color:#123d24;border-color:#1d6638}
+html[data-theme="light"] .retrieval-switch{background:#d5e5d7;border-color:#789681}
+html[data-theme="light"] .retrieval-switch .rs-btn{color:#294b37;background:transparent}
+html[data-theme="light"] .retrieval-switch .rs-btn:hover{background:#c1ddc5;color:#123d24}
+html[data-theme="light"] .retrieval-switch .rs-btn.on{background:#1d6638;color:#fff;box-shadow:0 2px 7px rgba(29,102,56,.28)}
+html[data-theme="light"] .input::placeholder,html[data-theme="light"] #chat-input::placeholder{color:#435d4b;opacity:1}
+html[data-theme="light"] .btn:hover{color:#123d24;border-color:#1d6638;background:#e4f0e5}html[data-theme="light"] .btn.primary{background:#1d6638;border-color:#1d6638;color:#fff}
+html[data-theme="light"] .msg.assistant .bubble,html[data-theme="light"] .steps summary,html[data-theme="light"] .step-list,html[data-theme="light"] .hint-card,html[data-theme="light"] .kb-card,html[data-theme="light"] table.tbl,html[data-theme="light"] .cite,html[data-theme="light"] .search-hit{background:#ffffff;color:#17251d;border-color:#8ea995}
+html[data-theme="light"] .msg.user .bubble{background:linear-gradient(135deg,#2d7046,#1d6638);color:#fff}
+html[data-theme="light"] .tbl th{background:#cfe4d1;color:#123d24;border-bottom-color:#8eaf94}html[data-theme="light"] .tbl td{color:#17251d;border-bottom-color:#c5d5c7}
+html[data-theme="light"] .bubble code,html[data-theme="light"] .step .sdesc code,html[data-theme="light"] .kv code{background:#dbe9dd;color:#123d24}
+html[data-theme="light"] .modal,html[data-theme="light"] .toast{background:#ffffff;color:#17251d}.modal{position:absolute}
+.theme-toggle{display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:rgba(201,154,74,.08);color:var(--ink);font-size:12px;transition:.2s;white-space:nowrap}.theme-toggle:hover{border-color:var(--accent);transform:translateY(-1px)}.theme-icon{font-size:16px;line-height:1}
+html[data-theme="light"] .theme-toggle{background:#d6e8d8;border-color:#789681;color:#123d24}
+html[data-theme="light"] .badge.blue{background:#dbe9dd;color:#164f2b}html[data-theme="light"] .badge.green{background:#d1e8d5;color:#164f2b}html[data-theme="light"] .badge.purple{background:#e8dcf0;color:#5b3271}html[data-theme="light"] .badge.orange{background:#f5e1c7;color:#75400f}html[data-theme="light"] .badge.red{background:#f3d9d6;color:#8d2b25}html[data-theme="light"] .badge.gray{background:#dfe7e0;color:#304d3a}
+/* Dark surfaces are enforced for all dynamically-rendered legacy components. */
+.btn,.input,select.input,textarea.input,.auth-tabs button,.retrieval-switch .rs-btn,.rk-input input,.msg.assistant .bubble,.steps summary,.step-list,.hint-card,.kb-card,table.tbl,.modal,.toast,.model-chip,.att-chip,.cite,.search-hit{color:#f4eddf}
+.empty,.kb-meta,.hint-card .hc-d,.cite .txt,.step .sdesc,.modal .msub,.kv .k{color:#d8cdbb}
+.empty .big,.section-t,.field label,.kb-card h3,.tbl th{color:#f6e6bc}
+html[data-theme="light"] .empty,html[data-theme="light"] .kb-meta,html[data-theme="light"] .hint-card .hc-d,html[data-theme="light"] .cite .txt,html[data-theme="light"] .step .sdesc,html[data-theme="light"] .modal .msub,html[data-theme="light"] .kv .k{color:#304d3a}
+html[data-theme="light"] .empty .big,html[data-theme="light"] .section-t,html[data-theme="light"] .field label,html[data-theme="light"] .kb-card h3{color:#123d24}
+.btn,.input,select.input,textarea.input,.auth-tabs button,.retrieval-switch .rs-btn,.rk-input input,.model-chip,.att-chip{background:#171416;border-color:rgba(231,190,103,.34)}
+.msg.assistant .bubble,.steps summary,.step-list,.hint-card,.kb-card,table.tbl,.cite,.search-hit{background:#211c1a}
+.modal,.toast{background:#1b1818}
+.tbl tr.detail td{background:#2a2320;color:#f4eddf}
+html[data-theme="light"] .tbl tr.detail td{background:#e6f0e7!important;color:#17251d!important;border-top:1px solid #a8c2ab}
+html[data-theme="light"] .tbl tr.detail pre{background:#f7fbf7!important;color:#173c25!important;border:1px solid #b7cfba;box-shadow:inset 0 0 0 1px rgba(29,102,56,.04)}
+html[data-theme="light"] .tbl tr.detail b{color:#123d24}
+html[data-theme="light"] .tbl tr.detail .muted{color:#304d3a!important}
+html[data-theme="light"] .warn-banner{background:#fff4d6!important;border-color:#c28a2f!important;color:#5c3b08!important;box-shadow:0 2px 8px rgba(120,76,12,.12)}
+
+.warn-banner{background:#3b291b!important;border-color:#c58a3c!important;color:#ffd58c!important}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<canvas id="particle-canvas" aria-hidden="true"></canvas>
+
+<!-- ================= 登录 / 注册 ================= -->
+<div id="auth-view" hidden>
+  <div class="auth-card">
+    <div class="auth-logo">
+      <svg viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#2f6df0"/><path d="M14 33V15h8.2c3.6 0 6 2.1 6 5.2 0 2.3-1.4 4-3.5 4.7L30 33h-4.6l-4.7-7.4H18V33h-4zm4-10.6h3.9c1.6 0 2.6-.9 2.6-2.2s-1-2.2-2.6-2.2H18v4.4z" fill="#fff"/><circle cx="34" cy="14" r="3" fill="#11a87a"/></svg>
+      <div>
+        <div class="auth-title">科研助手</div>
+      </div>
+    </div>
+    <div class="auth-sub">基于 LangGraph 的 AI Agent · 两级知识库 / MCP 工具 / 长记忆 / 自定义 LLM</div>
+    <div class="auth-tabs">
+      <button id="tab-login" class="active">登录</button>
+      <button id="tab-register">注册</button>
+    </div>
+    <div class="auth-err" id="auth-err"></div>
+    <div class="field"><label>用户名</label><input class="input" id="auth-username" placeholder="2-64 个字符" autocomplete="username"></div>
+    <div class="field"><label>密码</label><input class="input" id="auth-password" type="password" placeholder="至少 6 位" autocomplete="current-password"></div>
+    <button class="btn primary" id="auth-submit" style="width:100%;justify-content:center;padding:11px">登 录</button>
+    <details class="advanced">
+      <summary>后端地址设置</summary>
+      <div class="field" style="margin-top:10px">
+        <label>API Base URL</label>
+        <input class="input mono" id="auth-base" placeholder="http://localhost:8000">
+        <div class="hint">ra-agent 后端服务地址（FastAPI，默认 8000 端口）</div>
+      </div>
+    </details>
+  </div>
+</div>
+
+<!-- ================= 应用主体 ================= -->
+<div id="app" hidden>
+  <aside>
+    <div class="brand">
+      <div class="wax-seal" aria-hidden="true">RA</div>
+      <svg viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#2f6df0"/><path d="M14 33V15h8.2c3.6 0 6 2.1 6 5.2 0 2.3-1.4 4-3.5 4.7L30 33h-4.6l-4.7-7.4H18V33h-4zm4-10.6h3.9c1.6 0 2.6-.9 2.6-2.2s-1-2.2-2.6-2.2H18v4.4z" fill="#fff"/><circle cx="34" cy="14" r="3" fill="#11a87a"/></svg>
+      <div>
+        <div class="t1">科研助手</div>
+        <div class="t2">Research Assistant</div>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+    <div id="session-zone">
+      <div class="sess-head"><span>会话</span><button class="btn sm" id="new-session">+ 新会话</button></div>
+      <div id="session-list"></div>
+    </div>
+    <div class="side-foot">
+      <div class="api-status" id="api-status" title="点击重新检测">
+        <span class="dot warn" id="api-dot"></span><span id="api-status-text">检测后端连接…</span>
+      </div>
+      <div class="user-row">
+        <div><div class="name" id="user-name">-</div><div class="role" id="user-role">-</div></div>
+        <button class="linkbtn" id="logout-btn">退出</button>
+      </div>
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <div>
+        <h1 id="view-title">对话</h1>
+        <div class="sub" id="view-sub"></div>
+      </div>
+      <div id="view-actions"></div>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换浅色模式" title="切换浅色模式"><span class="theme-icon">☼</span><span class="theme-label">浅色模式</span></button>
+    </header>
+
+    <!-- 对话 -->
+    <section class="view" id="view-chat">
+      <div id="messages"></div>
+      <div id="chat-toolbar">
+        <div id="ctx-meter" class="ctx-meter hidden"></div>
+        <div id="retrieval-switch" class="retrieval-switch"></div>
+        <label class="rk-input" title="每个知识库检索几条（1~20）">每库 <input id="rk-per" type="number" min="1" max="20"></label>
+        <label class="rk-input" title="所有库合并后总共取几条（1~50）">共 <input id="rk-total" type="number" min="1" max="50"></label>
+        <label class="rk-input" title="生成温度：越高越随机（0~2，默认 0.3）">温度 <input id="rk-temp" type="number" min="0" max="2" step="0.1"></label>
+        <label class="rk-input" title="聚合返回：命中的相邻片段合并为完整段落返回，最多展开几个（0=关闭，全返回小片段）">父块 <input id="rk-parent" type="number" min="0" max="10"></label>
+      </div>
+      <div id="composer">
+        <div id="attach-bar"></div>
+        <div class="composer-inner">
+          <input type="file" id="chat-file" multiple accept=".txt,.md,.pdf,.docx" hidden>
+          <button class="btn" id="attach-btn" title="上传文件给模型阅读（txt/md/pdf/docx，可多选）" aria-label="上传文件给模型阅读"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m20.5 11.5-8.8 8.8a5 5 0 0 1-7.1-7.1l9.3-9.3a3.5 3.5 0 0 1 5 5l-9.4 9.4a2 2 0 0 1-2.8-2.8l8.7-8.7"/></svg></button>
+          <textarea id="chat-input" placeholder="输入你的研究问题，Enter 发送，Shift+Enter 换行（可先 📎 上传文件给模型阅读）"></textarea>
+          <button class="btn primary" id="send-btn">发送</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 知识库 -->
+    <section class="view" id="view-kb">
+      <div class="toolbar">
+        <button class="btn primary" id="kb-create-btn">+ 新建知识库</button>
+        <button class="btn" id="kb-refresh-btn">刷新</button>
+        <div class="spacer"></div>
+        <span class="muted" style="font-size:12.5px">公共库全员可见 · 私人库仅本人 · 每库绑定独立嵌入模型</span>
+      </div>
+      <div id="kb-list"></div>
+    </section>
+
+    <!-- 模型配置 -->
+    <section class="view" id="view-llm">
+      <div class="llm-layout">
+        <div class="card">
+          <div class="section-t" style="margin-top:0">新增 LLM 配置</div>
+          <div class="field">
+            <label>Provider（厂商分类）</label>
+            <select class="input" id="llm-provider"></select>
+          </div>
+          <div class="field"><label>Base URL</label><input class="input mono" id="llm-base-url"></div>
+          <div class="field">
+            <label>API Key</label>
+            <input class="input mono" id="llm-api-key" type="password" placeholder="sk-...（加密落库，仅回显掩码）">
+          </div>
+          <div class="field">
+            <label>Model ID</label>
+            <div style="display:flex;gap:8px">
+              <input class="input mono" id="llm-model-id" style="flex:1">
+              <button class="btn" id="llm-fetch-models">获取模型列表</button>
+            </div>
+            <div class="model-chips" id="llm-model-chips"></div>
+          </div>
+          <div class="field">
+            <label>上下文长度（tokens，可选）</label>
+            <input class="input mono" id="llm-ctx-window" type="number" min="1024" max="10000000"
+              placeholder="留空 = 自动（探测模型元数据，兜底 256,000）">
+            <div class="hint" style="font-size:12px;color:var(--muted);margin-top:6px">
+              显式指定该模型的上下文窗口，达到 80% 触发自动压缩；点选模型时若元数据带窗口会自动填充
+            </div>
+          </div>
+          <div class="field" style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="llm-is-default" style="width:15px;height:15px">
+            <label for="llm-is-default" style="margin:0;font-weight:400">设为默认模型（会话优先使用）</label>
+          </div>
+          <button class="btn primary" id="llm-save" style="width:100%;justify-content:center">保存配置</button>
+          <div class="hint" style="font-size:12px;color:var(--muted);margin-top:10px">
+            未配置时系统使用默认模型（sensenova / deepseek-v4-flash）。OpenAI 协议兼容的厂商均可接入。
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-t" style="margin-top:0">我的配置</div>
+          <div id="llm-config-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 长期记忆 -->
+    <section class="view" id="view-memory">
+      <div class="toolbar">
+        <button class="btn" id="memory-refresh">刷新</button>
+        <div class="spacer"></div>
+        <span class="muted" style="font-size:12.5px">对话结束后自动抽取，经审核写入，跨会话生效</span>
+      </div>
+      <div id="memory-list"></div>
+    </section>
+
+    <!-- 调用追踪 -->
+    <section class="view" id="view-trace">
+      <div class="toolbar">
+        <input class="input mono" id="trace-session" placeholder="按 session_id 过滤（可空）" style="width:280px">
+        <button class="btn" id="trace-query">查询</button>
+        <button class="btn" id="trace-current" title="把当前聊天会话的 session_id 填入过滤框">当前会话</button>
+        <div class="spacer"></div>
+        <span class="muted mono" id="trace-active-sid" style="font-size:12px;cursor:pointer" title="点击复制"></span>
+        <span class="muted" style="font-size:12.5px">LLM / 工具 / 检索调用全链路日志（ToolCallLog）</span>
+      </div>
+      <div id="trace-list"></div>
+    </section>
+  </main>
+</div>
+
+<div id="modal-root"><div class="modal-overlay" onclick="closeModal()"></div><div class="modal" id="modal-box"></div></div>
+<div id="toast-root"></div>
+
+<script>
+"use strict";
+/* Ambient candlelit particle field: pointer-reactive, low-cost canvas, reduced-motion aware. */
+(function initParticles(){
+  const canvas = document.getElementById("particle-canvas"); if (!canvas) return;
+  const ctx = canvas.getContext("2d"); const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let w=0,h=0,dpr=1, particles=[], ripples=[], raf=0, pointer={x:-9999,y:-9999};
+  function resize(){ dpr=Math.min(devicePixelRatio||1,2); w=innerWidth; h=innerHeight; canvas.width=w*dpr; canvas.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); const n=Math.min(180,Math.max(70,Math.floor(w*h/9000))); particles=Array.from({length:n},()=>({x:Math.random()*w,y:Math.random()*h,r:Math.random()*2.2+.55,vx:(Math.random()-.5)*.34,vy:(Math.random()-.5)*.22,a:Math.random()*.62+.3,phase:Math.random()*Math.PI*2})); }
+  function move(e){pointer.x=e.clientX;pointer.y=e.clientY}
+  function click(e){if(reduce)return; ripples.push({x:e.clientX,y:e.clientY,r:2,a:.8}); if(ripples.length>5)ripples.shift()}
+  function draw(){const light=document.documentElement.dataset.theme==="light", color=light?"29,102,56":"220,178,96", line=light?"61,126,77":"220,178,96";ctx.clearRect(0,0,w,h); for(const p of particles){const dx=pointer.x-p.x,dy=pointer.y-p.y,dist=Math.hypot(dx,dy);if(!reduce&&dist<190){const force=(190-dist)/190*.55;p.x-=dx/dist*force;p.y-=dy/dist*force}p.x+=p.vx+Math.sin(p.phase+performance.now()/1800)*.06;p.y+=p.vy;if(p.y<-12)p.y=h+12;if(p.y>h+12)p.y=-12;if(p.x<-12)p.x=w+12;if(p.x>w+12)p.x=-12;for(const q of particles){const dd=Math.hypot(p.x-q.x,p.y-q.y);if(dd>0&&dd<92){ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.strokeStyle=`rgba(${line},${(1-dd/92)*.13})`;ctx.lineWidth=.7;ctx.stroke()}}ctx.beginPath();ctx.arc(p.x,p.y,p.r*(1+Math.sin(p.phase+performance.now()/500)*.18),0,Math.PI*2);ctx.fillStyle=`rgba(${color},${p.a})`;ctx.shadowBlur=light?5:9;ctx.shadowColor=`rgba(${color},.55)`;ctx.fill();ctx.shadowBlur=0;} if(!reduce){ripples=ripples.filter(r=>r.a>.01);for(const r of ripples){r.r+=4;r.a*=.94;ctx.beginPath();ctx.arc(r.x,r.y,r.r,0,Math.PI*2);ctx.strokeStyle=`rgba(${color},${r.a})`;ctx.lineWidth=1.4;ctx.stroke()}raf=requestAnimationFrame(draw);}}
+  addEventListener("resize",resize); addEventListener("pointermove",move,{passive:true}); addEventListener("click",click,{passive:true}); resize(); draw();
+})();
+/* ============================================================
+ * 科研助手前端 · 对接 ra-agent (FastAPI + LangGraph)
+ * 视图：对话 / 知识库 / 模型配置 / 长期记忆 / 调用追踪
+ * ============================================================ */
+const $ = (s, el) => (el || document).querySelector(s);
+const $$ = (s, el) => [...(el || document).querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() :
+  "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
+  }));
+
+const state = {
+  view: "chat", user: null,
+  sessions: [], active: null,
+  streaming: false,
+  kbs: [], providers: {},
+  retrievalMode: "hybrid",   // vector（纯向量）| hybrid（向量+BM25）
+  perKbK: 3, totalK: 5,      // 检索数量：每库几条 / 合并后总共几条
+  temperature: 0.3,          // 生成温度（0~2，默认 0.3）
+  parentGroups: 3,           // 聚合返回：父块名额（0=关闭）
+  pendingFiles: [],          // 待发送附件：{name, status: uploading|ok|err, file_id?, error?}
+};
+
+const theme = {
+  get value() { return localStorage.getItem("ra.theme") || "dark"; },
+  set value(v) { localStorage.setItem("ra.theme", v); }
+};
+function applyTheme(mode) {
+  const light = mode === "light";
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  const btn = $("#theme-toggle");
+  if (btn) { btn.querySelector(".theme-icon").textContent = light ? "☾" : "☼"; btn.querySelector(".theme-label").textContent = light ? "深色模式" : "浅色模式"; btn.title = light ? "切换深色模式" : "切换浅色模式"; btn.setAttribute("aria-label", btn.title); }
+}
+const store = {
+  get base() { return (localStorage.getItem("ra.base") || "http://localhost:8000").replace(/\/+$/, ""); },
+  set base(v) { localStorage.setItem("ra.base", v); },
+  get token() { return localStorage.getItem("ra.token"); },
+  set token(v) { v ? localStorage.setItem("ra.token", v) : localStorage.removeItem("ra.token"); },
+  sk() { return "ra.sessions." + (state.user ? state.user.id : "anon"); },
+  mk(sid) { return "ra.msgs." + sid; },
+};
+
+/* ---------------- 基础请求 ---------------- */
+async function api(path, opts = {}) {
+  opts = opts || {};
+  const headers = opts.headers || {};
+  if (!(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
+  if (store.token) headers["Authorization"] = "Bearer " + store.token;
+  let res;
+  try { res = await fetch(store.base + path, { ...opts, headers }); }
+  catch (e) { throw new Error("无法连接后端 " + store.base + "（" + e.message + "）"); }
+  if (!res.ok) {
+    let detail = "";
+    try { const j = await res.json(); detail = j.detail || JSON.stringify(j); }
+    catch { detail = await res.text(); }
+    throw new Error("HTTP " + res.status + "：" + (detail || res.statusText));
+  }
+  return res.json();
+}
+
+function toast(msg, kind, x, y) {
+  const el = document.createElement("div");
+  el.className = "toast " + (kind || "");
+  el.textContent = msg;
+  $("#toast-root").appendChild(el);
+  if (x != null && y != null) {   // 定点提示：跟随点击位置（复制按钮在哪，提示就在哪）
+    el.style.position = "fixed";
+    el.style.left = Math.max(8, Math.min(x, window.innerWidth - el.offsetWidth - 8)) + "px";
+    el.style.top = Math.max(8, y + 18) + "px";
+  }
+  setTimeout(() => el.remove(), kind === "err" ? 6000 : 3500);
+}
+
+/* 复制文本到剪贴板，提示气泡跟随点击位置（ev 传入点击事件坐标） */
+function copyText(text, tip, ev) {
+  const x = ev?.clientX, y = ev?.clientY;
+  const done = () => toast(tip || "已复制", "ok", x, y);
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+  } else fallbackCopy(text, done);
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch { toast("复制失败，请手动选择", "err"); }
+  ta.remove();
+}
+
+function fmtTime(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function shortId(id) { return id ? String(id).slice(0, 8) : "-"; }
+
+/* ---------------- 轻量 Markdown ---------------- */
+function md(text) {
+  let t = esc(text);
+  t = t.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => "<pre><code>" + code.replace(/\n$/, "") + "</code></pre>");
+  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  t = t.replace(/^#{1,3}\s*(.+)$/gm, "<b>$1</b>");
+  t = t.replace(/^[-•]\s+(.+)$/gm, "• $1");
+  return t.split(/\n{2,}/).map(p => "<p>" + p.replace(/\n/g, "<br>") + "</p>").join("");
+}
+
+/* ================= 鉴权 ================= */
+let authMode = "login";
+function showAuth() {
+  $("#auth-view").hidden = false; $("#app").hidden = true;
+  $("#auth-base").value = store.base;
+}
+function setAuthMode(m) {
+  authMode = m;
+  $("#tab-login").classList.toggle("active", m === "login");
+  $("#tab-register").classList.toggle("active", m === "register");
+  $("#auth-submit").textContent = m === "login" ? "登 录" : "注册并登录";
+  $("#auth-err").style.display = "none";
+}
+async function submitAuth() {
+  const username = $("#auth-username").value.trim();
+  const password = $("#auth-password").value;
+  const base = $("#auth-base").value.trim();
+  if (base) store.base = base;
+  const err = $("#auth-err");
+  err.style.display = "none";
+  if (!username || !password) { err.textContent = "请输入用户名和密码"; err.style.display = "block"; return; }
+  const btn = $("#auth-submit");
+  btn.disabled = true;
+  try {
+    const data = await api("/api/v1/auth/" + authMode, {
+      method: "POST", body: JSON.stringify({ username, password })
+    });
+    store.token = data.access_token;
+    await boot();
+  } catch (e) {
+    err.textContent = e.message; err.style.display = "block";
+  } finally { btn.disabled = false; }
+}
+
+async function boot() {
+  const me = await api("/api/v1/auth/me");
+  state.user = me;
+  $("#user-name").textContent = me.username;
+  $("#user-role").textContent = me.role === "admin" ? "管理员" : "用户 · " + shortId(me.id);
+  $("#auth-view").hidden = true; $("#app").hidden = false;
+  await loadSessions();
+  ensureHistory(state.active);                   // 启动时补全当前会话历史（跨设备）
+  state.retrievalMode = localStorage.getItem("ra.retrieval." + me.id) || "hybrid";
+  state.perKbK = +(localStorage.getItem("ra.rk.per." + me.id) || 3);
+  state.totalK = +(localStorage.getItem("ra.rk.total." + me.id) || 5);
+  state.temperature = +(localStorage.getItem("ra.rk.temp." + me.id) || 0.3);
+  state.parentGroups = +(localStorage.getItem("ra.rk.parent." + me.id) || 3);
+  buildNav();
+  switchView("chat");
+  renderRetrievalSwitch();
+  renderRetrievalCounts();
+  renderTemperature();
+  renderParentGroups();
+  checkHealth();
+}
+
+function logout() {
+  store.token = null; state.user = null;
+  location.reload();
+}
+
+/* ================= 导航 / 视图切换 ================= */
+const VIEWS = [
+  { id: "chat", name: "对话", sub: "流式对话 · 两级知识库检索 · MCP 工具调用 · 长记忆",
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a8 8 0 01-8 8H5l-2 2V12a8 8 0 018-8h2a8 8 0 018 8z"/></svg>' },
+  { id: "kb", name: "知识库", sub: "建库 / 上传文档 / 检索测试 / 换嵌入模型重建",
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>' },
+  { id: "llm", name: "模型配置", sub: "用户自定义 LLM · provider 分类 · 一键获取模型列表",
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/><path d="M4 12h-2M22 12h-2M12 4V2M12 22v-2"/></svg>' },
+  { id: "memory", name: "长期记忆", sub: "跨会话用户记忆 · 自动抽取 · 写入前审核",
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a7 7 0 017 7c0 2.4-1.2 4.2-2.6 5.7-.9 1-1.4 2-1.4 3.3H9c0-1.3-.5-2.3-1.4-3.3C6.2 14.2 5 12.4 5 10a7 7 0 017-7z"/><path d="M9 21h6"/></svg>' },
+  { id: "trace", name: "调用追踪", sub: "ToolCallLog · LLM / 工具 / 检索调用日志",
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>' },
+];
+function buildNav() {
+  $("#nav").innerHTML = VIEWS.map(v =>
+    `<div class="nav-item" data-view="${v.id}">${v.icon}<span>${v.name}</span></div>`).join("");
+  $$("#nav .nav-item").forEach(el => el.onclick = () => switchView(el.dataset.view));
+}
+function switchView(id) {
+  state.view = id;
+  $$("#nav .nav-item").forEach(el => el.classList.toggle("active", el.dataset.view === id));
+  $$(".view").forEach(el => el.classList.remove("active"));
+  $("#view-" + id).classList.add("active");
+  const meta = VIEWS.find(v => v.id === id);
+  $("#view-title").textContent = meta.name;
+  $("#view-sub").textContent = meta.sub;
+  $("#session-zone").classList.toggle("show", id === "chat");
+  if (id === "kb") loadKBs();
+  if (id === "llm") loadLLMView();
+  if (id === "memory") loadMemories();
+  if (id === "trace") loadTraces();
+  if (id === "chat") { renderSessions(); renderMessages(); }
+}
+
+/* ================= 健康检查 ================= */
+async function checkHealth() {
+  const dot = $("#api-dot"), txt = $("#api-status-text");
+  try {
+    await api("/health");
+    dot.className = "dot ok";
+    txt.textContent = store.base.replace(/^https?:\/\//, "") + " 已连接";
+  } catch (e) {
+    dot.className = "dot bad";
+    txt.textContent = "后端不可达";
+  }
+}
+
+/* ================= 会话管理 ================= */
+/* 服务端为唯一事实来源（跨设备同步）；localStorage 缓存兜底（后端不可达时） */
+async function loadSessions() {
+  let local = [];
+  try { local = JSON.parse(localStorage.getItem(store.sk()) || "[]"); }
+  catch { }
+  let remote = null;
+  try {
+    const r = await api("/api/v1/conversations?user_id=" + encodeURIComponent(state.user.id));
+    remote = (r.conversations || []).map(c => ({
+      id: c.session_id, title: c.title,
+      created: Date.parse(c.updated_at) || 0,
+      updated: Date.parse(c.updated_at) || 0 }));
+  } catch { }                                   // 拉取失败 → 本地缓存兜底
+  if (remote) {
+    const byId = new Map(remote.map(s => [s.id, s]));   // 服务端优先
+    local.forEach(s => { if (!byId.has(s.id)) byId.set(s.id, s); });  // 本地未上送的保留
+    state.sessions = [...byId.values()]
+      .sort((a, b) => (b.updated || b.created || 0) - (a.updated || a.created || 0));
+  } else {
+    state.sessions = local;
+  }
+  if (!state.sessions.length) state.sessions = [{ id: uuid(), title: "新会话", created: Date.now() }];
+  state.active = localStorage.getItem("ra.active." + state.user.id) || state.sessions[0].id;
+  if (!state.sessions.find(s => s.id === state.active)) state.active = state.sessions[0].id;
+  saveSessions();
+}
+/* 拉服务端历史：比本地多（跨设备/本地 100 条截断）则替换缓存并重渲染 */
+async function ensureHistory(sid) {
+  let remote;
+  try {
+    const r = await api(`/api/v1/conversations/${encodeURIComponent(sid)}` +
+      `/messages?user_id=${encodeURIComponent(state.user.id)}`);
+    remote = r.messages || [];
+  } catch { return; }
+  let local = [];
+  try { local = JSON.parse(localStorage.getItem(store.mk(sid)) || "[]"); } catch { }
+  if (remote.length > local.length) {
+    localStorage.setItem(store.mk(sid), JSON.stringify(remote));
+    if (state.active === sid) renderMessages();
+  }
+}
+function saveSessions() {
+  localStorage.setItem(store.sk(), JSON.stringify(state.sessions));
+  localStorage.setItem("ra.active." + state.user.id, state.active);
+}
+function newSession() {
+  const s = { id: uuid(), title: "新会话", created: Date.now() };
+  state.sessions.unshift(s);
+  state.active = s.id;
+  saveSessions(); renderSessions(); renderMessages();
+  $("#chat-input").focus();
+}
+function delSession(id, ev) {
+  ev.stopPropagation();
+  const s = state.sessions.find(x => x.id === id);
+  if (!s) return;
+  if (!confirm(`确定删除会话「${s.title}」？
+该会话的对话记录会一并清除，不可恢复。`)) return;
+  // 服务端登记行 + checkpoint 一并删除（失败不阻断本地删除）
+  api("/api/v1/conversations/" + encodeURIComponent(id) +
+      "?user_id=" + encodeURIComponent(state.user.id), { method: "DELETE" })
+    .catch(() => { });
+  state.sessions = state.sessions.filter(x => x.id !== id);
+  localStorage.removeItem(store.mk(id));
+  if (!state.sessions.length) state.sessions = [{ id: uuid(), title: "新会话", created: Date.now() }];
+  if (state.active === id) state.active = state.sessions[0].id;
+  saveSessions(); renderSessions(); renderMessages();
+}
+function renderSessions() {
+  $("#session-list").innerHTML = state.sessions.map(s =>
+    `<div class="sess-item ${s.id === state.active ? "active" : ""}" data-id="${s.id}" title="${esc(s.title)}\nsession_id: ${esc(s.id)}\n双击或点 ✎ 重命名">
+       <span class="del" data-del="${s.id}" title="删除会话">✕</span>${esc(s.title)}
+       <span class="sid" data-sid="${esc(s.id)}" title="复制 session_id（调用追踪过滤用）">⧉</span>
+       <span class="ren" data-ren="${esc(s.id)}" title="重命名会话">✎</span>
+     </div>`).join("");
+  $$("#session-list .sess-item").forEach(el => el.onclick = () => {
+    if (state.streaming) return;
+    state.active = el.dataset.id; saveSessions(); renderSessions(); renderMessages();
+    ensureHistory(el.dataset.id);               // 切换会话时拉服务端历史（跨设备补全）
+  });
+  $$("#session-list .sess-item").forEach(el => el.ondblclick = e => {
+    if (e.target.closest(".del,.sid,.ren")) return;  // 按钮点击不触发改名
+    renameSession(el.dataset.id);
+  });
+  $$("#session-list [data-del]").forEach(el => el.onclick = e => delSession(el.dataset.del, e));
+  $$("#session-list .sid").forEach(el => el.onclick = e => {
+    e.stopPropagation();                        // 不触发切换会话
+    copyText(el.dataset.sid, "session_id 已复制", e);
+  });
+  $$("#session-list .ren").forEach(el => el.onclick = e => {
+    e.stopPropagation();                        // 不触发切换会话
+    renameSession(el.dataset.ren);
+  });
+}
+/* 会话改名：本地缓存 + 服务端 conversations.title 同步更新（跨设备一致） */
+async function renameSession(id) {
+  const s = state.sessions.find(x => x.id === id);
+  if (!s) return;
+  const title = prompt("修改会话名称：", s.title === "新会话" ? "" : s.title);
+  if (title === null) return;                   // 取消
+  const t = title.trim();
+  if (!t) { toast("会话名称不能为空", "err"); return; }
+  s.title = t;
+  saveSessions(); renderSessions();
+  try {
+    await api("/api/v1/conversations/" + encodeURIComponent(id) +
+        "?user_id=" + encodeURIComponent(state.user.id),
+      { method: "PATCH", body: JSON.stringify({ title: t }) });
+  } catch (e) {
+    // 404 = 新会话尚未登记（没发过消息）：本地已生效，首次发消息会带新名登记
+    if (String(e.message).includes("404")) toast("已改名，发送首条消息后同步到服务端", "ok");
+    else toast("已本地改名，但服务端同步失败：" + e.message, "err");
+  }
+}
+function getMsgs() {
+  try { return JSON.parse(localStorage.getItem(store.mk(state.active)) || "[]"); }
+  catch { return []; }
+}
+function saveMsgs(msgs) { localStorage.setItem(store.mk(state.active), JSON.stringify(msgs.slice(-100))); }
+
+/* ================= 对话 ================= */
+const STEP_STYLE = {
+  supervisor: { label: "路由决策", color: "#2f6df0" },
+  memory_load: { label: "加载长期记忆", color: "#7c4dff" },
+  compact: { label: "上下文压缩", color: "#e0820b" },
+  retrieve: { label: "知识库检索", color: "#11a87a" },
+  tool: { label: "MCP 工具调用", color: "#d6336c" },
+  llm: { label: "LLM 生成", color: "#2f6df0" },
+  memory_extract: { label: "抽取记忆候选", color: "#7c4dff" },
+  memory_save: { label: "写入长期记忆", color: "#7c4dff" },
+};
+
+/* 检索模式切换：向量 / 混合(BM25)，选择即时生效（每轮请求都携带） */
+function renderRetrievalSwitch() {
+  const el = $("#retrieval-switch");
+  if (!el) return;
+  const cur = state.retrievalMode || "hybrid";
+  el.innerHTML = `<button class="rs-btn ${cur === "vector" ? "on" : ""}" data-mode="vector" title="纯向量检索（对比基准）">向量</button>
+    <button class="rs-btn ${cur === "hybrid" ? "on" : ""}" data-mode="hybrid" title="向量 + BM25 混合（RRF 融合）">混合</button>`;
+  $$("#retrieval-switch .rs-btn").forEach(b => b.onclick = () => {
+    state.retrievalMode = b.dataset.mode;
+    localStorage.setItem("ra.retrieval." + state.user.id, state.retrievalMode);
+    renderRetrievalSwitch();
+    toast("检索模式已切换为" + (state.retrievalMode === "hybrid"
+      ? "混合检索（向量 + BM25）" : "纯向量检索") + "，下一轮提问生效");
+  });
+}
+
+/* 检索数量设置：每库几条 / 总共几条，修改即存即生效（每轮请求携带） */
+function renderRetrievalCounts() {
+  const per = $("#rk-per"), tot = $("#rk-total");
+  if (!per || !tot) return;
+  per.value = state.perKbK || 3;
+  tot.value = state.totalK || 5;
+  per.onchange = () => {
+    let v = Math.max(1, Math.min(20, +per.value || 3));
+    state.perKbK = v; per.value = v;
+    localStorage.setItem("ra.rk.per." + state.user.id, v);
+  };
+  tot.onchange = () => {
+    let v = Math.max(1, Math.min(50, +tot.value || 5));
+    state.totalK = v; tot.value = v;
+    localStorage.setItem("ra.rk.total." + state.user.id, v);
+  };
+}
+
+/* 生成温度设置：0~2，修改即存即生效（每轮请求携带，0 也合法） */
+function renderTemperature() {
+  const el = $("#rk-temp");
+  if (!el) return;
+  el.value = state.temperature ?? 0.3;
+  el.onchange = () => {
+    const v = Math.max(0, Math.min(2, parseFloat(el.value)));
+    state.temperature = isNaN(v) ? 0.3 : v;
+    el.value = state.temperature;
+    localStorage.setItem("ra.rk.temp." + state.user.id, state.temperature);
+  };
+}
+
+/* 聚合返回设置：父块名额 0~10（0=关闭，全返回小片段），修改即存即生效 */
+function renderParentGroups() {
+  const el = $("#rk-parent");
+  if (!el) return;
+  el.value = state.parentGroups ?? 3;
+  el.onchange = () => {
+    let v = Math.max(0, Math.min(10, +el.value || 0));
+    state.parentGroups = v;
+    el.value = v;
+    localStorage.setItem("ra.rk.parent." + state.user.id, v);
+  };
+}
+
+/* 上下文占用条：窗口上限 + 当前会话已用 tokens 与比例（图跑完后由 context 事件更新） */
+function renderCtxMeter(ev) {
+  const el = $("#ctx-meter");
+  if (!el) return;
+  if (!ev || !ev.window) { el.classList.add("hidden"); return; }
+  const pct = Math.min(100, Math.max(0, Math.round(ev.used_tokens / ev.window * 100)));
+  el.className = "ctx-meter " + (pct >= 80 ? "warn" : pct >= 60 ? "mid" : "ok");
+  el.innerHTML = `<span>上下文 <b>${ev.window.toLocaleString()}</b> tokens · 已用 <b>${ev.used_tokens.toLocaleString()}</b>（${pct}%）</span><span class="ctx-bar"><i style="width:${pct}%"></i></span>`;
+}
+
+/* 打开/切换会话时主动拉取上下文占用（对话中由 SSE context 事件实时刷新） */
+let ctxSeq = 0;   // 占用请求序号：旧响应不得覆盖新值（GET 快照的是请求时的 checkpoint）
+
+function loadCtxMeter() {
+  const el = $("#ctx-meter");
+  if (!el || !state.active || !state.user) return;
+  const sid = state.active;
+  const mySeq = ++ctxSeq;
+  el.classList.add("hidden");
+  api("/api/v1/chat/context?user_id=" + encodeURIComponent(state.user.id) +
+      "&session_id=" + encodeURIComponent(sid))
+    .then(ev => { if (ctxSeq === mySeq && state.active === sid) renderCtxMeter(ev); })
+    .catch(() => { if (ctxSeq === mySeq && state.active === sid) el.classList.add("hidden"); });
+}
+
+function renderMessages() {
+  loadCtxMeter();                       // 每次渲染（切会话/发消息）都拉最新占用
+  const box = $("#messages");
+  const msgs = getMsgs();
+  if (!msgs.length) {
+    box.innerHTML = `<div class="chat-empty">
+      <h2>你好，${esc(state.user.username)}</h2>
+      <div class="muted">我是你的科研助手：检索两级知识库、调用 MCP 工具、记住你的研究偏好。</div>
+      <div class="hint-grid">
+        <div class="hint-card" data-q="帮我总结一下知识库里的内容">
+          <div class="hc-t">知识库问答</div><div class="hc-d">先在「知识库」建库上传文档，然后直接提问</div></div>
+        <div class="hint-card" data-q="帮我联网搜索 LangGraph 的最新进展">
+          <div class="hc-t">联网检索</div><div class="hc-d">自动调用 MCP web_search 工具获取实时信息</div></div>
+        <div class="hint-card" data-goto="llm">
+          <div class="hc-t">接入自己的模型</div><div class="hc-d">在「模型配置」填入 api_key / base_url 即用</div></div>
+        <div class="hint-card" data-goto="kb">
+          <div class="hc-t">管理知识库</div><div class="hc-d">公共/私人两级库，支持换嵌入模型重建</div></div>
+      </div></div>`;
+    $$("#messages .hint-card").forEach(el => el.onclick = () => {
+      if (el.dataset.goto) switchView(el.dataset.goto);
+      else { $("#chat-input").value = el.dataset.q; $("#chat-input").focus(); }
+    });
+    return;
+  }
+  box.innerHTML = msgs.map((m, i) =>
+    msgHTML(m, i, i === msgs.length - 1 && m.role === "assistant")).join("");
+  $$("#messages [data-fork]").forEach(el => el.onclick = () => forkSession(+el.dataset.fork));
+  $$("#messages [data-regen]").forEach(el => el.onclick = regenerateLast);
+  box.scrollTop = box.scrollHeight;
+}
+
+function stepsHTML(steps) {
+  if (!steps || !steps.length) return "";
+  const items = steps.map(s => {
+    const st = STEP_STYLE[s.kind] || { label: s.kind, color: "#5b6776" };
+    const statusIcon = s.status === "running" ? '<span class="badge orange pulse">执行中</span>'
+      : s.status === "fail" ? '<span class="badge red">失败</span>'
+      : s.status === "ok" ? '<span class="badge green">完成</span>' : "";
+    return `<div class="step">
+      <span class="sdot" style="background:${st.color}"></span>
+      <div><span class="slabel" style="color:${st.color}">${st.label}</span> ${statusIcon}
+      <div class="sdesc">${s.desc || ""}</div></div></div>`;
+  }).join("");
+  return `<details class="steps"><summary>执行过程 · ${steps.length} 步</summary><div class="step-list">${items}</div></details>`;
+}
+
+function citesHTML(retrievals) {
+  if (!retrievals || !retrievals.length) return "";
+  const items = retrievals.map((r, i) => {
+    const scopeBadge = r.scope === "private"
+      ? '<span class="badge purple">私人</span>' : '<span class="badge green">公共</span>';
+    // 命中方式：两路都命中=混合，仅有 bm25_score=BM25，仅有 distance=向量
+    const methodBadge = r.bm25_score !== null && r.bm25_score !== undefined
+      ? (r.distance !== null && r.distance !== undefined
+          ? '<span class="badge blue">向量+BM25</span>'
+          : '<span class="badge blue">BM25</span>')
+      : '<span class="badge gray">向量</span>';
+    const dist = (r.distance === null || r.distance === undefined) ? "" :
+      `<span class="muted mono">距离 ${Number(r.distance).toFixed(3)}</span>`;
+    const bm = (r.bm25_score === null || r.bm25_score === undefined) ? "" :
+      `<span class="muted mono">BM25 ${Number(r.bm25_score).toFixed(2)}</span>`;
+    // 来源文件 + 页码（chunk 元数据）；父块显示页码范围与命中片段数
+    let src = "";
+    if (r.type === "parent") {
+      const pages = (r.pages || []).length
+        ? " · 第" + r.pages.join("-") + "页" : "";
+      src = `<span class="muted" style="color:var(--accent2)">📄 ${esc(r.source || "未知来源")}${pages} · 完整段落（${r.hit_chunks || 1} 个命中片段）</span>`;
+    } else if (r.source) {
+      src = (r.page !== null && r.page !== undefined)
+        ? `<span class="muted" title="源文件页码">📄 ${esc(r.source)} · 第 ${r.page} 页</span>`
+        : `<span class="muted">📄 ${esc(r.source)}</span>`;
+    }
+    return `<div class="cite${r.type === "parent" ? " parent" : ""}"><div class="ch">
+      <b>[${i + 1}]</b> ${scopeBadge}${methodBadge}<span>${esc(r.kb_name || "知识库")}</span>${dist}${bm}</div>
+      ${src}<div class="txt">${esc(r.text || "")}</div></div>`;
+  }).join("");
+  return `<details class="cites"><summary>引用溯源 · ${retrievals.length} 条检索结果${retrievals.some(x => x.type === "parent") ? "（含完整段落）" : ""}</summary><div class="cites-body">${items}</div></details>`;
+}
+
+function msgHTML(m, i, isLast) {
+  const actions = `<div class="msg-actions">
+    <button class="btn sm" data-fork="${i}">分支</button>
+    ${isLast ? '<button class="btn sm" data-regen="1">重新生成</button>' : ""}
+  </div>`;
+  if (m.role === "user") {
+    const filesHTML = (m.files && m.files.length)
+      ? `<div class="msg-files">${m.files.map(f =>
+          `<span class="att-chip" title="已发给模型阅读">📄 ${esc(f.name)}</span>`).join("")}</div>`
+      : "";
+    return `<div class="msg user"><div class="row">
+      <div class="bubble-wrap"><div class="bubble">${filesHTML}${esc(m.content)}</div>${actions}</div>
+      <div class="avatar">${esc((state.user.username || "我")[0].toUpperCase())}</div></div></div>`;
+  }
+  return `<div class="msg assistant"><div class="row">
+    <div class="avatar">RA</div>
+    <div class="bubble-wrap">${stepsHTML(m.steps)}
+      <div class="bubble">${m._streaming ? md(m.content) + '<span class="cursor"></span>' : md(m.content)}</div>
+      ${citesHTML(m.retrievals)}${actions}</div></div></div>`;
+}
+
+/* 流式渲染：只更新最后一条消息节点 */
+function patchLastMsg(msg) {
+  const nodes = $$("#messages .msg");
+  const last = nodes[nodes.length - 1];
+  if (!last) return;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = msgHTML(msg, -1, true);    // 最后一条：始终带"重新生成"入口（失败/流结束时可用）
+  const newNode = wrap.firstChild;
+  last.replaceWith(newNode);
+  $$("[data-regen]", newNode).forEach(el => el.onclick = regenerateLast);
+  $("#messages").scrollTop = $("#messages").scrollHeight;
+}
+
+/* ---------------- 对话附件：上传解析 → 暂存 file_id → 随消息发送 ---------------- */
+function renderAttachBar() {
+  $("#attach-bar").innerHTML = state.pendingFiles.map((f, i) => {
+    const cls = f.status === "ok" ? "ok" : f.status === "err" ? "err" : "";
+    const mark = f.status === "ok" ? "✓" : f.status === "err" ? "✕" : "…";
+    return `<span class="att-chip ${cls}" title="${esc(f.error || f.name)}">${mark} ${esc(f.name)}<span class="x" data-att="${i}" title="移除">✕</span></span>`;
+  }).join("");
+  $$("#attach-bar [data-att]").forEach(el => el.onclick = () => {
+    state.pendingFiles.splice(+el.dataset.att, 1);
+    renderAttachBar();
+  });
+}
+
+async function uploadChatFiles(fileList) {
+  const fresh = [...fileList].map(f => ({ name: f.name, status: "uploading" }));
+  state.pendingFiles.push(...fresh);
+  renderAttachBar();
+  try {
+    const fd = new FormData();
+    [...fileList].forEach(f => fd.append("files", f, f.name));
+    // 后端按上传顺序逐文件返回：成功含 file_id，失败含 error
+    const r = await api("/api/v1/chat/files", { method: "POST", body: fd });
+    (r.files || []).forEach((res, i) => {
+      const item = fresh[i];
+      if (!item) return;
+      if (res.file_id) { item.status = "ok"; item.file_id = res.file_id; }
+      else { item.status = "err"; item.error = res.error || "解析失败"; }
+    });
+  } catch (e) {
+    fresh.forEach(f => { f.status = "err"; f.error = e.message; });
+    toast("附件上传失败：" + e.message, "err");
+  }
+  renderAttachBar();
+}
+
+function sendChat() {
+  const input = $("#chat-input");
+  const text = input.value.trim();
+  const files = state.pendingFiles.filter(f => f.status === "ok");
+  if (state.streaming) return;
+  if (state.pendingFiles.some(f => f.status === "uploading")) {
+    toast("附件还在解析中，稍候再发送"); return;
+  }
+  if (!text && !files.length) return;
+  input.value = "";
+  input.style.height = "auto";
+  state.pendingFiles = [];
+  renderAttachBar();
+  sendMessage(text || "请阅读我上传的文件", { files });   // 仅附件时给默认提问
+}
+
+/* 发送消息：opts.rewind=true 时不追加新用户消息（后端按 checkpoint 最后一条用户消息重新生成） */
+async function sendMessage(text, opts = {}) {
+  if (!text.trim() || state.streaming) return;
+  const msgs = getMsgs();
+  const sess = state.sessions.find(s => s.id === state.active);
+  const sendFiles = opts.files || [];                    // 本轮附件（已解析成功的）
+  const body = { user_id: state.user.id, session_id: state.active, message: text,
+    retrieval_mode: state.retrievalMode || undefined,
+    per_kb_k: state.perKbK || undefined, total_k: state.totalK || undefined,
+    temperature: state.temperature,
+    parent_groups: state.parentGroups };
+  // 用户改过名的会话：首次服务端登记时用自定义名（后端只在首登写 title）
+  if (sess && sess.title && sess.title !== "新会话") body.title = sess.title;
+  if (sendFiles.length) body.attachments = sendFiles.map(f => f.file_id);
+
+  if (opts.rewind) {
+    body.rewind = true;                       // 消息列表里已去掉旧回复，后端负责回退
+  } else {
+    msgs.push({ role: "user", content: text,
+      files: sendFiles.map(f => ({ name: f.name })) });
+    if (sess && sess.forked) {
+      // 分支会话首次发送：把选中消息及之前的历史一并带给后端（新 thread 无 checkpoint 历史）
+      body.history = msgs.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
+      sess.forked = false;
+      saveSessions();
+    }
+  }
+  const asst = { role: "assistant", content: "", steps: [], retrievals: [], _streaming: true };
+  msgs.push(asst);
+  saveMsgs(msgs);        // 先落库，renderMessages（从 localStorage 读）才能看到新消息
+  renderMessages();
+  state.streaming = true;
+  $("#send-btn").disabled = true;
+
+  if (!opts.rewind && sess && sess.title === "新会话") {
+    sess.title = text.length > 24 ? text.slice(0, 24) + "…" : text;
+    saveSessions(); renderSessions();
+  }
+
+  const stepByTrace = {};
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = "Bearer " + store.token;
+    const res = await fetch(store.base + "/api/v1/chat/stream", {
+      method: "POST", headers,
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status + "：" + await res.text());
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          let ev;
+          try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+          handleChatEvent(ev, asst, stepByTrace);
+          patchLastMsg(asst);
+        }
+      }
+    }
+  } catch (e) {
+    asst.steps.push({ kind: "llm", status: "fail", desc: esc(e.message) });
+    if (!asst.content) asst.content = "出错了：" + e.message;
+  } finally {
+    asst._streaming = false;
+    state.streaming = false;
+    $("#send-btn").disabled = false;
+    patchLastMsg(asst);
+    saveMsgs(msgs);
+    $("#chat-input").focus();
+  }
+}
+
+/* 分支：从选中消息（含）及之前的历史开一个新会话，后续提问从分支点继续 */
+function forkSession(idx) {
+  if (state.streaming) return;
+  const msgs = getMsgs();
+  if (idx < 0 || idx >= msgs.length) return;
+  const cut = msgs.slice(0, idx + 1);
+  const anchor = String(cut[idx].content || "").replace(/\s+/g, " ").slice(0, 10);
+  const s = { id: uuid(), title: "分支 · " + (anchor || "新对话"), created: Date.now(), forked: true };
+  state.sessions.unshift(s);
+  state.active = s.id;
+  localStorage.setItem(store.mk(s.id), JSON.stringify(cut));
+  saveSessions(); renderSessions(); renderMessages();
+  $("#chat-input").focus();
+}
+
+/* 重新生成：去掉最后一条 assistant 回复（报错/不满意时手动重试），重发同一条用户提问 */
+function regenerateLast() {
+  if (state.streaming) return;
+  const msgs = getMsgs();
+  const last = msgs[msgs.length - 1];
+  if (!last || last.role !== "assistant") return;
+  msgs.pop();
+  saveMsgs(msgs);
+  renderMessages();
+  const prev = msgs[msgs.length - 1];
+  if (!prev || prev.role !== "user") return;   // 上一条必须是用户提问
+  sendMessage(prev.content, { rewind: true });
+}
+
+function handleChatEvent(ev, asst, stepByTrace) {
+  switch (ev.type) {
+    case "token":
+      asst.content += ev.content || "";
+      break;
+    case "supervisor": {
+      const chosen = (ev.selected || []).map(k =>
+        `${k.scope === "private" ? "私人" : "公共"}·${esc(k.name)}`).join("、");
+      asst.steps.push({ kind: "supervisor", status: "ok",
+        desc: ev.needs_retrieval
+          ? `LLM 判断需要检索，选择知识库：${chosen}`
+          : ev.kb_count
+            ? "LLM 判断无需知识库检索 → 直接生成"
+            : "无可用知识库 → 直接生成" });
+      break;
+    }
+    case "memory_load":
+      asst.steps.push({ kind: "memory_load", status: "ok", desc: `载入 ${ev.count} 条长期记忆` });
+      break;
+    case "context":
+      ctxSeq++;                  // SSE 是图跑完后的最新值：使在途 GET 旧响应失效
+      renderCtxMeter(ev);
+      break;
+    case "compact":
+      asst.steps.push({ kind: "compact", status: "ok",
+        desc: `对话已达 ${ev.total_rounds} 轮 / 估测 ${ev.tokens_estimated} tokens（窗口 ${ev.window}）→ 总结 ${ev.compacted_rounds} 轮历史，保留最近 ${ev.keep_rounds} 轮` });
+      break;
+    case "retrieve":
+      asst.steps.push({ kind: "retrieve", status: "ok",
+        desc: `${ev.mode === "hybrid" ? "混合检索（向量+BM25）" : "纯向量检索"} · 知识库 <code>${esc(shortId(ev.kb_id))}</code>（${ev.scope === "private" ? "私人" : "公共"}）命中 ${ev.hits} 条` });
+      break;
+    case "retrievals":
+      asst.retrievals = ev.results || [];
+      break;
+    case "tool_start": {
+      const args = JSON.stringify(ev.args || {});
+      const step = { kind: "tool", status: "running",
+        desc: `<code>${esc(ev.name)}</code> 参数 <code>${esc(args.length > 120 ? args.slice(0, 120) + "…" : args)}</code>` };
+      asst.steps.push(step);
+      stepByTrace["tool:" + ev.name] = step;
+      break;
+    }
+    case "trace_start": {
+      const step = { kind: ev.kind === "llm" ? "llm" : ev.kind, status: "running",
+        desc: `<code>${esc(ev.name)}</code>` };
+      asst.steps.push(step);
+      stepByTrace[ev.id] = step;
+      break;
+    }
+    case "trace_end": {
+      const step = stepByTrace[ev.id];
+      if (step) {
+        step.status = ev.ok ? "ok" : "fail";
+        if (!ev.ok && ev.error) step.desc += ` <span style="color:var(--danger)">${esc(ev.error.slice(0, 150))}</span>`;
+      }
+      // 同时把同名 tool 步骤收尾
+      for (const k of Object.keys(stepByTrace)) {
+        const s = stepByTrace[k];
+        if (s.kind === "tool" && s.status === "running") s.status = ev.ok ? "ok" : "fail";
+      }
+      break;
+    }
+    case "memory_extract":
+      asst.steps.push({ kind: "memory_extract", status: "ok", desc: `提炼出 ${ev.candidates} 条候选记忆` });
+      break;
+    case "memory_save":
+      if (ev.saved > 0)
+        asst.steps.push({ kind: "memory_save", status: "ok", desc: `审核通过，写入 ${ev.saved} 条` });
+      break;
+    case "done":
+      break;
+    case "error":
+      asst.steps.push({ kind: "llm", status: "fail", desc: esc(ev.error || "生成出错") });
+      if (!asst.content) asst.content = "出错了：" + (ev.error || "未知错误");
+      break;
+  }
+}
+
+/* ================= 知识库 ================= */
+const EMBED_OPTIONS = [
+  { provider: "ollama", label: "Ollama qwen3-embedding:8b（dim 4096 · 本地服务）", model: "qwen3-embedding:8b", dim: 4096, base: "http://100.85.4.71:11434/v1" },
+  { provider: "local", label: "本地轻量模型 mini（dim 384 · 离线）", model: "mini", dim: 384, base: "" },
+  { provider: "__custom__", label: "自定义…", model: "", dim: 0, base: "" },
+];
+
+const KB_STATUS = {
+  ready: { label: "就绪", cls: "green" },
+  indexing: { label: "入库中", cls: "orange" },
+  reembedding: { label: "重建中", cls: "orange" },
+  failed: { label: "失败", cls: "red" },
+};
+
+async function loadKBs() {
+  const box = $("#kb-list");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    state.kbs = await api("/api/v1/kbs?user_id=" + encodeURIComponent(state.user.id));
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><div class="big">加载失败</div>${esc(e.message)}</div>`;
+    return;
+  }
+  renderKBs();
+  // 有处于中间态的库时轮询刷新
+  if (state.kbs.some(k => k.status === "indexing" || k.status === "reembedding")) {
+    setTimeout(() => { if (state.view === "kb") loadKBs(); }, 2500);
+  }
+}
+
+function renderKBs() {
+  const box = $("#kb-list");
+  if (!state.kbs.length) {
+    box.innerHTML = `<div class="empty"><div class="big">还没有知识库</div>
+      点击「新建知识库」创建第一个库，上传文档后即可在对话中检索。</div>`;
+    return;
+  }
+  box.innerHTML = '<div class="kb-grid">' + state.kbs.map(kb => {
+    const st = KB_STATUS[kb.status] || { label: kb.status, cls: "gray" };
+    const pulse = (kb.status === "indexing" || kb.status === "reembedding") ? " pulse" : "";
+    const scopeBadge = kb.scope === "private"
+      ? '<span class="badge purple">私人</span>' : '<span class="badge green">公共</span>';
+    return `<div class="kb-card ${kb.scope === "private" ? "private" : ""}" data-kb="${kb.kb_id}">
+      <button class="kb-del" data-del="${kb.kb_id}" title="删除知识库">✕</button>
+      <h3>${esc(kb.name)} ${scopeBadge}<span class="badge ${st.cls}${pulse}">${st.label}</span>${kb.retrieval_enabled_for_user === false ? '<span class="badge gray" title="仅你禁用了该库的对话检索">我禁检索</span>' : ''}</h3>
+      <div class="kb-meta">
+        <div class="row"><span>嵌入模型</span><code>${esc(kb.embedding_provider)} / ${esc(kb.embedding_model_id)}</code></div>
+        <div class="row"><span>向量维度</span><code>${kb.embedding_dim}</code></div>
+        <div class="row"><span>文档数</span><span>${(kb.source_doc_ids || []).length}</span></div>
+        <div class="row"><span>创建时间</span><span>${fmtTime(kb.created_at)}</span></div>
+      </div></div>`;
+  }).join("") + "</div>";
+  $$("#kb-list .kb-card").forEach(el => el.onclick = () => openKBDetail(el.dataset.kb));
+  $$("#kb-list .kb-del").forEach(el => el.onclick = e => {
+    e.stopPropagation(); deleteKB(el.dataset.del);
+  });
+}
+
+async function deleteKB(kbId) {
+  const kb = state.kbs.find(k => k.kb_id === kbId);
+  const name = kb ? kb.name : kbId;
+  if (!confirm(`确定删除知识库「${name}」？\n将同时删除其向量数据与文档 chunk，不可恢复。`)) return;
+  try {
+    await api(`/api/v1/kbs/${kbId}?user_id=${encodeURIComponent(state.user.id)}`, { method: "DELETE" });
+    toast("知识库已删除", "ok");
+    loadKBs();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function embedSelectHTML(id) {
+  return `<select class="input" id="${id}">` +
+    EMBED_OPTIONS.map((o, i) => `<option value="${i}">${o.label}</option>`).join("") + "</select>";
+}
+function embedFromSelect(selId, prefix) {
+  const opt = EMBED_OPTIONS[+$("#" + selId).value];
+  if (opt.provider !== "__custom__") return { provider: opt.provider, model: opt.model, dim: opt.dim };
+  return {
+    provider: $("#" + prefix + "-provider").value.trim(),
+    model: $("#" + prefix + "-model").value.trim(),
+    dim: parseInt($("#" + prefix + "-dim").value, 10) || null,
+  };
+}
+
+function openCreateKB() {
+  openModal(`<button class="close-x" onclick="closeModal()">✕</button>
+    <h2>新建知识库</h2>
+    <div class="msub">创建时固化嵌入模型标注（provider / model / dim），向量写入独立 collection</div>
+    <div class="field"><label>名称</label><input class="input" id="ckb-name" placeholder="如：大模型论文集"></div>
+    <div class="field"><label>知识库介绍 <span style="color:var(--danger)">*</span></label>
+      <textarea class="input" id="ckb-desc" placeholder="描述这个知识库包含什么内容、面向什么问题（必填）——模型选库时会参考这段介绍判断相关性"></textarea>
+      <div class="hint">必填：一句话说清这个库装了什么资料、适合回答什么问题</div></div>
+    <div class="field"><label>可见范围</label>
+      <select class="input" id="ckb-scope">
+        <option value="private">私人（仅本人可见）</option>
+        <option value="public">公共（全员可见）</option>
+      </select></div>
+    <div class="field"><label>嵌入模型</label>${embedSelectHTML("ckb-embed")}
+      <div id="ckb-custom" style="display:none;margin-top:8px">
+        <div style="display:flex;gap:8px">
+          <input class="input mono" id="ckb-custom-provider" placeholder="provider">
+          <input class="input mono" id="ckb-custom-model" placeholder="model_id">
+          <input class="input mono" id="ckb-custom-dim" placeholder="dim" style="width:90px">
+        </div></div></div>
+    <div class="field" id="ckb-base-field"><label>嵌入 Base URL（可选）</label>
+      <input class="input mono" id="ckb-base-url" placeholder="OpenAI 协议端点，留空用该 provider 默认">
+      <div class="hint">选择模型会自动带出默认端点，可修改；本地模型无需端点</div></div>
+    <div class="field" id="ckb-key-field"><label>嵌入 API Key（可选）</label>
+      <input class="input mono" id="ckb-api-key" type="password" placeholder="云端嵌入模型需要；留空用系统默认">
+      <div class="hint">仅云端模型（doubao 等）需要；加密存储，不回显明文</div></div>
+    <div class="field"><label>初始文本（可选）</label>
+      <textarea class="input" id="ckb-texts" placeholder="每行一段文本，创建时直接入库"></textarea>
+      <div class="hint">也可以创建后在详情页上传 pdf / docx / md / txt 文档</div></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" id="ckb-submit">创建</button></div>`);
+  $("#ckb-embed").onchange = e => {
+    const opt = EMBED_OPTIONS[+e.target.value];
+    $("#ckb-custom").style.display = opt.provider === "__custom__" ? "block" : "none";
+    $("#ckb-key-field").style.display = opt.provider === "local" ? "none" : "block";
+    $("#ckb-base-field").style.display = opt.provider === "local" ? "none" : "block";
+    if (opt.provider !== "__custom__" && opt.provider !== "local") $("#ckb-base-url").value = opt.base || "";
+  };
+  $("#ckb-embed").dispatchEvent(new Event("change"));
+  $("#ckb-submit").onclick = async () => {
+    const name = $("#ckb-name").value.trim();
+    if (!name) { toast("请填写知识库名称", "err"); return; }
+    const desc = $("#ckb-desc").value.trim();
+    if (!desc) { toast("请填写知识库介绍（必填）", "err"); return; }
+    const emb = embedFromSelect("ckb-embed", "ckb-custom");
+    const texts = $("#ckb-texts").value.split("\n").map(t => t.trim()).filter(Boolean);
+    try {
+      await api("/api/v1/kbs", {
+        method: "POST", body: JSON.stringify({
+          name, description: desc, scope: $("#ckb-scope").value,
+          user_id: state.user.id, texts,
+          embedding_provider: emb.provider || null,
+          embedding_model_id: emb.model || null,
+          embedding_dim: emb.dim || null,
+          embedding_base_url: $("#ckb-base-url").value.trim() || null,
+          embedding_api_key: $("#ckb-api-key").value.trim() || null,
+        })
+      });
+      toast("知识库已创建", "ok");
+      closeModal(); loadKBs();
+    } catch (e) { toast(e.message, "err"); }
+  };
+}
+
+async function openKBDetail(kbId) {
+  let kb;
+  // 带 user_id：retrieval_enabled_for_user 是按用户算的，缺省会用后端默认 u1，
+  // 导致私人库（真实 uid 禁用中）详情页永远显示"可用"、出不来"允许检索"按钮
+  try { kb = await api("/api/v1/kbs/" + kbId + "?user_id=" + encodeURIComponent(state.user.id)); } catch (e) { toast(e.message, "err"); return; }
+  const st = KB_STATUS[kb.status] || { label: kb.status, cls: "gray" };
+  openModal(`<button class="close-x" onclick="closeModal()">✕</button>
+    <h2>${esc(kb.name)} <button class="btn" id="kb-info-edit" style="padding:2px 10px;font-size:12px;vertical-align:middle">编辑</button></h2>
+    <div class="msub">kb_id: <code>${kb.kb_id}</code></div>
+    <div id="kb-info-edit-form" style="display:none;margin:10px 0">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="input" id="kb-name-input" value="${esc(kb.name)}" placeholder="知识库名称" style="flex:1">
+      </div>
+      <textarea class="input" id="kb-desc-input" placeholder="知识库介绍（LLM 选库参考）" style="margin-top:8px;min-height:60px">${esc(kb.description || "")}</textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn primary" id="kb-info-save" style="padding:3px 14px;font-size:12.5px">保存</button>
+        <button class="btn" id="kb-info-cancel" style="padding:3px 14px;font-size:12.5px">取消</button>
+      </div>
+    </div>
+    <div class="kv">
+      <span class="k">介绍</span><span>${esc(kb.description || "-")}</span>
+      <span class="k">可见范围</span><span>${kb.scope === "private" ? "私人" : "公共"}</span>
+      <span class="k">状态</span><span><span class="badge ${st.cls}">${st.label}</span></span>
+      <span class="k">嵌入模型</span><span><code>${esc(kb.embedding_provider)} / ${esc(kb.embedding_model_id)}</code>（dim=${kb.embedding_dim}）</span>
+      <span class="k">嵌入密钥</span><span>${kb.has_embedding_key ? '<span class="badge blue">专用密钥</span>' : '<span class="muted">系统默认</span>'}</span>
+      <span class="k">嵌入端点</span><span>${kb.embedding_base_url ? `<code>${esc(kb.embedding_base_url)}</code>` : '<span class="muted">provider 默认</span>'}</span>
+      <span class="k">文档数</span><span>${(kb.source_doc_ids || []).length}</span>
+      <span class="k">对话检索</span><span><button class="btn" id="kb-retrieval-toggle" style="padding:2px 10px;font-size:12px">${(kb.retrieval_enabled_for_user ?? true) ? '禁止检索' : '允许检索'}</button><span class="muted" style="font-size:11px;margin-left:6px">${(kb.retrieval_enabled_for_user ?? true) ? '对话可用' : '对话不可用'}（仅对当前用户生效）</span></span>
+      <span class="k">创建时间</span><span>${fmtTime(kb.created_at)}</span>
+    </div>
+    ${kb.embedding_mismatch ? '<div class="warn-banner" style="margin-top:10px;padding:8px 10px;background:#fff7e6;border:1px solid #ffd591;border-radius:8px;color:#ad6800;font-size:12.5px">⚠️ ' + esc(kb.embedding_mismatch) + '</div>' : ''}
+
+    <div class="section-t">嵌入配置 <button class="btn" id="kb-embed-edit" style="padding:2px 10px;font-size:12px">修改</button></div>
+    <div id="kb-embed-edit-form" style="display:none">
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+        ${embedSelectHTML("kb-embed-select")}
+      </div>
+      <div id="kb-embed-custom" style="display:none;margin-top:8px;display:flex;gap:8px">
+        <input class="input mono" id="ke-provider" placeholder="provider" style="flex:1">
+        <input class="input mono" id="ke-model" placeholder="model_id" style="flex:1.4">
+        <input class="input mono" id="ke-dim" placeholder="dim" style="width:90px">
+      </div>
+      <div style="margin-top:8px">
+        <input class="input mono" id="ke-base-url" placeholder="嵌入 Base URL（留空=provider 默认）" style="width:100%">
+      </div>
+      <div style="margin-top:8px">
+        <input class="input mono" id="ke-api-key" type="password" placeholder="嵌入 API Key（留空=沿用原密钥或系统默认）" style="width:100%">
+      </div>
+      <div class="hint" style="font-size:12px;color:var(--muted);margin-top:6px">
+        修改后已入库的向量不会重新嵌入：模型变了会在上方给出提醒，需要匹配新模型时重新上传文档或用「重建」
+      </div>
+      <div style="margin-top:8px">
+        <button class="btn primary" id="kb-embed-save">保存配置</button>
+        <span id="kb-embed-status" style="margin-left:10px;font-size:12px"></span>
+      </div>
+    </div>
+
+    <div class="section-t">上传文档</div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <input type="file" id="kb-file" multiple style="flex:1;font-size:13px">
+      <button class="btn primary" id="kb-upload">上传并入库</button>
+    </div>
+    <div class="hint" style="font-size:12px;color:var(--muted);margin-top:6px">
+      支持 pdf / docx / md / txt，可多选一次批量上传；后台异步解析分块并写入向量库，状态自动流转 indexing → ready
+    </div>
+    <div id="kb-upload-status" style="margin-top:8px"></div>
+
+    <div class="section-t">文件管理 <button class="btn sm danger" id="kb-files-del">删除选中</button></div>
+    <div id="kb-files" style="margin-top:8px">加载中…</div>
+
+    <div class="section-t">检索测试</div>
+    <div style="display:flex;gap:10px">
+      <input class="input" id="kb-search-q" placeholder="输入查询语句" style="flex:1">
+      <select id="kb-search-mode" class="input" style="width:130px">
+        <option value="hybrid">混合检索</option>
+        <option value="vector">纯向量</option>
+      </select>
+      <button class="btn" id="kb-search-btn">检索</button>
+    </div>
+    <div id="kb-search-result" style="margin-top:10px"></div>
+
+    <div class="section-t">重建 / 完全复制</div>
+    <div class="hint" style="font-size:12px;color:var(--muted);margin-bottom:8px">
+      复制已有 chunk 生成<b>新知识库</b>（旧库保留，可并存对比）。重建=新模型重新向量化；完全复制=向量原样搬运，不调嵌入 API，秒级完成
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:12.5px">
+      <input type="checkbox" id="kb-copy-mode">
+      完全复制（不过嵌入模型，嵌入配置原样继承，新库为我的私人库）
+    </label>
+    <div style="display:flex;gap:10px;align-items:center" id="kb-rebuild-fields">
+      <div style="flex:1">${embedSelectHTML("kb-rebuild-embed")}</div>
+      <button class="btn" id="kb-rebuild-btn">重建</button>
+    </div>
+    <div id="kb-rebuild-key-field" style="margin-top:8px">
+      <input class="input mono" id="kb-rebuild-key" type="password" placeholder="新模型的嵌入 API Key（可选，留空沿用原库密钥/系统默认）">
+    </div>
+    <div id="kb-rebuild-base-field" style="margin-top:8px">
+      <input class="input mono" id="kb-rebuild-base-url" placeholder="嵌入 Base URL（可选，留空沿用原库端点；换 provider 时用新 provider 默认）">
+    </div>
+    <div id="kb-rebuild-custom" style="display:none;margin-top:8px">
+      <div style="display:flex;gap:8px">
+        <input class="input mono" id="rb-custom-provider" placeholder="provider">
+        <input class="input mono" id="rb-custom-model" placeholder="model_id">
+        <input class="input mono" id="rb-custom-dim" placeholder="dim" style="width:90px">
+      </div></div>
+    <div id="kb-rebuild-status" style="margin-top:8px"></div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn danger" id="kb-delete-btn">删除知识库</button>
+      <button class="btn" onclick="closeModal()">关闭</button>
+    </div>`);
+
+  $("#kb-delete-btn").onclick = async () => {
+    if (!confirm(`确定删除知识库「${kb.name}」？\n将同时删除其向量数据与文档 chunk，不可恢复。`)) return;
+    try {
+      await api(`/api/v1/kbs/${kb.kb_id}?user_id=${encodeURIComponent(state.user.id)}`, { method: "DELETE" });
+      toast("知识库已删除", "ok");
+      closeModal(); loadKBs();
+    } catch (e) { toast(e.message, "err"); }
+  };
+
+  $("#kb-rebuild-embed").onchange = e => {
+    const opt = EMBED_OPTIONS[+e.target.value];
+    $("#kb-rebuild-custom").style.display = opt.provider === "__custom__" ? "block" : "none";
+    $("#kb-rebuild-key-field").style.display = opt.provider === "local" ? "none" : "block";
+    $("#kb-rebuild-base-field").style.display = opt.provider === "local" ? "none" : "block";
+    // 仅用户主动切换时带出新 provider 默认端点；不改则留空=继承原库端点
+    if (opt.provider !== "__custom__" && opt.provider !== "local") $("#kb-rebuild-base-url").value = opt.base || "";
+  };
+
+  $("#kb-upload").onclick = async () => {
+    const files = $("#kb-file").files;
+    if (!files.length) { toast("请先选择文件", "err"); return; }
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    const btn = $("#kb-upload");
+    const statusEl = $("#kb-upload-status");
+    const t0 = Date.now();
+    btn.disabled = true;                                   // 入库期间禁点，防止重复上传
+    // 渲染进度：进度条 + 逐文件状态行（处理中/成功含片段数/失败含错误明细）
+    const render = (p) => {
+      const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
+      const sec = Math.round((Date.now() - t0) / 1000);
+      const color = p.status === "failed" ? "#d9534f" : "var(--accent)";
+      const bar = `<div style="margin:6px 0;display:flex;align-items:center;gap:8px">
+        <div style="flex:1;height:8px;background:#eef1f6;border-radius:4px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:${color};transition:width .4s"></div></div>
+        <span class="muted" style="font-size:12px;white-space:nowrap">${p.done}/${p.total} · ${sec}s</span></div>`;
+      const rows = (p.files || []).map((f, i) => {
+        const processing = p.status === "indexing" && i === p.done && f.status === "pending";
+        const icon = f.status === "ok" ? `<span class="badge green">✓ ${f.chunks} 片</span>`
+          : f.status === "failed" ? '<span class="badge red">✗ 失败</span>'
+          : processing ? '<span class="badge orange pulse">处理中…</span>'
+          : '<span class="badge gray">等待</span>';
+        const err = f.error ? `<div style="font-size:12px;color:#c0392b;margin-top:3px;word-break:break-all">${esc(f.error)}</div>` : "";
+        return `<div style="padding:5px 0;border-bottom:1px dashed var(--line)">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+            <span style="font-size:12.5px;word-break:break-all">${esc(f.filename)}</span><span>${icon}</span></div>${err}</div>`;
+      }).join("");
+      statusEl.innerHTML = bar + rows;
+    };
+    render({ total: files.length, done: 0, status: "indexing",
+             files: Array.from(files).map(f => ({ filename: f.name, status: "pending", chunks: 0, error: null })) });
+    try {
+      await api("/api/v1/kbs/" + kb.kb_id + "/documents", { method: "POST", body: fd });
+      // 轮询逐文件进度直到终态（远端嵌入模型可能较慢，进度条实时刷新）
+      const poll = async () => {
+        let p;
+        try { p = await api("/api/v1/kbs/" + kb.kb_id + "/ingest"); }
+        catch (e) { btn.disabled = false; toast(e.message, "err"); return; }
+        if (!p) {  // 无进度记录（服务重启等异常），回退轮询库状态兜底解锁按钮
+          const cur = await api("/api/v1/kbs/" + kb.kb_id + "?user_id=" + encodeURIComponent(state.user.id));
+          if (cur.status === "indexing") { setTimeout(poll, 2000); return; }
+          btn.disabled = false;
+          statusEl.innerHTML = cur.status === "ready"
+            ? '<span class="badge green">入库完成</span>'
+            : '<span class="badge red">入库失败（无进度明细，可能服务已重启）</span>';
+          loadKBs(); return;
+        }
+        render(p);
+        if (p.status === "indexing") { setTimeout(poll, 1000); return; }
+        btn.disabled = false;
+        const ok = p.succeeded || 0, bad = p.failed || 0;
+        if (bad === 0) toast("文档入库完成（" + ok + " 个文件）", "ok");
+        else if (ok === 0) toast("入库失败：" + ((p.files || []).find(f => f.error) || {}).error, "err");
+        else toast("入库部分成功：" + ok + " 成功 / " + bad + " 失败", "err");
+        loadKBs();
+      };
+      setTimeout(poll, 800);
+    } catch (e) {
+      btn.disabled = false;
+      statusEl.innerHTML = "";
+      toast(e.message, "err");
+    }
+  };
+
+  $("#kb-search-btn").onclick = async () => {
+    const q = $("#kb-search-q").value.trim();
+    if (!q) return;
+    const box = $("#kb-search-result");
+    box.innerHTML = '<span class="muted">检索中…</span>';
+    try {
+      const mode = $("#kb-search-mode").value;
+      const hits = await api(`/api/v1/kbs/${kb.kb_id}/search?query=${encodeURIComponent(q)}&k=5&user_id=${encodeURIComponent(state.user.id)}&mode=${mode}`);
+      if (!hits.length) { box.innerHTML = '<span class="muted">无命中结果</span>'; return; }
+      box.innerHTML = '<div class="hint" style="font-size:12px;color:var(--muted);margin-bottom:6px">' +
+        (mode === "hybrid" ? "混合检索（向量 + BM25 RRF 融合）" : "纯向量检索") + '</div>' +
+        hits.map((h, i) => {
+          const dist = h.distance === null || h.distance === undefined ? "" :
+            `<span class="muted mono">距离 ${Number(h.distance).toFixed(3)}</span>`;
+          const bm = h.bm25_score === null || h.bm25_score === undefined ? "" :
+            `<span class="muted mono">BM25 ${Number(h.bm25_score).toFixed(2)}</span>`;
+          const src = (h.metadata && h.metadata.source)
+            ? (h.metadata.page !== null && h.metadata.page !== undefined
+                ? `<span class="muted">📄 ${esc(h.metadata.source)} · 第 ${h.metadata.page} 页</span>`
+                : `<span class="muted">📄 ${esc(h.metadata.source)}</span>`)
+            : "";
+          return `<div class="search-hit"><b>[${i + 1}]</b> ${dist}${bm}<div class="txt">${esc(h.text)}</div>${src}</div>`;
+        }).join("");
+    } catch (e) { box.innerHTML = ""; toast(e.message, "err"); }
+  };
+
+  // 名称/介绍编辑：随时可改（PATCH /kbs/{id}）
+  $("#kb-info-edit").onclick = () => { $("#kb-info-edit-form").style.display = "block"; };
+  $("#kb-info-cancel").onclick = () => { $("#kb-info-edit-form").style.display = "none"; };
+  $("#kb-info-save").onclick = async () => {
+    const name = $("#kb-name-input").value.trim();
+    const desc = $("#kb-desc-input").value.trim();
+    if (!name) { toast("知识库名称不能为空", "err"); return; }
+    if (!desc) { toast("知识库介绍不能为空", "err"); return; }
+    try {
+      await api("/api/v1/kbs/" + kb.kb_id, {
+        method: "PATCH", body: JSON.stringify({ name, description: desc })
+      });
+      toast("已保存", "ok");
+      loadKBs();
+      openKBDetail(kb.kb_id);     // 重开刷新展示
+    } catch (e) { toast(e.message, "err"); }
+  };
+
+  // 完全复制模式：隐藏嵌入相关字段（配置原样继承）
+  $("#kb-copy-mode").onchange = e => {
+    const copy = e.target.checked;
+    $("#kb-rebuild-fields").style.display = copy ? "none" : "flex";
+    $("#kb-rebuild-key-field").style.display = copy ? "none" : "block";
+    $("#kb-rebuild-base-field").style.display = copy ? "none" : "block";
+    $("#kb-rebuild-btn").textContent = copy ? "完全复制" : "重建";
+  };
+
+  $("#kb-rebuild-btn").onclick = async () => {
+    const statusEl = $("#kb-rebuild-status");
+    const copy = $("#kb-copy-mode").checked;
+    const emb = embedFromSelect("kb-rebuild-embed", "rb-custom");
+    statusEl.innerHTML = copy
+      ? '<span class="badge orange pulse">复制中…</span>'
+      : '<span class="badge orange pulse">重建中…</span>';
+    try {
+      const newKb = await api(`/api/v1/kbs/${kb.kb_id}/rebuild`, {
+        method: "POST", body: JSON.stringify({
+          mode: copy ? "copy" : "reembed",
+          embedding_provider: copy ? null : (emb.provider || null),
+          embedding_model_id: copy ? null : (emb.model || null),
+          embedding_dim: copy ? null : (emb.dim || null),
+          embedding_base_url: copy ? null : ($("#kb-rebuild-base-url").value.trim() || null),
+          embedding_api_key: copy ? null : ($("#kb-rebuild-key").value.trim() || null),
+          user_id: state.user.id,          // 新库强制归本人私人所有
+        })
+      });
+      statusEl.innerHTML = copy
+        ? `<span class="badge green">已复制新库「${esc(newKb.name)}」（向量直接搬运，未调嵌入 API）</span>`
+        : `<span class="badge green">已生成新库「${esc(newKb.name)}」（${esc(newKb.embedding_model_id)} · dim=${newKb.embedding_dim}）</span>`;
+      toast(copy ? "复制完成，旧库已保留" : "重建完成，旧库已保留", "ok");
+      loadKBs();
+    } catch (e) {
+      statusEl.innerHTML = `<span class="badge red">${copy ? "复制" : "重建"}失败</span>`;
+      toast(e.message, "err");
+    }
+  };
+  $("#kb-retrieval-toggle").onclick = async () => {
+    // per-user 开关：只影响当前用户自己的对话检索，其他用户不受影响
+    const enabled = !(kb.retrieval_enabled_for_user ?? kb.retrieval_enabled);
+    try {
+      await api(`/api/v1/kbs/${kb.kb_id}/retrieval?user_id=${encodeURIComponent(state.user.id)}`, {
+        method: "PATCH", body: JSON.stringify({ enabled })
+      });
+      toast(enabled ? "已允许对话检索（仅影响你）" : "已禁止对话检索（仅影响你，其他用户不受影响）", "ok");
+      loadKBs();
+      openKBDetail(kb.kb_id);
+    } catch (e) { toast(e.message, "err"); }
+  };
+
+  // 嵌入配置：初始化修改表单（预填当前值）
+  const embedSel = $("#kb-embed-select");
+  const optIdx = EMBED_OPTIONS.findIndex(o => o.provider === kb.embedding_provider);
+  embedSel.value = optIdx >= 0 ? String(optIdx) : String(EMBED_OPTIONS.length - 1);  // 未知 provider → 自定义
+  const keOpt = EMBED_OPTIONS[+embedSel.value];
+  $("#kb-embed-custom").style.display = keOpt.provider === "__custom__" ? "flex" : "none";
+  if (keOpt.provider === "__custom__") {
+    $("#ke-provider").value = kb.embedding_provider;
+    $("#ke-model").value = kb.embedding_model_id;
+    $("#ke-dim").value = kb.embedding_dim;
+  }
+  $("#ke-base-url").value = kb.embedding_base_url || "";
+  $("#kb-embed-edit").onclick = () => {
+    $("#kb-embed-edit-form").style.display = $("#kb-embed-edit-form").style.display === "none" ? "block" : "none";
+  };
+  embedSel.onchange = () => {
+    const o = EMBED_OPTIONS[+embedSel.value];
+    $("#kb-embed-custom").style.display = o.provider === "__custom__" ? "flex" : "none";
+    if (o.provider !== "__custom__" && o.provider !== "local") $("#ke-base-url").value = o.base || "";
+  };
+  $("#kb-embed-save").onclick = async () => {
+    const emb = embedFromSelect("kb-embed-select", "ke");
+    const stEl = $("#kb-embed-status");
+    stEl.textContent = "保存中…";
+    try {
+      const newKb = await api(`/api/v1/kbs/${kb.kb_id}/embedding`, {
+        method: "PATCH", body: JSON.stringify({
+          embedding_provider: emb.provider || null,
+          embedding_model_id: emb.model || null,
+          embedding_dim: emb.dim || null,
+          embedding_base_url: $("#ke-base-url").value.trim(),
+          embedding_api_key: $("#ke-api-key").value.trim(),
+        })
+      });
+      stEl.innerHTML = '<span class="badge green">已保存</span>';
+      toast("嵌入配置已更新", "ok");
+      if (newKb.embedding_mismatch) toast("⚠️ " + newKb.embedding_mismatch, "err");
+      loadKBs();
+      openKBDetail(kb.kb_id);   // 重开详情，刷新配置与提醒
+    } catch (e) {
+      stEl.innerHTML = '<span class="badge red">保存失败</span>';
+      toast(e.message, "err");
+    }
+  };
+
+  // 文件管理：源文件列表（原始文件名/片段数/页码）+ 多选删除
+  loadKBFiles(kb.kb_id);
+  $("#kb-files-del").onclick = async () => {
+    const picked = $$(".kb-file-chk:checked").map(c => c.dataset.doc);
+    if (!picked.length) { toast("请先勾选要删除的文件", "err"); return; }
+    if (!confirm(`确定删除选中的 ${picked.length} 个文件？
+对应的向量片段与磁盘数据会一并清除，不可恢复。`)) return;
+    try {
+      const r = await api(`/api/v1/kbs/${kb.kb_id}/documents/delete`, {
+        method: "POST", body: JSON.stringify({ doc_ids: picked })
+      });
+      toast(`已删除 ${r.files} 个文件（${r.chunks} 个片段）`, "ok");
+      loadKBFiles(kb.kb_id);
+      loadKBs();
+    } catch (e) { toast(e.message, "err"); }
+  };
+}
+
+/* 文件管理：该库的源文件列表（原始文件名/片段数/页码范围），支持多选删除 */
+async function loadKBFiles(kbId) {
+  const box = $("#kb-files");
+  if (!box) return;
+  box.innerHTML = '<span class="muted">加载中…</span>';
+  let files;
+  try { files = await api("/api/v1/kbs/" + kbId + "/files"); }
+  catch (e) { box.innerHTML = `<span class="muted">${esc(e.message)}</span>`; return; }
+  if (!files.length) {
+    box.innerHTML = '<span class="muted">暂无文件。上传文档后这里会列出源文件，可勾选单个或批量删除</span>';
+    return;
+  }
+  box.innerHTML = `<table class="tbl"><tr>
+    <th style="width:32px"><input type="checkbox" id="kb-files-all" title="全选"></th>
+    <th>文件名</th><th style="width:70px">片段数</th><th style="width:130px">页码</th></tr>` +
+    files.map(f => `<tr>
+      <td><input type="checkbox" class="kb-file-chk" data-doc="${esc(f.doc_id)}"></td>
+      <td>${f.filename ? esc(f.filename) : `<span class="muted">${esc(f.doc_id)}（旧数据无文件名）</span>`}</td>
+      <td class="muted">${f.chunks}</td>
+      <td class="muted">${f.pages && f.pages.length ? esc(f.pages.join(",")) : "-"}</td></tr>`).join("") +
+    "</table>";
+  const all = $("#kb-files-all");
+  if (all) all.onchange = e => $$(".kb-file-chk").forEach(c => c.checked = e.target.checked);
+}
+
+/* ================= LLM 配置 ================= */
+
+/* 解析上下文长度输入：空 → null（自动）；非法 → NaN（已弹错）；合法 → 数值 */
+function parseCtxWindow(raw) {
+  if (!raw) return null;
+  if (!Number.isInteger(+raw) || +raw < 1024 || +raw > 10000000) {
+    toast("上下文长度需为 1,024 ~ 10,000,000 的整数（留空 = 自动）", "err");
+    return NaN;
+  }
+  return +raw;
+}
+
+async function loadLLMView() {
+  try {
+    state.providers = await api("/api/v1/llm/providers");
+  } catch (e) { toast(e.message, "err"); return; }
+  const sel = $("#llm-provider");
+  sel.innerHTML = Object.keys(state.providers).map(p =>
+    `<option value="${esc(p)}">${esc(p)}</option>`).join("") +
+    '<option value="__custom__">custom（自定义端点）</option>';
+  sel.onchange = () => {
+    const p = state.providers[sel.value];
+    if (p) $("#llm-base-url").value = p.base_url || "";
+  };
+  sel.onchange();
+  loadLLMConfigs();
+}
+
+async function loadLLMConfigs() {
+  const box = $("#llm-config-list");
+  box.innerHTML = '<span class="muted">加载中…</span>';
+  let rows;
+  try { rows = await api("/api/v1/llm/configs?user_id=" + encodeURIComponent(state.user.id)); }
+  catch (e) { box.innerHTML = `<span class="muted">${esc(e.message)}</span>`; return; }
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty"><div class="big">尚未配置自定义模型</div>
+      未配置时会话使用系统默认模型（sensenova / deepseek-v4-flash）</div>`;
+    return;
+  }
+  box.innerHTML = `<table class="tbl"><tr>
+    <th>Provider</th><th>Model</th><th>上下文</th><th>Base URL</th><th>API Key</th><th>状态</th><th style="width:250px">操作</th></tr>` +
+    rows.map(c => `<tr>
+      <td><span class="badge blue">${esc(c.provider)}</span></td>
+      <td class="mono">${esc(c.model_id)}</td>
+      <td><button class="btn sm" data-ctxw="${c.id}" title="点击修改上下文窗口（tokens）">${c.context_window ? c.context_window.toLocaleString() : "自动"}</button></td>
+      <td class="mono" style="word-break:break-all">${esc(c.base_url)}</td>
+      <td class="mono">${esc(c.api_key_masked)}</td>
+      <td>${c.is_default ? '<span class="badge green">使用中</span>' : '<span class="muted">未启用</span>'}</td>
+      <td><button class="btn sm" data-switchllm="${c.id}">切换模型</button>
+        ${c.is_default ? "" : ` <button class="btn sm" data-usedefault="${c.id}">设为默认</button>`}
+        <button class="btn sm danger" data-delllm="${c.id}">删除</button></td></tr>`).join("") +
+    "</table>" +
+    '<div class="hint" style="font-size:12px;color:var(--muted);margin-top:8px">' +
+    "「切换模型」在同一提供商下换模型（复用已保存的端点与密钥，无需重新填写），并可同步设置上下文长度；「设为默认」在已保存的配置间切换；点「上下文」列可显式设置该模型的上下文窗口（自动 = 探测模型元数据，兜底 256,000）。均下一轮提问即生效</div>";
+  $$("#llm-config-list [data-delllm]").forEach(el => el.onclick = () => deleteLLMConfig(el.dataset.delllm));
+  $$("#llm-config-list [data-usedefault]").forEach(el => el.onclick = () => setDefaultLLMConfig(el.dataset.usedefault));
+  $$("#llm-config-list [data-switchllm]").forEach(el => el.onclick = () => switchLLMModel(el.dataset.switchllm));
+  $$("#llm-config-list [data-ctxw]").forEach(el => el.onclick = () => editCtxWindow(el.dataset.ctxw));
+}
+
+/* 修改某条配置的上下文窗口：正数=显式设置，留空=恢复自动（探测/兜底 256,000） */
+async function editCtxWindow(id) {
+  let cfg;
+  try {
+    const rows = await api("/api/v1/llm/configs?user_id=" + encodeURIComponent(state.user.id));
+    cfg = rows.find(r => r.id === id);
+    if (!cfg) throw new Error("配置不存在");
+  } catch (e) { toast(e.message, "err"); return; }
+  openModal(`<button class="close-x" onclick="closeModal()">✕</button>
+    <h2>上下文长度</h2>
+    <div class="msub">${esc(cfg.provider)} · <code>${esc(cfg.model_id)}</code></div>
+    <div class="hint" style="font-size:12px;color:var(--muted);margin:8px 0 10px">
+      当前：${cfg.context_window ? cfg.context_window.toLocaleString() + " tokens（显式设置）" : "自动（探测模型元数据，获取不到时用默认 256,000）"}。
+      达到窗口 80% 触发自动压缩，修改下一轮对话即生效。</div>
+    <input class="input mono" id="ctxw-input" type="number" min="1024" max="10000000"
+      placeholder="留空 = 恢复自动" value="${cfg.context_window || ""}">
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" id="ctxw-save">保存</button></div>`);
+  $("#ctxw-save").onclick = async () => {
+    const cw = parseCtxWindow($("#ctxw-input").value.trim());
+    if (Number.isNaN(cw)) return;
+    try {
+      await api(`/api/v1/llm/configs/${id}?user_id=${encodeURIComponent(state.user.id)}`, {
+        method: "PATCH", body: JSON.stringify({ context_window: cw ?? 0 })   // null → 0 = 清除恢复自动
+      });
+      toast(cw != null ? "上下文长度已更新，下一轮对话生效" : "已恢复自动，下一轮对话生效", "ok");
+      closeModal(); loadLLMConfigs();
+    } catch (e) { toast(e.message, "err"); }
+  };
+}
+
+async function switchLLMModel(id) {
+  let cfg, models;
+  try {
+    const rows = await api("/api/v1/llm/configs?user_id=" + encodeURIComponent(state.user.id));
+    cfg = rows.find(r => r.id === id);
+    if (!cfg) throw new Error("配置不存在");
+    models = await api(`/api/v1/llm/configs/${id}/models?user_id=${encodeURIComponent(state.user.id)}`);
+  } catch (e) { toast(e.message, "err"); return; }
+  if (!models.length) { toast("该提供商未返回模型列表", "err"); return; }
+  openModal(`<button class="close-x" onclick="closeModal()">✕</button>
+    <h2>切换模型</h2>
+    <div class="msub">${esc(cfg.provider)} · <code>${esc(cfg.base_url)}</code>${cfg.is_default ? ' · <span class="badge green">使用中</span>' : ""}</div>
+    <div class="hint" style="font-size:12px;color:var(--muted);margin-bottom:10px">当前模型 <code>${esc(cfg.model_id)}</code>，选择下面的模型完成切换（端点与密钥沿用已保存配置），并可同步设置上下文长度</div>
+    <div class="model-chips" id="switch-model-chips">
+      ${models.map(m => `<span class="model-chip ${m.id === cfg.model_id ? "sel" : ""}" data-m="${esc(m.id)}" data-cw="${m.context_window || ""}" title="${m.context_window ? "上下文窗口 " + m.context_window + " tokens" : ""}">${esc(m.id)}${m.context_window ? `<span class="muted" style="font-size:11px"> · ${m.context_window}</span>` : ""}</span>`).join("")}
+    </div>
+    <div class="field" style="margin:12px 0 0">
+      <label>上下文长度（tokens，可选）</label>
+      <input class="input mono" id="switch-ctxw" type="number" min="1024" max="10000000"
+        placeholder="留空 = 自动（探测模型元数据，兜底 256,000）" value="${cfg.context_window || ""}">
+      <div class="hint">点选模型时若元数据带窗口会自动填充，也可手动修改；留空则该配置恢复自动</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" id="switch-model-save">切换</button></div>`);
+  let picked = null;
+  $$("#switch-model-chips .model-chip").forEach(el => el.onclick = () => {
+    $$("#switch-model-chips .model-chip").forEach(x => x.classList.remove("sel"));
+    el.classList.add("sel");
+    picked = el.dataset.m;
+    const cwEl = $("#switch-ctxw");
+    cwEl.value = el.dataset.cw || "";   // 元数据带窗口 → 填充；不带 → 旧模型的设置不再适用，恢复自动
+  });
+  $("#switch-model-save").onclick = async () => {
+    if (!picked) { toast("请先选择一个模型", "err"); return; }
+    const cw = parseCtxWindow($("#switch-ctxw").value.trim());
+    if (Number.isNaN(cw)) return;
+    const ctxChanged = (cw ?? 0) !== (cfg.context_window || 0);   // null → 0（清除）再比较
+    if (picked === cfg.model_id && !ctxChanged) { closeModal(); return; }
+    const body = { model_id: picked };
+    if (ctxChanged) body.context_window = cw ?? 0;
+    try {
+      await api(`/api/v1/llm/configs/${id}?user_id=${encodeURIComponent(state.user.id)}`, {
+        method: "PATCH", body: JSON.stringify(body)
+      });
+      toast(picked === cfg.model_id ? "上下文长度已更新，下一轮对话生效" : `已切换到 ${picked}`, "ok");
+      closeModal(); loadLLMConfigs();
+    } catch (e) { toast(e.message, "err"); }
+  };
+}
+
+async function setDefaultLLMConfig(id) {
+  try {
+    await api(`/api/v1/llm/configs/${id}/default?user_id=${encodeURIComponent(state.user.id)}`, { method: "PATCH" });
+    toast("已切换为默认模型", "ok");
+    loadLLMConfigs();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function deleteLLMConfig(id) {
+  if (!confirm("确定删除这条模型配置？")) return;
+  try {
+    await api(`/api/v1/llm/configs/${id}?user_id=${encodeURIComponent(state.user.id)}`, { method: "DELETE" });
+    toast("配置已删除", "ok");
+    loadLLMConfigs();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function fetchLLMModels() {
+  const provider = $("#llm-provider").value;
+  const base_url = $("#llm-base-url").value.trim();
+  const api_key = $("#llm-api-key").value.trim();
+  const chips = $("#llm-model-chips");
+  if (!base_url) { toast("请填写 Base URL", "err"); return; }
+  chips.innerHTML = '<span class="muted">获取中…</span>';
+  try {
+    const models = await api("/api/v1/llm/models", {
+      method: "POST", body: JSON.stringify({
+        provider: provider === "__custom__" ? "custom" : provider, base_url, api_key
+      })
+    });
+    if (!models.length) { chips.innerHTML = '<span class="muted">该 provider 未返回模型列表</span>'; return; }
+    chips.innerHTML = models.map(m => `<span class="model-chip" data-m="${esc(m.id)}" data-cw="${m.context_window || ""}" title="${m.context_window ? "上下文窗口 " + m.context_window + " tokens" : ""}">${esc(m.id)}${m.context_window ? `<span class="muted" style="font-size:11px"> · ${m.context_window}</span>` : ""}</span>`).join("");
+    $$("#llm-model-chips .model-chip").forEach(el => el.onclick = () => {
+      $$("#llm-model-chips .model-chip").forEach(x => x.classList.remove("sel"));
+      el.classList.add("sel");
+      $("#llm-model-id").value = el.dataset.m;
+      if (el.dataset.cw) $("#llm-ctx-window").value = el.dataset.cw;   // 元数据带窗口时自动填充
+    });
+  } catch (e) { chips.innerHTML = ""; toast(e.message, "err"); }
+}
+
+async function saveLLMConfig() {
+  const provider = $("#llm-provider").value;
+  const cw = parseCtxWindow($("#llm-ctx-window").value.trim());
+  if (Number.isNaN(cw)) return;
+  const body = {
+    user_id: state.user.id,
+    provider: provider === "__custom__" ? "custom" : provider,
+    base_url: $("#llm-base-url").value.trim(),
+    model_id: $("#llm-model-id").value.trim(),
+    api_key: $("#llm-api-key").value.trim(),
+    is_default: $("#llm-is-default").checked,
+    context_window: cw,                     // null = 自动（探测/兜底）
+  };
+  if (!body.base_url || !body.model_id || !body.api_key) {
+    toast("Base URL / Model ID / API Key 均必填", "err"); return;
+  }
+  try {
+    const r = await api("/api/v1/llm/configs", { method: "POST", body: JSON.stringify(body) });
+    toast("配置已保存（" + r.api_key_masked + "）", "ok");
+    $("#llm-api-key").value = "";
+    $("#llm-ctx-window").value = "";
+    loadLLMConfigs();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ================= 长期记忆 ================= */
+async function loadMemories() {
+  const box = $("#memory-list");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  let rows;
+  try { rows = await api("/api/v1/memories?user_id=" + encodeURIComponent(state.user.id)); }
+  catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty"><div class="big">暂无长期记忆</div>
+      对话中提及的研究主题 / 偏好 / 背景会在对话结束后自动抽取写入</div>`;
+    return;
+  }
+  const uid = encodeURIComponent(state.user.id);
+  const sel = new Set();                                   // 勾选待删除的 key
+  const coreCount = rows.filter(m => m.tier === "core").length;
+  box.innerHTML = `
+    <div class="mem-toolbar">
+      <span class="muted">核心 ${coreCount} 条注入每轮对话 · 短期 ${rows.length - coreCount} 条不注入（14 天未更新自动清除）· 上限 50 条，超限自动主题压缩</span>
+      <button class="btn sm danger" id="mem-del-sel" disabled>删除选中</button>
+    </div>
+    <table class="tbl"><tr><th style="width:30px"></th><th style="width:190px">记忆键</th>
+      <th>内容</th><th style="width:64px">层级</th><th style="width:140px">最近使用</th>
+      <th style="width:190px">操作</th></tr>` +
+    rows.map(m => {
+      let v = m.value;
+      if (v && typeof v === "object" && "v" in v) v = v.v;
+      else if (typeof v === "object") v = JSON.stringify(v, null, 1);
+      const badge = m.tier === "core"
+        ? '<span class="badge blue">核心</span>' : '<span class="badge gray">短期</span>';
+      const tierBtn = m.tier === "core"
+        ? `<button class="btn sm" data-demote="${esc(m.key)}" title="不注入对话，14 天未更新自动清除">降为短期</button>`
+        : `<button class="btn sm" data-promote="${esc(m.key)}" title="常驻并注入每轮对话">置顶核心</button>`;
+      return `<tr>
+        <td><input type="checkbox" data-mkey="${esc(m.key)}"></td>
+        <td class="mono">${esc(m.key)}${m.topic ? `<div class="muted" style="font-size:11px">${esc(m.topic)}</div>` : ""}</td>
+        <td>${esc(v)}</td>
+        <td>${badge}</td>
+        <td class="muted">${m.last_used_at ? fmtTime(m.last_used_at) : "-"}</td>
+        <td>${tierBtn} <button class="btn sm danger" data-del="${esc(m.key)}">删除</button></td>
+      </tr>`;
+    }).join("") + "</table>";
+  const selBtn = $("#mem-del-sel");
+  const refreshSel = () => {
+    selBtn.disabled = !sel.size;
+    selBtn.textContent = sel.size ? `删除选中(${sel.size})` : "删除选中";
+  };
+  $$("#memory-list [data-mkey]").forEach(cb => cb.onchange = () => {
+    cb.checked ? sel.add(cb.dataset.mkey) : sel.delete(cb.dataset.mkey);
+    refreshSel();
+  });
+  selBtn.onclick = async () => {
+    if (!confirm(`确定删除选中的 ${sel.size} 条记忆？不可恢复。`)) return;
+    try {
+      await api(`/api/v1/memories/delete?user_id=${uid}`,
+        { method: "POST", body: JSON.stringify({ keys: [...sel] }) });
+      loadMemories();
+    } catch (e) { toast(e.message, "err"); }
+  };
+  $$("#memory-list [data-del]").forEach(b => b.onclick = async () => {
+    if (!confirm(`确定删除记忆「${b.dataset.del}」？不可恢复。`)) return;
+    try {
+      await api(`/api/v1/memories/${encodeURIComponent(b.dataset.del)}?user_id=${uid}`,
+        { method: "DELETE" });
+      loadMemories();
+    } catch (e) { toast(e.message, "err"); }
+  });
+  $$("#memory-list [data-promote],[data-demote]").forEach(b => b.onclick = async () => {
+    const key = b.dataset.promote || b.dataset.demote;
+    const tier = b.dataset.promote ? "core" : "short";
+    try {
+      await api(`/api/v1/memories/${encodeURIComponent(key)}/tier?user_id=${uid}`,
+        { method: "PATCH", body: JSON.stringify({ tier }) });
+      loadMemories();
+    } catch (e) { toast(e.message, "err"); }
+  });
+}
+
+/* ================= 调用追踪 ================= */
+const KIND_BADGE = { llm: "blue", tool: "pink", retrieve: "green", kb: "orange" };
+async function loadTraces() {
+  const box = $("#trace-list");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  // 展示当前聊天会话的 session_id（点击复制）——用户提问时从这里拿 id 过滤
+  const sidEl = $("#trace-active-sid");
+  if (sidEl) {
+    sidEl.textContent = "当前会话: " + state.active;
+    sidEl.title = "点击复制 " + state.active;
+    sidEl.onclick = ev => copyText(state.active, "session_id 已复制", ev);
+  }
+  const sid = $("#trace-session").value.trim();
+  let url = "/api/v1/traces?user_id=" + encodeURIComponent(state.user.id);
+  if (sid) url += "&session_id=" + encodeURIComponent(sid);
+  let rows;
+  try { rows = await api(url); }
+  catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty"><div class="big">暂无调用日志</div>发起一次对话后，这里会记录完整调用链路</div>`;
+    return;
+  }
+  box.innerHTML = `<table class="tbl"><tr>
+    <th style="width:160px">时间</th><th style="width:80px">类型</th><th>名称</th>
+    <th style="width:90px">会话</th><th style="width:80px">状态</th><th style="width:90px">耗时</th></tr>` +
+    rows.map((r, i) => {
+      const dur = r.started_at && r.finished_at
+        ? (new Date(r.finished_at) - new Date(r.started_at)) + " ms" : "-";
+      const status = r.error ? '<span class="badge red">失败</span>'
+        : r.finished_at ? '<span class="badge green">成功</span>' : '<span class="badge orange">执行中</span>';
+      return `<tr class="expander" data-i="${i}">
+        <td class="muted mono">${fmtTime(r.started_at)}</td>
+        <td><span class="badge ${KIND_BADGE[r.kind] || "gray"}">${esc(r.kind)}</span></td>
+        <td class="mono">${esc(r.name)}</td>
+        <td class="mono muted" data-copysid="${esc(r.session_id)}" title="点击复制 ${esc(r.session_id)}" style="cursor:copy">${esc(shortId(r.session_id))}</td>
+        <td>${status}</td><td class="muted mono">${dur}</td></tr>
+      <tr class="detail" data-detail="${i}" style="display:none"><td colspan="6">
+        ${r.args && Object.keys(r.args).length ? `<b>参数</b><pre>${esc(JSON.stringify(r.args, null, 2))}</pre>` : ""}
+        ${r.output ? `<b>输出</b><pre>${esc(r.output)}</pre>` : ""}
+        ${r.error ? `<b>错误</b><pre style="color:#ffb3b3">${esc(r.error)}</pre>` : ""}
+        <div class="muted mono">id=${esc(r.id)}${r.parent_id ? " parent=" + esc(r.parent_id) : ""}</div>
+      </td></tr>`;
+    }).join("") + "</table>";
+  $$("#trace-list .expander").forEach(el => el.onclick = () => {
+    const d = $(`#trace-list [data-detail="${el.dataset.i}"]`);
+    d.style.display = d.style.display === "none" ? "" : "none";
+  });
+  $$("#trace-list [data-copysid]").forEach(el => el.onclick = e => {
+    e.stopPropagation();                        // 不触发行展开
+    copyText(el.dataset.copysid, "session_id 已复制", e);
+  });
+}
+
+/* ================= 弹窗 ================= */
+function openModal(html) {
+  $("#modal-box").innerHTML = html;
+  $("#modal-root").classList.add("show");
+}
+function closeModal() { $("#modal-root").classList.remove("show"); }
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeModal();
+});
+
+/* ================= 事件绑定 ================= */
+applyTheme(theme.value);
+$("#theme-toggle").onclick = () => { const next = theme.value === "light" ? "dark" : "light"; theme.value = next; applyTheme(next); };
+$("#tab-login").onclick = () => setAuthMode("login");
+$("#tab-register").onclick = () => setAuthMode("register");
+$("#auth-submit").onclick = submitAuth;
+$("#auth-password").addEventListener("keydown", e => { if (e.key === "Enter") submitAuth(); });
+$("#logout-btn").onclick = logout;
+$("#api-status").onclick = checkHealth;
+$("#new-session").onclick = newSession;
+$("#send-btn").onclick = sendChat;
+$("#attach-btn").onclick = () => $("#chat-file").click();
+$("#chat-file").onchange = function () {
+  if (this.files.length) uploadChatFiles(this.files);
+  this.value = "";                     // 清空选择，允许再次上传同名文件
+};
+$("#chat-input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+$("#chat-input").addEventListener("input", function () {
+  this.style.height = "auto";
+  this.style.height = Math.min(this.scrollHeight, 160) + "px";
+});
+$("#kb-create-btn").onclick = openCreateKB;
+$("#kb-refresh-btn").onclick = loadKBs;
+$("#llm-fetch-models").onclick = fetchLLMModels;
+$("#llm-save").onclick = saveLLMConfig;
+$("#memory-refresh").onclick = loadMemories;
+$("#trace-query").onclick = loadTraces;
+$("#trace-current").onclick = () => {
+  $("#trace-session").value = state.active;      // 一键填入当前聊天会话
+  loadTraces();
+};
+
+/* ================= 启动 ================= */
+(async function init() {
+  if (!store.token) { showAuth(); return; }
+  try { await boot(); }
+  catch (e) { store.token = null; showAuth(); }
+})();
+</script>
+</body>
+</html>

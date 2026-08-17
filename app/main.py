@@ -113,7 +113,8 @@ async def health():
 
 # 托管前端（ra-web）：前后端同源，浏览器不再跨域，规避本地网络拦截。
 # 挂载在 API 路由之后——Starlette 按注册顺序匹配，/api/* 与 /health 优先命中。
-WEB_DIR = BASE_DIR.parent / "ra-web"
+# 前端目录在项目内（ra-agent/ra-web）
+WEB_DIR = BASE_DIR / "ra-web"
 if WEB_DIR.exists():
     app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 
