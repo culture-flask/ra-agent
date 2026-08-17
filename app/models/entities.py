@@ -62,7 +62,9 @@ class KnowledgeBase(Base):
         String(512), nullable=True)          # 该库专用嵌入密钥（AES 加密），空则用系统默认
     embedded_model: Mapped[dict | None] = mapped_column(
         JSON, nullable=True)                 # 最近一次成功入库使用的嵌入模型标注（见 embedding_mismatch）
-    retrieval_enabled: Mapped[bool] = mapped_column(Boolean, default=True)  # 允许被对话检索
+    retrieval_enabled: Mapped[bool] = mapped_column(Boolean, default=True)  # 库主全局允许被对话检索
+    retrieval_disabled_users: Mapped[list] = mapped_column(
+        JSON, default=list)                  # 按用户禁用检索的 user_id 列表（互不影响）
     status: Mapped[str] = mapped_column(String(16), default="indexing")
     #                       ↑ ready | indexing | reembedding | failed（状态机）
     source_doc_ids: Mapped[list] = mapped_column(JSON, default=list)   # 原文档引用

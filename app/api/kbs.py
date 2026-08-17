@@ -20,12 +20,13 @@ class KBCreateRequest(BaseModel):
     embedding_api_key: str | None = None       # 该库专用嵌入密钥（可选，加密存储）
 
 class KBRebuildRequest(BaseModel):
-    embedding_provider: str | None = None      
+    mode: str = "reembed"               # reembed=重新向量化（可换模型）| copy=完全复制（不过嵌入）
+    embedding_provider: str | None = None
     embedding_model_id: str | None = None
     embedding_dim: int | None = None
     embedding_base_url: str | None = None      # 不传则按 provider 继承/默认
     embedding_api_key: str | None = None       # 不传则沿用原库密钥
-    user_id: str = "u1"                        # 重建发起者：重建库强制归其私人所有
+    user_id: str = "u1"                        # 重建/复制发起者：新库强制归其私人所有
 
 class KBEmbeddingUpdateRequest(BaseModel):
     """修改嵌入配置（创建后随时可改）：只更新传了的字段。"""
@@ -35,11 +36,17 @@ class KBEmbeddingUpdateRequest(BaseModel):
     embedding_base_url: str | None = None      # 空串=清空回退 provider 默认端点
     embedding_api_key: str | None = None       # 空串=清除专用密钥
 
+class KBUpdateRequest(BaseModel):
+    """修改知识库名称/介绍（创建后随时可改）：传了才改。"""
+    name: str | None = None
+    description: str | None = None
+
+
 class KBRetrievalUpdateRequest(BaseModel):
     """允许/禁止该库被对话检索。"""
     enabled: bool
 
-def _kb_dict(kb) -> dict:
+def _kb_dict(kb, user_id: str | None = None) -> dict:
     return {
         "kb_id": kb.kb_id, "name": kb.name,
         "description": kb.description or "",   # 知识库介绍
@@ -52,7 +59,11 @@ def _kb_dict(kb) -> dict:
         "has_embedding_key": bool(kb.embedding_api_key),   # 不下发明文，只告知是否设了专用密钥
         "embedded_model": kb.embedded_model,               # 向量实际由谁嵌入
         "embedding_mismatch": _kb_mismatch(kb),            # 查询模型 ≠ 嵌入模型时的提醒
-        "retrieval_enabled": kb.retrieval_enabled,         # 是否允许被对话检索
+        "retrieval_enabled": kb.retrieval_enabled,         # 库主全局允许检索
+        # 当前用户视角的检索开关（per-user，其他用户的禁用不影响此值）
+        "retrieval_enabled_for_user": (
+            kb.retrieval_enabled
+            and user_id not in (kb.retrieval_disabled_users or [])),
         "source_doc_ids": kb.source_doc_ids or [],
         "created_at": kb.created_at.isoformat() if hasattr(kb.created_at, "isoformat") else str(kb.created_at),
     }
@@ -100,13 +111,26 @@ async def create_kb(req: KBCreateRequest, request: Request):
 @router.get("/kbs")
 async def list_kbs(request: Request, user_id: str = "u1"):
     kbs = await run_in_threadpool(request.app.state.kb_service.list_kbs, user_id)
-    return [_kb_dict(kb) for kb in kbs]
+    return [_kb_dict(kb, user_id) for kb in kbs]
 
 
 @router.get("/kbs/{kb_id}")
-async def get_kb(kb_id: str, request: Request):
+async def get_kb(kb_id: str, request: Request, user_id: str = "u1"):
     """查单个 KB（含入库状态，轮询入库进度用）。"""
-    return _kb_dict(await _get_kb(request, kb_id))
+    return _kb_dict(await _get_kb(request, kb_id), user_id)
+
+
+@router.patch("/kbs/{kb_id}")
+async def update_kb(kb_id: str, req: KBUpdateRequest, request: Request):
+    """修改知识库名称/介绍（创建后随时可改）。"""
+    await _get_kb(request, kb_id)   # 404 优先
+    try:
+        kb = await run_in_threadpool(
+            request.app.state.kb_service.update_info,
+            kb_id, name=req.name, description=req.description)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _kb_dict(kb)
 
 
 @router.get("/kbs/{kb_id}/search")
@@ -206,22 +230,27 @@ async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,
 
 @router.patch("/kbs/{kb_id}/retrieval")
 async def update_kb_retrieval(kb_id: str, req: KBRetrievalUpdateRequest,
-                              request: Request):
-    """允许/禁止该库被对话检索（库本身保留，可随时恢复）。"""
+                              request: Request, user_id: str = "u1"):
+    """允许/禁止【当前用户】的对话检索此库（per-user，不影响其他用户）。"""
     await _get_kb(request, kb_id)
     kb = await run_in_threadpool(request.app.state.kb_service.set_retrieval,
-                                 kb_id, req.enabled)
-    return _kb_dict(kb)
+                                 kb_id, user_id, req.enabled)
+    return _kb_dict(kb, user_id)
 
 
 @router.post("/kbs/{kb_id}/rebuild")
 async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):
-    """复制原 chunk + 新嵌入模型重新向量化 → 新 KB，旧 KB 保留。
+    """复制原 chunk 生成新 KB，旧 KB 保留。两种模式：
 
-    重建库强制为发起者的「私人」库（不继承原库 scope）——避免重建公共库
-    变成共有库影响其他用户。
+    - reembed（默认）：新嵌入模型重新向量化（可换模型）
+    - copy：完全复制——向量数据原样搬运，不调嵌入 API（秒级，配置原样继承）
+    新库强制为发起者的「私人」库（不继承原库 scope）——不污染公共库。
     """
     kb = await _get_kb(request, kb_id)
+    if req.mode == "copy":
+        new_kb = await run_in_threadpool(
+            request.app.state.kb_service.copy_kb, kb.kb_id, req.user_id)
+        return _kb_dict(new_kb, req.user_id)
     try:
         new_kb = await run_in_threadpool(
             request.app.state.kb_service.rebuild,

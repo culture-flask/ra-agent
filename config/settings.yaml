@@ -27,11 +27,17 @@ llm:
     max_retries: 10
     base_delay: 1.0 # 首次重试等 1s，之后 2s / 4s（含随机抖动）
   context_window: 256000  # 上下文窗口兜底值(token)：用户未设置且探测不到模型元数据时使用，达到 80% 触发自动压缩
-  providers:
-    sensenova: { base_url: https://token.sensenova.cn/v1, listable: true }
-    openai:    { base_url: https://api.openai.com/v1, listable: true }
-    qwen:      { base_url: https://dashscope.aliyuncs.com/compatible-mode/v1, listable: true }
-    deepseek:  { base_url: https://api.deepseek.com/v1, listable: true }
+  providers:                     # 均为 OpenAI 协议兼容端点（custom 自定义除外）
+    openai:      { base_url: https://api.openai.com/v1, listable: true }
+    deepseek:    { base_url: https://api.deepseek.com/v1, listable: true }
+    qwen:        { base_url: https://dashscope.aliyuncs.com/compatible-mode/v1, listable: true }
+    moonshot:    { base_url: https://api.moonshot.cn/v1, listable: true }
+    zhipu:       { base_url: https://open.bigmodel.cn/api/paas/v4, listable: true }
+    siliconflow: { base_url: https://api.siliconflow.cn/v1, listable: true }
+    minimax:     { base_url: https://api.minimax.chat/v1, listable: true }
+    openrouter:  { base_url: https://openrouter.ai/api/v1, listable: true }
+    gemini:      { base_url: https://generativelanguage.googleapis.com/v1beta/openai, listable: true }
+    ollama:      { base_url: http://localhost:11434/v1, listable: true }
 
 retrieval:
   mode: hybrid  # 对话检索模式：vector（纯向量）| hybrid（向量 + BM25 混合），可在前端切换

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.abstractions.embedding import EmbeddingModel, EmbeddingMeta
 from app.core.db import SessionLocal
 from app.main import app
-from app.models import User
+from app.models import KnowledgeBase, User
 from app.services.kb_service import KBService
 from app.settings import Settings
 
@@ -241,39 +241,137 @@ def test_api_update_embedding():
         assert d2["embedding_provider"] == "llama.cpp"
 
 
-def test_set_retrieval_excludes_from_queryable():
-    """禁用检索：库保留可见，但不再进入对话可检索列表；可随时恢复。"""
+def test_set_retrieval_per_user_isolated():
+    """检索开关 per-user：用户 u1 禁用不影响 u2；可随时恢复。
+
+    旧实现 retrieval_enabled 是库级全局字段——u1 禁用后所有人（u2）都被禁。
+    """
     ks = _make_ks()
     kb_a = ks.create_kb("可检索库", "public", None)
     kb_b = ks.create_kb("被禁库", "public", None)
 
     assert {k.kb_id for k in ks.list_queryable_kbs("u1")} == {kb_a.kb_id, kb_b.kb_id}
 
-    ks.set_retrieval(kb_b.kb_id, enabled=False)
-    queryable = {k.kb_id for k in ks.list_queryable_kbs("u1")}
-    assert kb_b.kb_id not in queryable                 # 被排除
-    assert kb_a.kb_id in queryable
-    visible = {k.kb_id for k in ks.list_kbs("u1")}     # 列表仍可见（可管理）
+    ks.set_retrieval(kb_b.kb_id, "u1", enabled=False)     # u1 禁用
+    assert kb_b.kb_id not in {k.kb_id for k in ks.list_queryable_kbs("u1")}
+    assert kb_b.kb_id in {k.kb_id for k in ks.list_queryable_kbs("u2")}   # u2 不受影响
+    visible = {k.kb_id for k in ks.list_kbs("u1")}         # 列表仍可见（可管理）
     assert kb_b.kb_id in visible
 
-    ks.set_retrieval(kb_b.kb_id, enabled=True)
+    ks.set_retrieval(kb_b.kb_id, "u1", enabled=True)       # 恢复
     assert kb_b.kb_id in {k.kb_id for k in ks.list_queryable_kbs("u1")}
+    assert kb_b.kb_id in {k.kb_id for k in ks.list_queryable_kbs("u2")}
 
 
-def test_api_retrieval_toggle():
-    """API：PATCH /kbs/{id}/retrieval 开关对话检索；缺 enabled → 422。"""
+def test_set_retrieval_recovers_legacy_global_disable():
+    """回归：per-user 改造前的旧全局禁用（retrieval_enabled=False）不再死锁。
+
+    旧 bug：开启只清个人禁用列表，库级总开关仍卡 False → 永远开不回来。
+    修复：开启时一并把库级开关拉回 True。
+    """
+    ks = _make_ks()
+    kb = ks.create_kb("旧禁用库", "public", None)
+    with SessionLocal() as db:               # 模拟旧版写入的全局禁用
+        row = db.get(KnowledgeBase, kb.kb_id)
+        row.retrieval_enabled = False
+        db.commit()
+    assert not ks.list_queryable_kbs("u1")   # 旧状态：全员禁用
+
+    ks.set_retrieval(kb.kb_id, "u1", enabled=True)          # 用户点「允许检索」
+    assert kb.kb_id in {k.kb_id for k in ks.list_queryable_kbs("u1")}
+    assert kb.kb_id in {k.kb_id for k in ks.list_queryable_kbs("u2")}
+
+
+def test_api_retrieval_toggle_per_user():
+    """API：PATCH /kbs/{id}/retrieval?user_id= per-user 开关；缺 enabled → 422。"""
     with TestClient(app) as c:
         kb = c.post("/api/v1/kbs", json={
             "name": "API开关库", "scope": "public", "user_id": "u1",
             "description": "检索开关测试库"}).json()
-        assert kb["retrieval_enabled"] is True
+        assert kb["retrieval_enabled_for_user"] is True
 
-        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval", json={"enabled": False})
+        # u1 禁用：只影响 u1，u2 视角仍是可用
+        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval?user_id=u1",
+                    json={"enabled": False})
         assert r.status_code == 200
-        assert r.json()["retrieval_enabled"] is False
+        assert r.json()["retrieval_enabled_for_user"] is False
+        assert c.get(f"/api/v1/kbs/{kb['kb_id']}?user_id=u2"
+                     ).json()["retrieval_enabled_for_user"] is True
 
-        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval", json={"enabled": True})
-        assert r2.json()["retrieval_enabled"] is True
+        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval?user_id=u1",
+                     json={"enabled": True})
+        assert r2.json()["retrieval_enabled_for_user"] is True
 
-        r3 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval", json={})
+        r3 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval?user_id=u1", json={})
         assert r3.status_code == 422
+
+
+def test_copy_kb_full_clone_without_embedding():
+    """完全复制：向量原样搬运（不调嵌入 API），数据独立、可直接检索、强制私人。"""
+    ks = _make_ks()
+    _ensure_user("u1")
+    src = ks.create_kb("源库", "public", None,
+                       ["量子比特可以处于叠加态。", "Shor算法可以分解大整数。"],
+                       provider="local", description="复制源")
+    # 完全复制：嵌入配置继承，不重新向量化
+    new = ks.copy_kb(src.kb_id, "u1")
+    assert new.kb_id != src.kb_id
+    assert new.name == "源库(复制)"
+    assert new.scope == "private" and new.owner_user_id == "u1"   # 强制私人
+    assert new.status == "ready"
+    assert new.embedding_model_id == src.embedding_model_id
+    assert new.embedded_model == src.embedded_model          # 向量写入标注继承
+    assert new.source_doc_ids == src.source_doc_ids
+    assert new.description == "复制源"
+    # 复制库独立可检索（BM25 + 向量都就位）
+    hits = ks.search(new.kb_id, "量子比特", k=2, user_id="u1")
+    assert hits and any("量子" in h["text"] for h in hits)
+    # 文件管理与源库一致（chunk 目录完整复制）
+    assert [d["filename"] for d in ks.list_documents(new.kb_id)] == \
+           [d["filename"] for d in ks.list_documents(src.kb_id)]
+    # 磁盘数据独立：删源库不影响复制库
+    ks.delete_kb(src.kb_id)
+    assert ks.search(new.kb_id, "量子比特", k=2, user_id="u1")
+
+
+def test_copy_kb_via_api():
+    """API：POST /kbs/{id}/rebuild mode=copy → 完全复制新库。"""
+    _ensure_user("u1")
+    with TestClient(app) as c:
+        kb = c.post("/api/v1/kbs", json={
+            "name": "API复制源", "scope": "public", "user_id": "u1",
+            "texts": ["量子纠错需要冗余量子比特"],
+            "description": "API 复制测试", "embedding_provider": "local"}).json()
+        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/rebuild",
+                   json={"mode": "copy", "user_id": "u1"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["scope"] == "private"
+        assert d["status"] == "ready"
+        assert d["kb_id"] != kb["kb_id"]
+        assert d["embedding_model_id"] == kb["embedding_model_id"]
+
+
+def test_update_kb_name_and_description():
+    """名称/介绍创建后随时可改：PATCH /kbs/{id}；空名 400；不存在的库 404。"""
+    with TestClient(app) as c:
+        kb = c.post("/api/v1/kbs", json={
+            "name": "旧名字", "scope": "public", "user_id": "u1",
+            "description": "旧介绍", "embedding_provider": "local"}).json()
+        # 只改名字
+        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}",
+                    json={"name": "新名字"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["name"] == "新名字" and d["description"] == "旧介绍"
+        # 名字 + 介绍一起改
+        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}",
+                     json={"name": "更好名字", "description": "新介绍"})
+        assert r2.json()["description"] == "新介绍"
+        # 空名 → 400；空介绍允许（仅清空）
+        assert c.patch(f"/api/v1/kbs/{kb['kb_id']}",
+                       json={"name": "  "}).status_code == 400
+        assert c.patch(f"/api/v1/kbs/{kb['kb_id']}",
+                       json={"description": ""}).json()["description"] == ""
+        assert c.patch("/api/v1/kbs/nonexistent",
+                       json={"name": "x"}).status_code == 404

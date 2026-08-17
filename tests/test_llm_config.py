@@ -16,7 +16,10 @@ def _register(c, username):
 def test_providers_catalog():
     with TestClient(app) as c:
         p = c.get("/api/v1/llm/providers").json()
-        assert "sensenova" in p and "openai" in p
+        assert "sensenova" not in p                 # 已从厂商目录移除
+        assert "openai" in p and "deepseek" in p
+        assert "moonshot" in p and "zhipu" in p     # 新增常用厂商
+        assert "openrouter" in p and "gemini" in p
 
 
 def test_config_save_and_masked_list():

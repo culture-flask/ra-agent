@@ -562,9 +562,11 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """
     kbs = await asyncio.to_thread(ctx.kb_service.list_kbs, state["user_id"])
     selected_ids = set(state.get("selected_kb_ids") or [])
-    # 双保险：即使 selected_ids 携带被禁用的库（路由与检索之间用户改了开关），也跳过
+    # 双保险：即使 selected_ids 携带被禁用的库（路由与检索之间用户改了开关），
+    # 也跳过——检索开关 per-user，只认当前用户自己的禁用列表
+    uid = state["user_id"]
     targets = [kb for kb in kbs
-               if kb.kb_id in selected_ids and kb.retrieval_enabled]
+               if kb.kb_id in selected_ids and ctx.kb_service.kb_queryable(kb, uid)]
     mode = (state.get("retrieval_mode")
             or getattr(ctx.settings, "retrieval_mode", "hybrid"))
     # 检索数量：每库 k 条 / 合并后总共 top 条（state 传入 → 全局配置兜底，带范围约束）

@@ -79,6 +79,31 @@ class ChromaVectorStore(VectorStore):
                 embeddings=self.embedding_model.embed_texts([c.text for c in batch]),
             )
 
+    def copy_from(self, src_store: "ChromaVectorStore") -> int:
+        """把源 collection 的向量数据原样搬到本 collection（不调嵌入 API）。
+
+        「完全复制」知识库用：分批 get(ids/documents/metadatas/embeddings)
+        再 add——纯数据搬运，几万 chunk 秒级完成，远端嵌入模型零调用。
+        返回搬运的 chunk 数。
+        """
+        total = src_store._col.count()
+        if total == 0:
+            return 0
+        moved = 0
+        for off in range(0, total, self.MAX_ADD_BATCH):
+            res = src_store._col.get(
+                limit=self.MAX_ADD_BATCH, offset=off,
+                include=["documents", "metadatas", "embeddings"])
+            if not res.get("ids"):
+                break
+            self._col.add(
+                ids=res["ids"],
+                documents=res["documents"],
+                metadatas=[m or {} for m in res["metadatas"]],
+                embeddings=res["embeddings"])
+            moved += len(res["ids"])
+        return moved
+
     def search(self, query: str, k: int = 5, scope: str = "all",
                user_id: str | None = None) -> list[dict]:
         n = self._col.count()

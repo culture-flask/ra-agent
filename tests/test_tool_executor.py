@@ -57,7 +57,7 @@ def _make_ctx(responses: list[AIMessage]):
     kb_service = KBService(settings)
     tracer = Tracer()
     host = MCPHost(settings.mcp_servers, base_dir=Path(__file__).resolve().parent.parent)
-    adapter = MCPToolAdapter(host, tracer)
+    adapter = MCPToolAdapter(host, tracer, kb_service=kb_service)
     ctx = WorkflowContext(settings, ScriptedLLMService(responses),
                           kb_service, adapter, tracer)
     return ctx, tracer
@@ -97,3 +97,46 @@ def test_no_tool_call_ends():
     assert result["answer"] == "直接回答"
     kinds = [x["kind"] for x in tracer.list(session_id="t-tool-2")]
     assert "tool" not in kinds
+
+
+# ---------- 原生工具：list_kb_files（列出用户可检索库的文件名） ----------
+def test_native_tool_in_catalog():
+    """工具目录包含原生 list_kb_files（与外部 MCP 工具一起给 LLM 绑定）。"""
+    ctx, _ = _make_ctx([])
+    schemas = _run(ctx.mcp_adapter.schemas_for_llm())
+    names = [s["function"]["name"] if "function" in s else s["name"]
+             for s in schemas]
+    assert "list_kb_files" in names
+    assert "add" in names                              # 外部 MCP 工具仍在
+
+
+def test_native_list_kb_files_per_user():
+    """list_kb_files：按当前用户过滤（可检索库 + 该库文件名），并写追踪日志。"""
+    import json as _json
+
+    ctx, tracer = _make_ctx([])
+    ks = ctx.kb_service
+    kb1 = ks.create_kb("文件列表库A", "public", None,
+                       ["量子比特可以处于叠加态"], description="A库")
+    kb2 = ks.create_kb("文件列表库B", "public", None,
+                       ["Shor算法可以分解大整数"], description="B库")
+    ks.ingest_file(kb1.kb_id, "论文甲.txt", "神经区分器分析论文内容".encode())
+    ks.set_retrieval(kb2.kb_id, "u1", enabled=False)      # u1 禁用 B 库
+
+    out = _run(ctx.mcp_adapter.call("list_kb_files", {}, "t-native-1", "u1"))
+    data = _json.loads(out["output"])
+    assert data["user_id"] == "u1"
+    by_name = {k["kb_name"]: k for k in data["kbs"]}
+    assert "文件列表库B" not in by_name                   # u1 禁用的库不出现
+    entry = by_name.get("文件列表库A")
+    assert entry and "论文甲.txt" in entry["files"]        # 文件名正确列出
+
+    # u2 未禁用 → B 库对 u2 可见（per-user 隔离）
+    out2 = _run(ctx.mcp_adapter.call("list_kb_files", {}, "t-native-2", "u2"))
+    data2 = _json.loads(out2["output"])
+    assert "文件列表库B" in {k["kb_name"] for k in data2["kbs"]}
+
+    # 追踪：原生工具执行同样落 ToolCallLog
+    logs = tracer.list(session_id="t-native-1")
+    assert logs and logs[0]["kind"] == "tool"
+    assert logs[0]["name"] == "list_kb_files"

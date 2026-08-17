@@ -60,6 +60,9 @@ async def lifespan(app: FastAPI):
         # 用户自定义上下文窗口：旧表幂等补列（空 = 自动探测/兜底默认）
         conn.execute(text("ALTER TABLE user_llm_config ADD COLUMN IF NOT EXISTS "
                           "context_window INTEGER"))
+        # 检索开关细化到用户：旧表幂等补列（禁用列表，用户间互不影响）
+        conn.execute(text("ALTER TABLE kbs ADD COLUMN IF NOT EXISTS "
+                          "retrieval_disabled_users JSON NOT NULL DEFAULT '[]'"))
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)
@@ -72,7 +75,7 @@ async def lifespan(app: FastAPI):
     # --- MCP 工具框架 + 调用追踪 ---
     tracer = Tracer()
     mcp_host = MCPHost(settings.mcp_servers, base_dir=BASE_DIR)
-    mcp_adapter = MCPToolAdapter(mcp_host, tracer)
+    mcp_adapter = MCPToolAdapter(mcp_host, tracer, kb_service=kb_service)
     await mcp_adapter.ensure_catalog()         # 启动时 tools/list 动态发现
     logger.info("发现 %d 个 MCP 工具", len(mcp_host.tools or []))
 

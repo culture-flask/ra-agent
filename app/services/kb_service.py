@@ -187,6 +187,22 @@ class KBService:
                 raise KeyError(f"kb not found: {kb_id}")
             return kb
 
+    def update_info(self, kb_id: str, name: str | None = None,
+                    description: str | None = None) -> KnowledgeBase:
+        """修改知识库名称/介绍（创建后随时可改；传 None 表示该项不改）。"""
+        self.get_kb(kb_id)                        # 不存在抛 KeyError
+        with SessionLocal() as db:
+            row = db.get(KnowledgeBase, kb_id)
+            if name is not None:
+                name = name.strip()
+                if not name:
+                    raise ValueError("knowledge base name cannot be empty")
+                row.name = name[:128]
+            if description is not None:
+                row.description = description.strip()[:512]
+            db.commit()
+        return self.get_kb(kb_id)
+
     def list_kbs(self, user_id: str | None) -> list[KnowledgeBase]:
         """可见性：public 全员 + private 仅本人。"""
         with SessionLocal() as db:
@@ -196,18 +212,41 @@ class KBService:
                    & (KnowledgeBase.owner_user_id == user_id)))
             return list(db.scalars(stmt))
 
-    def list_queryable_kbs(self, user_id: str | None) -> list[KnowledgeBase]:
-        """对话可检索的库：可见性基础上排除用户主动禁用的（retrieval_enabled=False）。"""
-        return [kb for kb in self.list_kbs(user_id) if kb.retrieval_enabled]
+    @staticmethod
+    def kb_queryable(kb: KnowledgeBase, user_id: str | None) -> bool:
+        """该用户能否检索此库：库主全局开关 AND 该用户未在个人禁用列表。
 
-    def set_retrieval(self, kb_id: str, enabled: bool) -> KnowledgeBase:
-        """允许/禁止该库被对话检索（库本身保留，随时可恢复）。"""
+        禁用列表按用户隔离——用户 A 禁用不影响用户 B（检索偏好是个人行为）。
+        """
+        return (kb.retrieval_enabled
+                and user_id not in (kb.retrieval_disabled_users or []))
+
+    def list_queryable_kbs(self, user_id: str | None) -> list[KnowledgeBase]:
+        """对话可检索的库：可见性基础上排除该用户自己禁用的（per-user）。"""
+        return [kb for kb in self.list_kbs(user_id)
+                if self.kb_queryable(kb, user_id)]
+
+    def set_retrieval(self, kb_id: str, user_id: str,
+                      enabled: bool) -> KnowledgeBase:
+        """允许/禁止【该用户】的对话检索此库（库本身保留，随时可恢复）。
+
+        per-user：写入 retrieval_disabled_users 列表，其他用户的开关不受影响。
+        开启时若库级总开关 retrieval_enabled 为 False（per-user 改造前留下的
+        旧全局禁用）一并拉回 True——否则该库永远无法恢复检索（死锁）。
+        """
         self.get_kb(kb_id)                        # 不存在抛 KeyError
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
-            row.retrieval_enabled = bool(enabled)
+            # 拷贝新 list 再改（JSON 列检测不到原地突变）
+            disabled = list(row.retrieval_disabled_users or [])
+            if enabled:
+                disabled = [u for u in disabled if u != user_id]
+                row.retrieval_enabled = True      # 修复旧的全局禁用卡死
+            elif user_id not in disabled:
+                disabled.append(user_id)
+            row.retrieval_disabled_users = disabled
             db.commit()
-        logger.info("kb=%s retrieval_enabled -> %s", kb_id, enabled)
+        logger.info("kb=%s retrieval for user=%s -> %s", kb_id, user_id, enabled)
         return self.get_kb(kb_id)
 
 # ---------- 文件管理 ----------
@@ -679,6 +718,64 @@ class KBService:
                 db.commit()
             raise
         return self.get_kb(new_kb.kb_id)      # 返回 DB 最新状态（含 ready）
+
+    # ---------- 知识库完全复制 ----------
+    def copy_kb(self, src_kb_id: str, user_id: str | None) -> KnowledgeBase:
+        """完全复制：chunk 目录 + 源文件归档 + 向量数据原样搬运，不过嵌入模型。
+
+        与 rebuild 的区别：重建复用 chunk 文本但必须重新向量化（可换模型）；
+        复制连向量一起拷（embedding API 零调用，秒级完成），嵌入配置原样继承。
+        复制库强制为「私人」库（同重建），归属发起复制的用户。
+        """
+        src = self.get_kb(src_kb_id)
+        new_kb = KnowledgeBase(
+            kb_id=uuid.uuid4().hex[:12], name=f"{src.name}(复制)",
+            scope="private", owner_user_id=user_id or src.owner_user_id,
+            description=src.description,
+            category_id=src.category_id,
+            embedding_provider=src.embedding_provider,
+            embedding_model_id=src.embedding_model_id,
+            embedding_dim=src.embedding_dim,
+            embedding_base_url=src.embedding_base_url,
+            embedding_api_key=src.embedding_api_key,   # 密文直接继承
+            embedded_model=src.embedded_model,          # 向量是拷来的，写入标注一并继承
+            status="copying", source_doc_ids=list(src.source_doc_ids or []),
+        )
+        with SessionLocal() as db:
+            db.add(new_kb)
+            db.commit()
+        try:
+            # 磁盘数据独立成套：chunk 目录 + 源文件归档目录完整复制
+            src_dir = self._chunk_dir / src_kb_id
+            if src_dir.exists():
+                shutil.copytree(src_dir, self._chunk_dir / new_kb.kb_id,
+                                dirs_exist_ok=True)
+            src_docs = self._docs_dir / src_kb_id
+            if src_docs.exists():
+                shutil.copytree(src_docs, self._docs_dir / new_kb.kb_id,
+                                dirs_exist_ok=True)
+            # 向量原样搬运（不调嵌入 API），BM25/父块缓存直接构建
+            moved = self._vector_store(new_kb).copy_from(
+                self._vector_store(src))
+            chunks = self._read_chunks(new_kb.kb_id, new_kb)
+            bm = Bm25Index()
+            bm.build(chunks)
+            self._bm25_cache[new_kb.kb_id] = bm
+            self._chunks_cache[new_kb.kb_id] = list(chunks)
+            with SessionLocal() as db:
+                row = db.get(KnowledgeBase, new_kb.kb_id)
+                row.status = "ready"
+                db.commit()
+            emit("kb_copy", {"src_kb_id": src_kb_id, "new_kb_id": new_kb.kb_id,
+                             "chunks": moved, "status": "ready"})
+        except Exception as e:
+            logger.error("copy kb failed src=%s: %s", src_kb_id, e)
+            with SessionLocal() as db:
+                row = db.get(KnowledgeBase, new_kb.kb_id)
+                row.status = "failed"
+                db.commit()
+            raise
+        return self.get_kb(new_kb.kb_id)
 
     def _doc_chunks(self, kb_id: str, kb: KnowledgeBase) -> list[ChunkRecord]:
         """该库全部 chunk（磁盘读取），进程内缓存（与 BM25 同步失效）。"""
