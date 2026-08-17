@@ -369,3 +369,66 @@ def test_delete_documents_removes_archive():
     assert list(docs_dir.glob(f"{doc_id}__*"))
     ks.delete_documents(kb.kb_id, [doc_id])
     assert not list(docs_dir.glob(f"{doc_id}__*"))
+
+
+# ---------- 逐文件入库：失败隔离 + 进度/错误明细 ----------
+def test_ingest_per_file_isolation_and_progress():
+    """逐文件入库：中间一个坏文件只标记失败，前后文件照常入库，状态 ready。
+
+    进度明细记录每个文件的状态与错误信息（前端进度条数据源）。
+    """
+    ks = _make_ctx()
+    kb = ks.create_kb("逐文件库", "public", None)
+    n = ks.ingest_files(kb.kb_id, [
+        ("a.txt", "量子比特可以处于叠加态。".encode()),
+        ("bad.xlsx", b"binary"),                        # 不支持的格式 → 单文件失败
+        ("c.txt", "Shor算法可以分解大整数。".encode()),
+    ])
+    assert n > 0                                        # 只计成功文件的 chunk
+    cur = ks.get_kb(kb.kb_id)
+    assert cur.status == "ready"                        # >=1 成功即 ready
+    assert len(cur.source_doc_ids) == 2                 # 坏文件没进文档列表
+    prog = ks.ingest_progress(kb.kb_id)
+    assert prog["total"] == 3 and prog["done"] == 3
+    assert prog["succeeded"] == 2 and prog["failed"] == 1
+    assert prog["status"] == "ready"
+    by_name = {f["filename"]: f for f in prog["files"]}
+    assert by_name["a.txt"]["status"] == "ok" and by_name["a.txt"]["chunks"] > 0
+    assert by_name["c.txt"]["status"] == "ok"
+    assert by_name["bad.xlsx"]["status"] == "failed"
+    assert by_name["bad.xlsx"]["error"]                 # 错误信息非空（前端展示）
+
+
+def test_ingest_all_failed_status_and_error_detail():
+    """全部文件失败 → 状态 failed，进度保留逐文件错误明细（而非只看后端日志）。"""
+    ks = _make_ctx()
+    kb = ks.create_kb("全败库", "public", None)
+    n = ks.ingest_files(kb.kb_id, [("bad1.xlsx", b"x"), ("bad2.zip", b"y")])
+    assert n == 0
+    assert ks.get_kb(kb.kb_id).status == "failed"
+    prog = ks.ingest_progress(kb.kb_id)
+    assert prog["succeeded"] == 0 and prog["failed"] == 2
+    assert all(f["error"] for f in prog["files"])       # 每个失败文件都有原因
+
+
+def test_ingest_progress_api_endpoint():
+    """API：GET /kbs/{id}/ingest 返回进度明细；从未入库过返回 null。"""
+    with TestClient(app) as c:
+        kb = c.post("/api/v1/kbs", json={
+            "name": "进度API库", "scope": "public", "user_id": "u1",
+            "description": "进度端点测试库"}).json()
+        kb_id = kb["kb_id"]
+        assert c.get(f"/api/v1/kbs/{kb_id}/ingest").json() is None   # 未入库过
+        c.post(f"/api/v1/kbs/{kb_id}/documents", files=[
+            ("files", ("ok.txt", "量子比特可以处于叠加态。".encode(), "text/plain")),
+            ("files", ("bad.xlsx", b"binary", "application/octet-stream"))])
+        prog = None
+        for _ in range(30):                            # 后台任务完成后进度到终态
+            prog = c.get(f"/api/v1/kbs/{kb_id}/ingest").json()
+            if prog and prog["status"] in ("ready", "failed"):
+                break
+            time.sleep(0.3)
+        assert prog and prog["status"] == "ready"      # 1 成功 1 失败 → ready
+        assert prog["succeeded"] == 1 and prog["failed"] == 1
+        bad = next(f for f in prog["files"] if f["status"] == "failed")
+        assert bad["filename"] == "bad.xlsx" and bad["error"]

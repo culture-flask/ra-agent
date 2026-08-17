@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me-to-32+bytes!!"
     llm_system_default: dict = Field(default_factory=dict)
     llm_api_key: str = ""
-    llm_retry_max_retries: int = 3          # LLM 调用失败重试次数（指数退避）
+    llm_retry_max_retries: int = 10          # LLM 调用失败重试次数（指数退避）
     llm_retry_base_delay: float = 1.0       # 首次重试基础等待秒数，之后 2 倍递增
     llm_context_window: int = 256000        # 上下文窗口兜底值（token）：探测与用户设置均缺失时使用，80% 触发自动压缩
     retrieval_mode: str = "hybrid"          # 检索模式：vector（纯向量）| hybrid（向量+BM25）

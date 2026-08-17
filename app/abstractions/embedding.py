@@ -92,10 +92,19 @@ class CloudEmbeddingModel(EmbeddingModel):
         return out
 
     def _embed_batch_with_retry(self, batch: list[str]) -> list[list[float]]:
-        """单批嵌入：429 限流 / 连接抖动（远端模型冷启动、网络瞬断）指数退避重试。"""
-        import time
+        """单批嵌入：429 限流 / 连接抖动 / 响应损坏 均指数退避重试。
 
-        from openai import APIConnectionError, APITimeoutError, RateLimitError
+        - 429：MAX_RETRIES 次，1s→2s→4s…
+        - 连接/超时/JSON 解析错误：MAX_CONN_RETRIES 次，0.5s→1s→2s→4s。
+          JSON 解析错误（如 "Extra data: line 1 column ..."）是自建端点
+          （llama.cpp 等）高负载下响应流偶发截断/串包——瞬时故障，重试即愈。
+        - 整批 400：拆成单条隔离重试（负载型 400 单条更轻大概率过；
+          单条仍 400 = 输入确实被端点拒绝，抛出由上层标记该文件失败）。
+        """
+        import time
+        import json
+
+        from openai import APIConnectionError, APITimeoutError, BadRequestError, RateLimitError
 
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -110,7 +119,22 @@ class CloudEmbeddingModel(EmbeddingModel):
                 if attempt == self.MAX_CONN_RETRIES - 1:
                     raise
                 time.sleep(0.5 * (2 ** attempt))    # 连接抖动：0.5s → 1s → 2s → 4s
+            except json.JSONDecodeError:
+                if attempt == self.MAX_CONN_RETRIES - 1:
+                    raise
+                time.sleep(0.5 * (2 ** attempt))    # 响应损坏：同连接抖动退避重试
+            except BadRequestError:
+                if len(batch) == 1:
+                    raise                # 单条也 400：输入问题，重试无意义
+                return self._embed_one_by_one(batch)
         raise RuntimeError("unreachable")
+
+    def _embed_one_by_one(self, texts: list[str]) -> list[list[float]]:
+        """整批被拒后逐条嵌入：隔离坏输入（真 400 只挂在单条上，不废整批）。"""
+        out: list[list[float]] = []
+        for t in texts:
+            out.extend(self._embed_batch_with_retry([t]))
+        return out
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_texts([text])[0]

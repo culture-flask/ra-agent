@@ -146,8 +146,9 @@ async def upload_documents(kb_id: str, request: Request,
                            files: list[UploadFile] = File(...)):
     """批量文档上传：一次请求可带多个文件（multipart 字段名均为 files）。
 
-    流程：status=indexing → 后台 parse/chunk/embed → status=ready|failed。
-    轮询 GET /kbs/{kb_id} 观察进度（整批一次状态流转，不逐文件分状态）。
+    流程：status=indexing -> 后台逐文件 解析/分块/嵌入（单文件失败不影响
+    其他）-> status=ready|failed（>=1 个成功即 ready）。
+    轮询 GET /kbs/{kb_id}/ingest 看逐文件进度与错误明细。
     用 FastAPI BackgroundTasks（响应返回后由框架可靠执行，测试可预期）；
     生产环境可换成 Celery/ARQ Worker（第 10 天）。
     """
@@ -170,6 +171,18 @@ async def upload_documents(kb_id: str, request: Request,
             "count": len(payload),
             "filenames": [name for name, _ in payload],
             "filename": payload[0][0]}   # 兼容旧调用方
+
+
+@router.get("/kbs/{kb_id}/ingest")
+async def get_ingest_progress(kb_id: str, request: Request):
+    """入库进度：{total, done, succeeded, failed, status, files:[{filename,
+    status, chunks, error}]}，前端轮询画进度条 + 展示逐文件错误明细。
+
+    没有入库记录（新建库未上传过 / 服务重启后）返回 null。
+    """
+    await _get_kb(request, kb_id)
+    return await run_in_threadpool(
+        request.app.state.kb_service.ingest_progress, kb_id)
 
 @router.patch("/kbs/{kb_id}/embedding")
 async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,

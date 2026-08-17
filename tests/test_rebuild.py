@@ -47,11 +47,13 @@ def test_unknown_provider_rejected():
     ks = _make_ks()
     with pytest.raises(ValueError, match="unknown embedding provider"):
         ks.create_kb("坏库", "public", None, provider="nonexistent")
-    # 自定义 provider 也必须同时给全 base_url / model_id / dim，缺一即拒绝
+    # 白名单外的自定义 provider 必须同时给全 base_url / model_id / dim，缺一即拒绝
+    # （不用 "llama"：本地 config.cloud 可能已将其加入白名单，测不了"未知"分支）
     with pytest.raises(ValueError, match="unknown embedding provider"):
-        ks.create_kb("坏库2", "public", None, provider="llama", model_id="x", dim=768)
+        ks.create_kb("坏库2", "public", None, provider="ghost_endpoint",
+                     model_id="x", dim=768)                 # 缺 base_url → 拒绝
     with pytest.raises(ValueError, match="unknown embedding provider"):
-        ks.create_kb("坏库3", "public", None, provider="llama",
+        ks.create_kb("坏库3", "public", None, provider="ghost_endpoint",
                      dim=768, base_url="http://h:1/v1")      # 缺 model_id → 拒绝
 
 
@@ -182,11 +184,37 @@ def test_update_embedding_config_and_mismatch():
     warn = ks.embedding_mismatch(kb2)
     assert warn is not None and "mini" in warn and "重建" in warn
 
-    # 再入库一次 → embedded_model 更新为当前配置 → 提醒消失
+    # 再入库一次 -> embedded_model 更新为当前配置 -> 提醒消失
     ks.ingest_file(kb.kb_id, "b.txt", "Shor算法可以分解大整数。".encode())
     kb4 = ks.get_kb(kb.kb_id)
     assert kb4.embedded_model["model_id"] == "mini-b"
     assert ks.embedding_mismatch(kb4) is None
+
+
+def test_ingest_failure_after_config_change_keeps_old_files():
+    """回归：改嵌入配置后入库失败，历史文件绝不能被牵连删除。
+
+    旧 bug：_ingest 失败路径 rmtree 整个 chunk 目录--改配置再上传，
+    向量化失败（维度不兼容/端点不可达）-> 库内之前所有文件被清空。
+    修复后：配置不一致只提醒不拦截；失败只清本批残留，旧文件保留。
+    """
+    ks = _make_ks()
+    kb = ks.create_kb("失败保护库", "public", None)
+    ks.ingest_file(kb.kb_id, "a.txt", "量子比特可以处于叠加态。".encode())
+    assert [d["filename"] for d in ks.list_documents(kb.kb_id)] == ["a.txt"]
+
+    # 换成不可达的自定义端点：与已入库向量模型不一致 -> 有提醒，但不拦截入库
+    ks.update_embedding(kb.kb_id, provider="llama.cpp", model_id="qwen3-embedding",
+                        dim=4096, base_url="http://127.0.0.1:1/v1")
+    assert ks.embedding_mismatch(ks.get_kb(kb.kb_id)) is not None
+
+    n = ks.ingest_file(kb.kb_id, "b.txt", "Shor算法可以分解大整数。".encode())
+    assert n == 0                                       # 向量化失败（连接拒绝）
+    kb2 = ks.get_kb(kb.kb_id)
+    assert kb2.status == "failed"
+    assert kb2.embedded_model["provider"] == "local"    # 已入库向量仍标注旧模型
+    # 关键：历史文件完好（旧 bug 这里是空列表）
+    assert [d["filename"] for d in ks.list_documents(kb.kb_id)] == ["a.txt"]
 
 
 def test_api_update_embedding():

@@ -32,6 +32,11 @@ from app.settings import BASE_DIR, Settings
 
 logger = get_logger("main")
 
+# 模块导入即配置日志：uvicorn app.main:app 启动时 __name__ != "__main__"，
+# 若只在 __main__ 块里 setup_logging，日志永远不落 logs/app.log（只走
+# stderr 兜底裸输出）。幂等保护在 setup_logging 内，重复导入不重复挂 handler。
+setup_logging()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -111,6 +116,5 @@ if WEB_DIR.exists():
 
 
 if __name__ == "__main__":
-    setup_logging()
     s = Settings.load()
     uvicorn.run("app.main:app", host=s.host, port=s.port, reload=True)

@@ -90,6 +90,7 @@ class KBService:
         }
         self._bm25_cache: dict[str, Bm25Index] = {}   # kb_id -> BM25 索引（懒构建）
         self._chunks_cache: dict[str, list[ChunkRecord]] = {}  # kb_id -> 全量 chunk（聚合父块用）
+        self._ingest_progress: dict[str, dict] = {}   # kb_id -> 最近一批入库进度（前端轮询）
 
     # ---------- 模型解析 ----------
     def resolve_embedding_meta(self, provider: str | None = None,
@@ -329,10 +330,10 @@ class KBService:
         return self._ingest(kb_id, [("text.txt", t.encode("utf-8")) for t in texts])
 
     def ingest_files(self, kb_id: str, files: list[tuple[str, bytes]]) -> int:
-        """批量文件入库：一次置 indexing → 解析全部文件 → 分块 → 存 chunk → 向量化 → ready。
+        """批量文件入库：逐文件独立走 解析 -> 分块 -> 落盘 -> 向量化 -> ready。
 
-        一次请求的多个文件走同一条后台任务，状态机只流转一次
-        （indexing → ready | failed），避免并发任务互相覆盖 status。
+        每个文件自成一个小事务：单个文件失败只记录错误并继续下一个，
+        不再整批失败；进度与逐文件错误明细存 _ingest_progress 供前端轮询。
         """
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
@@ -344,99 +345,155 @@ class KBService:
         """单文件入库（批量接口的单文件特例）。"""
         return self.ingest_files(kb_id, [(filename, content)])
 
-    def _ingest(self, kb_id: str, files: list[tuple[str, bytes]]) -> int:
-        """入库核心：解析全部文件 → 分块 → 落盘 → 向量化 → 更新状态。
+    def ingest_progress(self, kb_id: str) -> dict | None:
+        """最近一批入库进度：{total, done, succeeded, failed, status, files:[...]}。
 
-        状态机：indexing → ready | failed（架构文档 §11.2 status 四态之一）。
+        files 每项 {filename, status: pending|ok|failed, chunks, error}；
+        入库结束后保留（终态含错误明细），下一批上传时覆盖。
+        """
+        return self._ingest_progress.get(kb_id)
+
+    def _ingest(self, kb_id: str, files: list[tuple[str, bytes]]) -> int:
+        """逐文件入库编排：失败隔离（单文件不影响其他）+ 实时进度跟踪。
+
+        终态：>=1 个文件成功 -> ready（失败的留在进度明细里）；全部失败 -> failed。
         """
         kb = self.get_kb(kb_id)
+        # 嵌入配置与已入库向量的模型不一致：只提醒不拦截——两个 provider
+        # 可能服务同一个模型（向量依然兼容）；真不兼容（维度不同/端点不可达）
+        # 由各文件向量化失败落到进度明细，绝不牵连删除库内已有文件
+        warn = self.embedding_mismatch(kb)
+        if warn:
+            logger.warning("ingest kb=%s under changed embedding config: %s",
+                           kb_id, warn)
+        prog = {
+            "total": len(files), "done": 0, "succeeded": 0, "failed": 0,
+            "current": None, "status": "indexing", "warning": warn,
+            "files": [{"filename": name, "status": "pending",
+                       "chunks": 0, "error": None} for name, _ in files],
+        }
+        self._ingest_progress[kb_id] = prog
+        ok_ids: list[str] = []
+        ok_chunks = 0
         try:
-            n = self._ingest_inner(kb_id, kb, files)
-            self._bm25_cache.pop(kb_id, None)          # chunk 变了，BM25/父块缓存失效
-            self._chunks_cache.pop(kb_id, None)
-            return n
+            vs = self._vector_store(kb)   # 配置级错误（缺密钥等）在这里 fail fast
         except Exception as e:
-            logger.error("ingest failed kb=%s: %s", kb_id, e)   # 失败原因进日志
-            if e.__cause__:
-                # Chroma 等会把底层异常包一层（如 "Connection error. in add."），
-                # 记下真实原因（连接谁、什么错），不然排查只能看到包装消息
-                logger.error("ingest failed kb=%s (cause %s): %s",
-                             kb_id, type(e.__cause__).__name__, e.__cause__)
-            # 清掉本次失败留下的半截 chunk，避免脏文件残留（重新上传会重建）
-            shutil.rmtree(self._chunk_dir / kb_id, ignore_errors=True)
-            with SessionLocal() as db:
-                row = db.get(KnowledgeBase, kb_id)
-                if row is not None:            # 入库途中库被删 → 不再写失败状态
-                    row.status = "failed"
-                    db.commit()
-            emit("ingest", {"kb_id": kb_id, "status": "failed", "error": str(e)[:200]})
-            return 0      # 错误已落在 status=failed，不再抛出（后台任务不能把异常带回响应）
+            logger.error("build vector store failed kb=%s: %s", kb_id, e)
+            for entry in prog["files"]:
+                entry.update(status="failed", error=f"嵌入配置不可用: {e}")
+            prog["failed"], prog["done"] = prog["total"], prog["total"]
+            self._finish_ingest(kb_id, kb, prog, ok_ids, ok_chunks)
+            return 0
+        for i, (filename, content) in enumerate(files):
+            entry = prog["files"][i]
+            prog["current"] = filename
+            try:
+                digest, n = self._ingest_one(kb, kb_id, vs, filename, content)
+                entry.update(status="ok", chunks=n)
+                prog["succeeded"] += 1
+                ok_chunks += n
+                if digest not in ok_ids:
+                    ok_ids.append(digest)
+            except Exception as e:
+                logger.warning("ingest file failed %s (kb=%s): %s",
+                               filename, kb_id, e)
+                if e.__cause__:
+                    # Chroma/嵌入 API 会把底层异常包一层，记下真实原因便于排查
+                    logger.warning("ingest file failed %s (kb=%s) cause %s: %s",
+                                   filename, kb_id,
+                                   type(e.__cause__).__name__, e.__cause__)
+                # 只清该文件的残留 chunk，库内已有文件与其他文件不受影响
+                self._cleanup_failed_batch(kb_id, [(filename, content)])
+                entry.update(status="failed", error=str(e)[:300])
+                prog["failed"] += 1
+            prog["done"] += 1
+            emit("ingest_progress", {"kb_id": kb_id, "done": prog["done"],
+                                     "total": prog["total"], "file": filename})
+        self._finish_ingest(kb_id, kb, prog, ok_ids, ok_chunks)
+        return ok_chunks
 
-    def _ingest_inner(self, kb_id: str, kb: KnowledgeBase,
-                      files: list[tuple[str, bytes]]) -> int:
+    def _ingest_one(self, kb: KnowledgeBase, kb_id: str, vs,
+                    filename: str, content: bytes) -> tuple[str, int]:
+        """单文件入库：解析 -> 分块 -> 落盘 -> 向量化 -> 源文件归档。
+
+        任一步失败抛异常，由 _ingest 记录错误、清理残留后继续下一个文件。
+        返回 (doc_id 内容哈希, chunk 数)。
+        """
         kb_dir = self._chunk_dir / kb_id
         kb_dir.mkdir(parents=True, exist_ok=True)
-
+        pages = parse_file_pages(filename, content)   # 不支持的格式等在这里抛
+        digest = hashlib.sha256(content).hexdigest()[:8]
         chunks: list[ChunkRecord] = []
-        doc_ids: list[str] = []
-        for filename, content in files:
-            try:
-                # 逐页解析（PDF 带页码）：_clean_text 剔除 pypdf 等提取出的
-                # 孤立代理字符，避免编码崩溃
-                pages = parse_file_pages(filename, content)
-                # 内容哈希：同一文件重复上传 → 相同 chunk id → Chroma 覆盖（幂等）
-                digest = hashlib.sha256(content).hexdigest()[:8]
-                file_chunks: list[ChunkRecord] = []
-                i = 0
-                for page_no, page_text in pages:
-                    for piece in split_chunks(_clean_text(page_text)):
-                        chunk_id = f"{kb_id}_{digest}_{i}"
-                        payload = {"scope": kb.scope,
-                                   "user_id": kb.owner_user_id or "",
-                                   "doc_id": digest,
-                                   "category_id": kb.category_id,
-                                   "source": filename}     # 源文件名（引用溯源）
-                        if page_no is not None:
-                            payload["page"] = page_no      # 页码（Chroma 不接受 None 值）
-                        file_chunks.append(ChunkRecord(
-                            id=chunk_id, text=piece, payload=payload))
-                        (kb_dir / f"{chunk_id}.txt").write_text(piece, encoding="utf-8")
-                        # 伴生元数据文件：重建/BM25 从磁盘读 chunk 时恢复 source/page
-                        (kb_dir / f"{chunk_id}.meta.json").write_text(
-                            json.dumps({"source": filename, "page": page_no},
-                                       ensure_ascii=False), encoding="utf-8")
-                        i += 1
-                # 整个文件成功后才登记 doc_id + chunks，避免半截文件污染批次
-                doc_ids.append(digest)
-                chunks.extend(file_chunks)
-                self._save_source_file(kb_id, digest, filename, content)
-            except Exception as e:
-                # 单文件容错：坏文件只跳过并记日志，不影响同批其他文件入库
-                logger.warning("skip file %s (kb=%s): %s", filename, kb_id, e)
-        if not doc_ids:
-            raise ValueError("所有文件都解析失败，无文档可入库")
+        i = 0
+        for page_no, page_text in pages:
+            for piece in split_chunks(_clean_text(page_text)):
+                chunk_id = f"{kb_id}_{digest}_{i}"
+                payload = {"scope": kb.scope,
+                           "user_id": kb.owner_user_id or "",
+                           "doc_id": digest,
+                           "category_id": kb.category_id,
+                           "source": filename}     # 源文件名（引用溯源）
+                if page_no is not None:
+                    payload["page"] = page_no      # 页码（Chroma 不接受 None 值）
+                chunks.append(ChunkRecord(
+                    id=chunk_id, text=piece, payload=payload))
+                (kb_dir / f"{chunk_id}.txt").write_text(piece, encoding="utf-8")
+                # 伴生元数据文件：重建/BM25 从磁盘读 chunk 时恢复 source/page
+                (kb_dir / f"{chunk_id}.meta.json").write_text(
+                    json.dumps({"source": filename, "page": page_no},
+                               ensure_ascii=False), encoding="utf-8")
+                i += 1
+        vs.add(chunks)              # 向量化失败 -> 调用方清该文件残留后继续
+        self._save_source_file(kb_id, digest, filename, content)
+        return digest, len(chunks)
 
-        self._vector_store(kb).add(chunks)
+    def _finish_ingest(self, kb_id: str, kb: KnowledgeBase, prog: dict,
+                       ok_ids: list[str], ok_chunks: int) -> None:
+        """收尾：终态判定 + 元数据落库（source_doc_ids/embedded_model）+ 缓存失效。"""
+        status = "ready" if prog["succeeded"] else "failed"
+        prog["status"], prog["current"] = status, None
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
-            row.status = "ready"
-            # 关键：list(...) 拷贝成新对象再改。若直接对加载出的 list 就地 append，
-            # SQLAlchemy JSON 列检测不到"原地突变"，第二次入库的 doc_id 会丢。
-            existing = list(row.source_doc_ids or [])
-            for doc_id in doc_ids:
-                if doc_id not in existing:
-                    existing.append(doc_id)
-            row.source_doc_ids = existing
-            # 记录这批向量实际由哪个嵌入模型写入（查询时用来比对，模型不一致则提醒）
-            row.embedded_model = {
-                "provider": kb.embedding_provider,
-                "model_id": kb.embedding_model_id,
-                "dim": kb.embedding_dim,
-                "base_url": kb.embedding_base_url,
-            }
-            db.commit()
-        emit("ingest", {"kb_id": kb_id, "chunks": len(chunks), "status": "ready"})
-        return len(chunks)
+            if row is not None:            # 入库途中库被删 -> 不再写状态
+                row.status = status
+                if ok_ids:
+                    # 关键：list(...) 拷贝成新对象再改。若直接对加载出的 list
+                    # 就地 append，SQLAlchemy JSON 列检测不到"原地突变"，
+                    # 第二次入库的 doc_id 会丢。
+                    existing = list(row.source_doc_ids or [])
+                    for doc_id in ok_ids:
+                        if doc_id not in existing:
+                            existing.append(doc_id)
+                    row.source_doc_ids = existing
+                    # 记录这批向量实际由哪个嵌入模型写入（查询时比对提醒）
+                    row.embedded_model = {
+                        "provider": kb.embedding_provider,
+                        "model_id": kb.embedding_model_id,
+                        "dim": kb.embedding_dim,
+                        "base_url": kb.embedding_base_url,
+                    }
+                db.commit()
+        self._bm25_cache.pop(kb_id, None)          # chunk 变了，BM25/父块缓存失效
+        self._chunks_cache.pop(kb_id, None)
+        emit("ingest", {"kb_id": kb_id, "chunks": ok_chunks, "status": status,
+                        "succeeded": prog["succeeded"], "failed": prog["failed"]})
+
+    def _cleanup_failed_batch(self, kb_id: str,
+                              files: list[tuple[str, bytes]]) -> None:
+        """删除指定文件集的残留 chunk（按内容哈希定位），保留库内已有文件。
+
+        换嵌入模型后维度不匹配、解析失败等场景，错误只落在进度明细，
+        历史文件的 chunk 绝不能被牵连删除（重新上传会重建）。
+        """
+        digests = {hashlib.sha256(content).hexdigest()[:8] for _, content in files}
+        kb_dir = self._chunk_dir / kb_id
+        for f in list(kb_dir.glob("*.txt")) + list(kb_dir.glob("*.meta.json")):
+            parts = f.stem.split("_")
+            if len(parts) > 2 and parts[1] in digests:
+                try:
+                    f.unlink()
+                except OSError as e:
+                    logger.warning("remove chunk file failed %s: %s", f, e)
 
     # ---------- 检索 ----------
     def embedding_mismatch(self, kb: KnowledgeBase) -> str | None:
