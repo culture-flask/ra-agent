@@ -23,3 +23,4 @@ class AgentState(TypedDict, total=False):
     temperature: float | None               # 生成温度（None=默认 0.3；0 也合法）
     parent_groups: int | None               # 聚合返回的父块名额（None=全局默认；0=关闭聚合）
     last_usage: dict | None                 # 上一次 generate 的真实 token 用量（来自 LLM 响应）
+    stopped: bool                           # 本轮生成被用户手动中断（部分答复仍入 checkpoint）

@@ -140,3 +140,126 @@ def test_native_list_kb_files_per_user():
     logs = tracer.list(session_id="t-native-1")
     assert logs and logs[0]["kind"] == "tool"
     assert logs[0]["name"] == "list_kb_files"
+
+
+# ---------- 原生工具：get_local_document（取完整文章原文） ----------
+def test_native_get_local_document():
+    """多 chunk 文件 → 去掉 overlap 重复后精确还原原文。"""
+    import json as _json
+
+    ctx, tracer = _make_ctx([])
+    ks = ctx.kb_service
+    kb = ks.create_kb("全文库", "public", None, description="全文")
+    # 5 段有序标记，总长 >1000 → 会被切成多个 chunk（相邻重叠 150 字符）
+    body = "".join(f"[段{i}]" + "内容" * 500 for i in range(5))
+    ks.ingest_file(kb.kb_id, "全文论文.txt", body.encode())
+
+    out = _run(ctx.mcp_adapter.call(
+        "get_local_document",
+        {"kb_id": kb.kb_id, "file_name": "全文论文.txt"},
+        "t-native-3", "u1"))
+    data = _json.loads(out["output"])
+    assert data["file_name"] == "全文论文.txt"
+    assert data["chunk_count"] >= 2                    # 确实被分块过
+    # 去重拼接后与原文完全一致（长度相等，不能是简单串接的更长版本）
+    assert data["total_chars"] == len(body)
+    assert data["full_text"] == body
+    assert data["truncated"] is False
+    # 追踪落 ToolCallLog
+    logs = tracer.list(session_id="t-native-3")
+    assert logs[0]["kind"] == "tool"
+    assert logs[0]["name"] == "get_local_document"
+
+
+def test_native_get_local_document_errors():
+    """禁检索的库 / 不存在的文件 → 结构化错误（不抛异常）。"""
+    import json as _json
+
+    ctx, _ = _make_ctx([])
+    ks = ctx.kb_service
+    kb = ks.create_kb("权限库", "public", None, description="x")
+    ks.ingest_file(kb.kb_id, "甲.txt", "短内容".encode())
+    ks.set_retrieval(kb.kb_id, "u1", enabled=False)    # u1 禁检索
+
+    # 用户禁检索 → 拒绝取原文
+    out = _run(ctx.mcp_adapter.call(
+        "get_local_document",
+        {"kb_id": kb.kb_id, "file_name": "甲.txt"}, "t-native-4", "u1"))
+    data = _json.loads(out["output"])
+    assert "不可检索" in data["error"]
+
+    # 文件不存在 → 错误 + 回传库内文件名列表（引导先 list_kb_files）
+    out2 = _run(ctx.mcp_adapter.call(
+        "get_local_document",
+        {"kb_id": kb.kb_id, "file_name": "不存在.txt"}, "t-native-5", "u2"))
+    data2 = _json.loads(out2["output"])
+    assert "不存在文件" in data2["error"]
+    assert data2["kb_files"] == ["甲.txt"]
+
+
+# ---------- 停止生成：用户中断 → 保留部分答复，不再进工具循环 ----------
+class StopAfterFirstTokenModel:
+    """第一个 token 后设置停止标记的假模型：模拟用户在流式中途点停止。"""
+
+    def __init__(self):
+        from langchain_core.messages import AIMessageChunk
+        self._chunks = [AIMessageChunk(content="生成到一半"),
+                        AIMessageChunk(content="这段不该出现")]
+
+    def bind_tools(self, schemas):
+        return self
+
+    async def astream(self, messages):
+        from app.core.cancel import request_stop
+        for i, c in enumerate(self._chunks):
+            if i == 1:
+                request_stop("t-stop-1")               # 首 token 后用户点停止
+            yield c
+
+
+def test_stop_generation_keeps_partial():
+    """停止标记 → generate 保留部分答复（不含后续 token）、图正常收尾、标记被清。"""
+    from app.core.cancel import clear_stop, is_stopped
+    from langchain_core.messages import AIMessage
+
+    class Svc:
+        def get_chat_model(self, user_id, temperature=None):
+            return StopAfterFirstTokenModel()
+
+    settings = Settings.load().model_copy(update={
+        "chroma_persist_dir": Path(tempfile.mkdtemp()),
+        "data_dir": Path(tempfile.mkdtemp()),
+        "embedding_default_provider": "local",
+    })
+    ctx = WorkflowContext(settings, Svc(), KBService(settings), None, Tracer())
+    graph = _run(build_graph(ctx))
+
+    result = _run(graph.ainvoke(
+        {"user_id": "u1", "session_id": "t-stop-1", "query": "随便问",
+         "messages": [HumanMessage(content="随便问")]},
+        config={"configurable": {"thread_id": "t-stop-1"}}))
+    # 部分答复保留，停止点之后的 token 不进来
+    assert result["answer"] == "生成到一半"
+    assert result["stopped"] is True
+    # 中断消息是干净的 AIMessage（无残留 tool_calls）
+    assert isinstance(result["messages"][-1], AIMessage)
+    assert not getattr(result["messages"][-1], "tool_calls", None)
+    # 标记已被消费清除
+    assert not is_stopped("t-stop-1")
+    clear_stop("t-stop-1")
+
+
+def test_chat_stop_endpoint():
+    """POST /chat/stop 设置停止标记；下一轮对话开始时自动清除。"""
+    from app.core.cancel import clear_stop, is_stopped
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    with TestClient(app) as c:
+        r = c.post("/api/v1/chat/stop",
+                   json={"session_id": "t-stop-api", "user_id": "u1"})
+        assert r.status_code == 200
+        assert r.json()["stopped"] is True
+        assert is_stopped("t-stop-api")
+        clear_stop("t-stop-api")
+        assert not is_stopped("t-stop-api")

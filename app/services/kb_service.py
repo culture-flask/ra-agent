@@ -53,6 +53,28 @@ def _chunk_index(chunk_id: str) -> int:
         return 0
 
 
+def join_document_text(chunks: list, max_overlap: int = 150) -> str:
+    """按序拼接 chunk 还原文档：动态匹配并去掉相邻块的重叠部分。
+
+    分块是固定窗口 + overlap=150（split_chunks），相邻块间有约 150 字符
+    重复；直接拼接会把重复段留在正文里。这里对每对相邻块从 max_overlap
+    往下找最长公共前后缀，命中则跳过重叠段再拼接；找不到（如跨页边界，
+    每页独立分块无重叠）就直接相连。
+    """
+    if not chunks:
+        return ""
+    out = chunks[0].text
+    for c in chunks[1:]:
+        t = c.text
+        if not t:
+            continue
+        k = min(max_overlap, len(out), len(t))
+        while k > 0 and out[-k:] != t[:k]:
+            k -= 1
+        out += t[k:]
+    return out
+
+
 def _clean_text(text: str) -> str:
     """剔除文本中的孤立代理字符（lone surrogate）。
 
@@ -851,6 +873,14 @@ class KBService:
             "doc_id": doc_id,
             "group": group_no,
         }
+
+    def get_document_chunks(self, kb_id: str, doc_id: str) -> list[ChunkRecord]:
+        """获取知识库中的具体文档原文。"""
+        kb = self.get_kb(kb_id)
+        chunks = [c for c in self._doc_chunks(kb_id, kb)
+                  if c.payload.get("doc_id") == doc_id]
+        chunks.sort(key=lambda c: _chunk_index(c.id))
+        return chunks
 
     def _read_chunks(self, kb_id: str, kb: KnowledgeBase) -> list[ChunkRecord]:
         """从磁盘读回该库的 chunk（含伴生元数据：source 源文件名 / page 页码）。

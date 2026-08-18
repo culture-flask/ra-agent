@@ -7,6 +7,7 @@ import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 
+from app.core.cancel import clear_stop, is_stopped
 from app.core.events import emit
 from app.core.logging import get_logger
 from app.services.memory_service import MEMORY_MAX
@@ -493,7 +494,9 @@ def route_supervisor(state: AgentState) -> str:
     return "retrieve" if state.get("needs_retrieval") else "generate"
 
 def route_after_generate(state: AgentState) -> str:
-    """LLM 要调工具 → 走 tool_executor；否则结束。"""
+    """LLM 要调工具 → 走 tool_executor；否则结束。用户手动停止 → 直接结束。"""
+    if state.get("stopped"):                      # 中断的部分答复不再进工具循环
+        return "done"
     last = state["messages"][-1]
     return "tool_executor" if getattr(last, "tool_calls", None) else "done"
 
@@ -668,7 +671,12 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
             ctx.tracer.start, "llm", getattr(model, "model_name", "chat"),
             state["session_id"], state["user_id"])
     resp = None
+    stopped = False
+    sid = state["session_id"]
     async for chunk in model.astream(payload):
+        if is_stopped(sid):                        # 用户点了停止：保留已生成部分
+            stopped = True
+            break
         resp = chunk if resp is None else resp + chunk     # 逐 token 聚合为完整消息
         # 每个 token 实时推给事件总线（SSE 端点持续 drain → 前端打字机效果）
         text = chunk.content
@@ -681,8 +689,15 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
                     emit("token", {"content": p["text"]})
     if resp is None:
         resp = AIMessage(content="")
+    if stopped:
+        # 中断收尾：清标记（不影响下一轮）、剥离半截 tool_calls（防误进工具循环），
+        # 部分答复正常写入 checkpoint（前端已累积的打字机文本与历史一致）
+        clear_stop(sid)
+        resp = AIMessage(content=str(resp.content or ""))
+        emit("stopped", {"chars": len(str(resp.content or ""))})
     answer = str(resp.content) if resp.content else ""
     if ctx.tracer is not None:
         await asyncio.to_thread(ctx.tracer.success, log_id, answer[:2000])
     # 真实 token 用量写入 state（stream_usage=True 时流式末块携带并聚合到 resp）
-    return {"messages": [resp], "answer": answer, "last_usage": _usage_of(resp)}
+    return {"messages": [resp], "answer": answer,
+            "last_usage": _usage_of(resp), "stopped": stopped}

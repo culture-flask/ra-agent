@@ -13,6 +13,11 @@ from langchain_core.utils.function_calling import convert_to_openai_function
 
 from app.core.tracing import Tracer
 from app.mcp.host import MCPHost
+from app.services.kb_service import join_document_text
+
+
+# 完整原文上限：与文件上传读取的截断上限一致（防超长文献撑爆 LLM 上下文）
+FULL_ARTICLE_MAX_CHARS = 100_000
 
 
 # ---------- 原生工具定义（本进程内执行，可访问 KBService） ----------
@@ -31,6 +36,27 @@ def _native_tool_specs() -> list[dict]:
                 "无需参数，自动按当前用户过滤（只含本人可见且未被禁用检索的库）。"),
             "parameters": {"type": "object", "properties": {}, "required": []},
             "func": _list_kb_files,
+        },
+        {
+            "name": "get_local_document",
+            "description": (
+                "取回知识库中某篇文件的完整原文（全部片段按原顺序拼接，"
+                "并自动去掉片段间的重叠重复）。"
+                "当检索只返回了文章片段、不足以回答关于该文章的问题时，"
+                "应调用本工具取完整原文，而不是去网络搜索。"
+                "file_name 必须是知识库中真实存在的文件名"
+                "（不确定时先调 list_kb_files 获取文件名与所属 kb_id）。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kb_id": {"type": "string",
+                              "description": "文章所在知识库的 kb_id"},
+                    "file_name": {"type": "string",
+                                  "description": "文章的准确文件名"},
+                },
+                "required": ["kb_id", "file_name"],
+            },
+            "func": _get_local_document,
         },
     ]
 
@@ -52,6 +78,55 @@ async def _list_kb_files(args: dict, user_id: str, kb_service) -> dict:
             "files": files,
         })
     return {"user_id": user_id, "kb_count": len(out), "kbs": out}
+
+
+async def _get_local_document(args: dict, user_id: str, kb_service) -> dict:
+    """实现：权限校验 → 定位文件 → 全部 chunk 去重拼接完整原文。
+
+    超长文献截断到 FULL_ARTICLE_MAX_CHARS（带 truncated 标记），
+    避免 100+ chunk 的 PDF 一次性撑爆上下文。
+    """
+    kb_id = (args.get("kb_id") or "").strip()
+    file_name = (args.get("file_name") or "").strip()
+    if not kb_id or not file_name:
+        return {"error": "缺少必要参数 kb_id / file_name"
+                        "（不确定文件名时先调 list_kb_files）"}
+
+    # 权限：必须是当前用户可检索的库（禁检索的库取不了原文）
+    kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id)
+    kb = next((k for k in kbs if k.kb_id == kb_id), None)
+    if kb is None:
+        return {"error": f"知识库 {kb_id} 不存在或当前用户不可检索"}
+
+    # 定位文件：精确匹配 → 大小写容错
+    docs = await asyncio.to_thread(kb_service.list_documents, kb_id)
+    doc = next((d for d in docs if d.get("filename") == file_name), None)
+    if doc is None:
+        doc = next((d for d in docs
+                    if (d.get("filename") or "").lower() == file_name.lower()),
+                   None)
+    if doc is None:
+        return {"error": f"知识库「{kb.name}」中不存在文件 {file_name}，"
+                         f"请先调 list_kb_files 确认文件名",
+                "kb_files": [d.get("filename") for d in docs]}
+
+    chunks = await asyncio.to_thread(
+        kb_service.get_document_chunks, kb_id, doc["doc_id"])
+    if not chunks:
+        return {"error": f"文件 {file_name} 没有可用的文本片段"}
+    # 拼接时去掉相邻 chunk 的 overlap 重复段（split_chunks 固定 150 字符窗口重叠）
+    full_text = await asyncio.to_thread(join_document_text, chunks)
+    return {
+        "kb_id": kb_id,
+        "kb_name": kb.name,
+        "file_name": doc.get("filename") or file_name,
+        "doc_id": doc["doc_id"],
+        "chunk_count": len(chunks),
+        "pages": doc.get("pages") or [],
+        "total_chars": len(full_text),
+        "truncated": len(full_text) > FULL_ARTICLE_MAX_CHARS,
+        "full_text": full_text[:FULL_ARTICLE_MAX_CHARS],
+    }
 
 
 class MCPToolAdapter:

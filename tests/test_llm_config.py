@@ -22,6 +22,20 @@ def test_providers_catalog():
         assert "openrouter" in p and "gemini" in p
 
 
+def test_retrieval_settings_endpoint():
+    """GET /settings/retrieval 返回 yaml 检索参数（前端默认值来源，与 yaml 一致）。"""
+    from app.settings import Settings
+    with TestClient(app) as c:
+        s = c.get("/api/v1/settings/retrieval").json()
+        cfg = Settings.load()
+        assert s["per_kb_k"] == cfg.retrieval_per_kb_k
+        assert s["total_k"] == cfg.retrieval_total_k
+        assert s["parent_groups"] == cfg.retrieval_parent_groups
+        assert s["parent_group_size"] == cfg.retrieval_parent_group_size
+        assert s["parent_max_chars"] == cfg.retrieval_parent_max_chars
+        assert s["mode"] == cfg.retrieval_mode
+
+
 def test_config_save_and_masked_list():
     with TestClient(app) as c:
         uid = _register(c, "cfgtest1")

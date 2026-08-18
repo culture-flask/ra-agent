@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import RemoveMessage
 from pydantic import BaseModel, Field
 
+from app.core.cancel import clear_stop, request_stop
 from app.core.db import SessionLocal
 from app.core.events import clear_event_sink, set_event_sink
 from app.core.logging import get_logger
@@ -207,6 +208,19 @@ async def chat_context(user_id: str, session_id: str, request: Request):
     return await _context_usage(graph, config, window)
 
 
+class StopRequest(BaseModel):
+    session_id: str
+    user_id: str = ""
+
+
+@router.post("/chat/stop")
+async def chat_stop(req: StopRequest):
+    """用户请求终止该会话当前生成：只设标记，generate 节点在下一个
+    token 边界优雅退出（已生成的部分答复保留并写入 checkpoint）。"""
+    request_stop(req.session_id)
+    return {"stopped": True, "session_id": req.session_id}
+
+
 @router.post("/chat")
 async def chat(req: ChatRequest, request: Request):
     """普通对话：跑完整图，返回答复与检索结果。
@@ -214,6 +228,7 @@ async def chat(req: ChatRequest, request: Request):
     rewind=true（重新生成）：先回退到最后一条用户消息，不追加新消息。
     """
     graph = request.app.state.graph
+    clear_stop(req.session_id)                 # 上一轮残留的停止标记不带入本轮
     config = {"configurable": {"thread_id": req.session_id},   # 会话级隔离
               "recursion_limit": 100}
     if req.rewind:
@@ -251,6 +266,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     async def run_graph():
         set_event_sink(sink)                     # 在本任务上下文里挂队列，节点 emit 可见
+        clear_stop(req.session_id)               # 上一轮残留的停止标记不带入本轮
         try:
             if req.rewind:
                 rewound = await _rewind_to_last_user(graph, config)

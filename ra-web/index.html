@@ -201,6 +201,7 @@ details.cites .cites-body{margin-top:8px}
 .cite.parent{background:#eef7f3;border-color:#bfe3d6}   /* 聚合父块：完整段落，浅绿标识 */
 .cite .ch{display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap}
 .cite .txt{color:var(--muted);white-space:pre-wrap}
+.cite .cite-src{color:var(--accent2)}   /* 来源文件行（父块含页码范围/命中数） */
 #composer{border-top:1px solid var(--line);background:var(--surface);padding:14px 28px 18px}
 .composer-inner{max-width:820px;margin:0 auto;display:flex;gap:10px;align-items:flex-end}
 #chat-input{flex:1;min-height:46px;max-height:160px;padding:11px 14px;border:1px solid var(--line);
@@ -405,6 +406,14 @@ html[data-theme="light"] .empty .big,html[data-theme="light"] .section-t,html[da
 .btn,.input,select.input,textarea.input,.auth-tabs button,.retrieval-switch .rs-btn,.rk-input input,.model-chip,.att-chip{background:#171416;border-color:rgba(231,190,103,.34)}
 .msg.assistant .bubble,.steps summary,.step-list,.hint-card,.kb-card,table.tbl,.cite,.search-hit{background:#211c1a}
 .modal,.toast{background:#1b1818}
+/* 暗色：引用溯源卡片压暗（父块去亮绿底），卡片内徽章同步换深色半透明底 */
+html[data-theme="dark"] .cite{background:#1a1513;border-color:rgba(198,164,102,.2)}
+html[data-theme="dark"] .cite.parent{background:#1b211b;border-color:rgba(139,157,119,.42)}
+html[data-theme="dark"] .cite .cite-src{color:#a9bd8f}
+html[data-theme="dark"] .cite .badge.blue{background:rgba(201,154,74,.16);color:#e8c77f}
+html[data-theme="dark"] .cite .badge.green{background:rgba(139,157,119,.18);color:#c3d5a9}
+html[data-theme="dark"] .cite .badge.purple{background:rgba(167,123,186,.2);color:#dabde7}
+html[data-theme="dark"] .cite .badge.gray{background:rgba(185,173,153,.15);color:#d4c9b5}
 .tbl tr.detail td{background:#2a2320;color:#f4eddf}
 html[data-theme="light"] .tbl tr.detail td{background:#e6f0e7!important;color:#17251d!important;border-top:1px solid #a8c2ab}
 html[data-theme="light"] .tbl tr.detail pre{background:#f7fbf7!important;color:#173c25!important;border:1px solid #b7cfba;box-shadow:inset 0 0 0 1px rgba(29,102,56,.04)}
@@ -503,6 +512,7 @@ html[data-theme="light"] .warn-banner{background:#fff4d6!important;border-color:
           <button class="btn" id="attach-btn" title="上传文件给模型阅读（txt/md/pdf/docx，可多选）" aria-label="上传文件给模型阅读"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m20.5 11.5-8.8 8.8a5 5 0 0 1-7.1-7.1l9.3-9.3a3.5 3.5 0 0 1 5 5l-9.4 9.4a2 2 0 0 1-2.8-2.8l8.7-8.7"/></svg></button>
           <textarea id="chat-input" placeholder="输入你的研究问题，Enter 发送，Shift+Enter 换行（可先 📎 上传文件给模型阅读）"></textarea>
           <button class="btn primary" id="send-btn">发送</button>
+          <button class="btn danger" id="stop-btn" title="终止当前生成，保留已生成内容" style="display:none">停止</button>
         </div>
       </div>
     </section>
@@ -758,11 +768,16 @@ async function boot() {
   $("#auth-view").hidden = true; $("#app").hidden = false;
   await loadSessions();
   ensureHistory(state.active);                   // 启动时补全当前会话历史（跨设备）
-  state.retrievalMode = localStorage.getItem("ra.retrieval." + me.id) || "hybrid";
-  state.perKbK = +(localStorage.getItem("ra.rk.per." + me.id) || 3);
-  state.totalK = +(localStorage.getItem("ra.rk.total." + me.id) || 5);
-  state.temperature = +(localStorage.getItem("ra.rk.temp." + me.id) || 0.3);
-  state.parentGroups = +(localStorage.getItem("ra.rk.parent." + me.id) || 3);
+  // 检索运行参数默认值跟随 yaml（config/settings.yaml → retrieval 段）：
+  // 用户未手动设置过（localStorage 无值）→ 用后端配置；手动设置过 → 尊重用户值
+  try { state.retrievalConfig = await api("/api/v1/settings/retrieval"); }
+  catch { state.retrievalConfig = {}; }
+  const rc = state.retrievalConfig || {};
+  state.retrievalMode = localStorage.getItem("ra.retrieval." + me.id) || rc.mode || "hybrid";
+  state.perKbK = +(localStorage.getItem("ra.rk.per." + me.id) ?? rc.per_kb_k ?? 3);
+  state.totalK = +(localStorage.getItem("ra.rk.total." + me.id) ?? rc.total_k ?? 5);
+  state.temperature = +(localStorage.getItem("ra.rk.temp." + me.id) ?? 0.3);
+  state.parentGroups = +(localStorage.getItem("ra.rk.parent." + me.id) ?? rc.parent_groups ?? 3);
   buildNav();
   switchView("chat");
   renderRetrievalSwitch();
@@ -1108,7 +1123,7 @@ function citesHTML(retrievals) {
     if (r.type === "parent") {
       const pages = (r.pages || []).length
         ? " · 第" + r.pages.join("-") + "页" : "";
-      src = `<span class="muted" style="color:var(--accent2)">📄 ${esc(r.source || "未知来源")}${pages} · 完整段落（${r.hit_chunks || 1} 个命中片段）</span>`;
+      src = `<span class="cite-src" style="font-size:11.5px">📄 ${esc(r.source || "未知来源")}${pages} · 完整段落（${r.hit_chunks || 1} 个命中片段）</span>`;
     } else if (r.source) {
       src = (r.page !== null && r.page !== undefined)
         ? `<span class="muted" title="源文件页码">📄 ${esc(r.source)} · 第 ${r.page} 页</span>`
@@ -1239,6 +1254,7 @@ async function sendMessage(text, opts = {}) {
   renderMessages();
   state.streaming = true;
   $("#send-btn").disabled = true;
+  $("#stop-btn").style.display = "";
 
   if (!opts.rewind && sess && sess.title === "新会话") {
     sess.title = text.length > 24 ? text.slice(0, 24) + "…" : text;
@@ -1280,10 +1296,28 @@ async function sendMessage(text, opts = {}) {
     asst._streaming = false;
     state.streaming = false;
     $("#send-btn").disabled = false;
+    const sb = $("#stop-btn");
+    sb.style.display = "none"; sb.disabled = false; sb.textContent = "停止";
     patchLastMsg(asst);
     saveMsgs(msgs);
     $("#chat-input").focus();
   }
+}
+
+/* 停止生成：通知后端设停止标记，generate 节点在下一个 token 边界退出。
+   已流出的部分文本前端已累积显示，无需额外处理 */
+async function stopGeneration() {
+  if (!state.streaming) return;
+  const btn = $("#stop-btn");
+  btn.disabled = true; btn.textContent = "停止中…";
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = "Bearer " + store.token;
+    await fetch(store.base + "/api/v1/chat/stop", {
+      method: "POST", headers,
+      body: JSON.stringify({ user_id: state.user.id, session_id: state.active })
+    });
+  } catch (e) { /* 标记失败也无妨：SSE 流本身会自然结束 */ }
 }
 
 /* 分支：从选中消息（含）及之前的历史开一个新会话，后续提问从分支点继续 */
@@ -1383,6 +1417,10 @@ function handleChatEvent(ev, asst, stepByTrace) {
     case "memory_save":
       if (ev.saved > 0)
         asst.steps.push({ kind: "memory_save", status: "ok", desc: `审核通过，写入 ${ev.saved} 条` });
+      break;
+    case "stopped":
+      asst.steps.push({ kind: "llm", status: "ok", desc: "已手动停止生成（保留部分答复）" });
+      if (!asst.content) asst.content = "（已停止生成）";
       break;
     case "done":
       break;
@@ -2346,6 +2384,7 @@ $("#logout-btn").onclick = logout;
 $("#api-status").onclick = checkHealth;
 $("#new-session").onclick = newSession;
 $("#send-btn").onclick = sendChat;
+$("#stop-btn").onclick = stopGeneration;
 $("#attach-btn").onclick = () => $("#chat-file").click();
 $("#chat-file").onchange = function () {
   if (this.files.length) uploadChatFiles(this.files);

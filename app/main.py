@@ -14,6 +14,7 @@ from app.api.conversations import router as conversations_router
 from app.api.kbs import router as kbs_router
 from app.api.traces import router as traces_router
 from app.api.llm_config import router as llm_config_router
+from app.api.settings import router as settings_router
 from app.core.crypto import SecretCrypto
 from app.core.db import engine
 from app.core.errors import register_exception_handlers
@@ -104,6 +105,7 @@ app.include_router(kbs_router)
 app.include_router(traces_router)
 app.include_router(memories_router)
 app.include_router(llm_config_router)
+app.include_router(settings_router)
 
 @app.get("/health")
 async def health():
