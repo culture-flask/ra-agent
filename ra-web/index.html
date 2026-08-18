@@ -39,6 +39,9 @@ input,select,textarea{font-family:inherit;font-size:14px;color:var(--ink)}
 .badge.orange{background:#fdf1e0;color:var(--warn)}
 .badge.red{background:#fdecec;color:var(--danger)}
 .badge.gray{background:#eef1f6;color:var(--muted)}
+/* "我禁检索"：红底白字 + 外圈 + 呼吸动画，与 公共/就绪 等状态徽章明显区分 */
+.badge.disable{background:var(--danger);color:#fff;border:1.5px solid #fff;box-shadow:0 0 0 1.5px var(--danger);animation:disable-pulse 1.6s ease-in-out infinite}
+@keyframes disable-pulse{0%,100%{box-shadow:0 0 0 1.5px var(--danger)}50%{box-shadow:0 0 0 4px rgba(217,83,79,.35)}}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
 .field{margin-bottom:14px}
 .field label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
@@ -239,7 +242,9 @@ details.cites .cites-body{margin-top:8px}
 .kb-del:hover{color:var(--danger);background:#fdecec}
 .kb-card:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(31,39,51,.08);border-color:var(--accent)}
 .kb-card.private{border-top-color:var(--user)}
-.kb-card h3{margin:0 0 8px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.kb-card h3{margin:0 0 8px;font-size:15px;line-height:1.45;padding-right:150px;word-break:break-all}
+.kb-head-badges{position:absolute;top:11px;right:36px;display:flex;gap:5px;align-items:center}
+.kb-flag{margin-top:6px}
 .kb-meta{font-size:12.5px;color:var(--muted);display:flex;flex-direction:column;gap:3px;margin-top:8px}
 .kb-meta .row{display:flex;justify-content:space-between;gap:10px}
 .kb-meta code{background:var(--chip);padding:0 6px;border-radius:4px;font-size:11.5px}
@@ -291,6 +296,19 @@ table.tbl{width:100%;border-collapse:collapse;background:#fff;border:1px solid v
   margin-bottom:8px;font-size:12.5px}
 .search-hit .txt{white-space:pre-wrap;color:var(--ink);margin-top:4px}
 #toast-root{position:fixed;bottom:22px;right:22px;z-index:200;display:flex;flex-direction:column;gap:10px}
+/* 重建/复制进度浮卡：右下角独立于弹窗，关闭知识库详情后进度仍可见 */
+#rebuild-progress-root{position:fixed;bottom:22px;left:22px;z-index:201;display:flex;flex-direction:column;gap:10px}
+.rebuild-card{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);
+  border-radius:10px;padding:10px 14px;width:300px;box-shadow:0 8px 24px rgba(31,39,51,.14);font-size:12.5px}
+.rebuild-card.failed{border-left-color:var(--danger)}
+.rebuild-card .rc-head{display:flex;justify-content:space-between;align-items:center;font-weight:600;margin-bottom:6px}
+.rebuild-card .rc-close{border:none;background:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 2px}
+.rebuild-card .rc-close:hover{color:var(--danger)}
+.rebuild-card .rc-phase{color:var(--muted);margin-bottom:4px}
+.rebuild-card .rc-bar{height:8px;background:#eef1f6;border-radius:4px;overflow:hidden}
+.rebuild-card .rc-bar i{display:block;height:100%;background:var(--accent);border-radius:4px;transition:width .4s}
+.rebuild-card.failed .rc-bar i{background:var(--danger)}
+.rebuild-card .rc-err{color:#c0392b;font-size:12px;margin-top:5px;word-break:break-all}
 .toast{background:#fff;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;
   padding:11px 16px;font-size:13px;box-shadow:0 8px 26px rgba(15,23,42,.14);max-width:380px;
   animation:slidein .25s ease}
@@ -573,6 +591,7 @@ html[data-theme="light"] .warn-banner{background:#fff4d6!important;border-color:
 
 <div id="modal-root"><div class="modal-overlay" onclick="closeModal()"></div><div class="modal" id="modal-box"></div></div>
 <div id="toast-root"></div>
+<div id="rebuild-progress-root"></div>
 
 <script>
 "use strict";
@@ -1377,6 +1396,7 @@ function handleChatEvent(ev, asst, stepByTrace) {
 /* ================= 知识库 ================= */
 const EMBED_OPTIONS = [
   { provider: "ollama", label: "Ollama qwen3-embedding:8b（dim 4096 · 本地服务）", model: "qwen3-embedding:8b", dim: 4096, base: "http://100.85.4.71:11434/v1" },
+  { provider: "ollama", label: "Ollama qwen3-embedding:0.6b（dim 4096 · 本地服务）", model: "qwen3-embedding:0.6b", dim: 4096, base: "http://100.85.4.71:11434/v1" },
   { provider: "local", label: "本地轻量模型 mini（dim 384 · 离线）", model: "mini", dim: 384, base: "" },
   { provider: "__custom__", label: "自定义…", model: "", dim: 0, base: "" },
 ];
@@ -1385,8 +1405,73 @@ const KB_STATUS = {
   ready: { label: "就绪", cls: "green" },
   indexing: { label: "入库中", cls: "orange" },
   reembedding: { label: "重建中", cls: "orange" },
+  copying: { label: "复制中", cls: "orange" },
   failed: { label: "失败", cls: "red" },
 };
+
+/* 重建/复制进度浮卡：全局展示（独立于弹窗、刷新后自动恢复） */
+function spawnRebuildCard(kbId, kbName, isCopy) {
+  const root = $("#rebuild-progress-root");
+  if (root.querySelector(`[data-kbid="${kbId}"]`)) return;   // 同一任务只挂一张卡
+  const card = document.createElement("div");
+  card.className = "rebuild-card";
+  card.dataset.kbid = kbId;
+  card.innerHTML = `<div class="rc-head"><span>${esc(kbName)} · ${isCopy ? "完全复制" : "重建"}</span>
+    <button class="rc-close" title="关闭进度">✕</button></div>
+    <div class="rc-phase">排队中…</div><div class="rc-bar"><i style="width:0%"></i></div>`;
+  root.appendChild(card);
+  card.querySelector(".rc-close").onclick = () => card.remove();
+  const phaseEl = card.querySelector(".rc-phase"), barEl = card.querySelector(".rc-bar i");
+  const t0 = Date.now();
+  const renderProg = p => {
+    const pct = Math.max(0, Math.min(100, p.pct || 0));
+    // 耗时从重建发起时刻算（后端 started_at），刷新页面后接续不计本地时间
+    const startMs = p.started_at ? new Date(p.started_at).getTime() : t0;
+    const sec = Math.round((Date.now() - (isNaN(startMs) ? t0 : startMs)) / 1000);
+    const phaseText = {
+      dirs: "复制目录与文件",
+      embedding: `向量化 ${p.done}/${p.total || "?"} 条`,
+      vectors: "搬运向量数据",
+      index: "构建索引",
+      done: "完成",
+    }[p.phase] || "处理中";
+    phaseEl.textContent = `${phaseText} · ${pct}% · ${sec}s`;
+    barEl.style.width = pct + "%";
+  };
+  const poll = async () => {
+    if (!card.isConnected) return;         // 用户手动关闭浮卡 → 停止轮询（后台不受影响）
+    let p;
+    try { p = await api(`/api/v1/kbs/${kbId}/rebuild-progress`); }
+    catch (e) { toast(e.message, "err"); return; }
+    if (!p) { setTimeout(poll, 800); return; }   // 任务未起，稍后重试
+    renderProg(p);
+    if (p.status === "ready") {
+      phaseEl.textContent = "已完成";
+      barEl.style.width = "100%";
+      toast(isCopy ? "复制完成，旧库已保留" : "重建完成，旧库已保留", "ok");
+      loadKBs();
+      setTimeout(() => card.remove(), 2500);     // 完成几秒后自动收起
+    } else if (p.status === "failed") {
+      card.classList.add("failed");
+      phaseEl.textContent = (isCopy ? "复制" : "重建") + "失败";
+      card.insertAdjacentHTML("beforeend",
+        `<div class="rc-err">${esc(p.error || "未知错误")}</div>`);
+      toast(isCopy ? "复制失败" : "重建失败", "err");
+      loadKBs();
+    } else {
+      setTimeout(poll, 700);
+    }
+  };
+  setTimeout(poll, 400);
+}
+/* 刷新后恢复：库列表里处于重建/复制中间态的库 → 自动挂进度浮卡（后端进度仍在内存） */
+function resumeRebuildCards() {
+  (state.kbs || []).forEach(k => {
+    if (k.status === "reembedding" || k.status === "copying") {
+      spawnRebuildCard(k.kb_id, k.name, k.status === "copying");
+    }
+  });
+}
 
 async function loadKBs() {
   const box = $("#kb-list");
@@ -1398,8 +1483,9 @@ async function loadKBs() {
     return;
   }
   renderKBs();
+  resumeRebuildCards();   // 刷新页面后：恢复进行中的重建/复制进度浮卡（后端进度仍在内存）
   // 有处于中间态的库时轮询刷新
-  if (state.kbs.some(k => k.status === "indexing" || k.status === "reembedding")) {
+  if (state.kbs.some(k => k.status === "indexing" || k.status === "reembedding" || k.status === "copying")) {
     setTimeout(() => { if (state.view === "kb") loadKBs(); }, 2500);
   }
 }
@@ -1418,13 +1504,16 @@ function renderKBs() {
       ? '<span class="badge purple">私人</span>' : '<span class="badge green">公共</span>';
     return `<div class="kb-card ${kb.scope === "private" ? "private" : ""}" data-kb="${kb.kb_id}">
       <button class="kb-del" data-del="${kb.kb_id}" title="删除知识库">✕</button>
-      <h3>${esc(kb.name)} ${scopeBadge}<span class="badge ${st.cls}${pulse}">${st.label}</span>${kb.retrieval_enabled_for_user === false ? '<span class="badge gray" title="仅你禁用了该库的对话检索">我禁检索</span>' : ''}</h3>
+      <div class="kb-head-badges">${scopeBadge}<span class="badge ${st.cls}${pulse}">${st.label}</span></div>
+      <h3>${esc(kb.name)}</h3>
       <div class="kb-meta">
         <div class="row"><span>嵌入模型</span><code>${esc(kb.embedding_provider)} / ${esc(kb.embedding_model_id)}</code></div>
         <div class="row"><span>向量维度</span><code>${kb.embedding_dim}</code></div>
         <div class="row"><span>文档数</span><span>${(kb.source_doc_ids || []).length}</span></div>
         <div class="row"><span>创建时间</span><span>${fmtTime(kb.created_at)}</span></div>
-      </div></div>`;
+      </div>
+      ${kb.retrieval_enabled_for_user === false ? '<div class="kb-flag"><span class="badge disable" title="仅你禁用了该库的对话检索，点击详情可恢复">⚑ 我禁检索</span></div>' : ''}
+    </div>`;
   }).join("") + "</div>";
   $$("#kb-list .kb-card").forEach(el => el.onclick = () => openKBDetail(el.dataset.kb));
   $$("#kb-list .kb-del").forEach(el => el.onclick = e => {
@@ -1549,7 +1638,7 @@ async function openKBDetail(kbId) {
       <span class="k">嵌入密钥</span><span>${kb.has_embedding_key ? '<span class="badge blue">专用密钥</span>' : '<span class="muted">系统默认</span>'}</span>
       <span class="k">嵌入端点</span><span>${kb.embedding_base_url ? `<code>${esc(kb.embedding_base_url)}</code>` : '<span class="muted">provider 默认</span>'}</span>
       <span class="k">文档数</span><span>${(kb.source_doc_ids || []).length}</span>
-      <span class="k">对话检索</span><span><button class="btn" id="kb-retrieval-toggle" style="padding:2px 10px;font-size:12px">${(kb.retrieval_enabled_for_user ?? true) ? '禁止检索' : '允许检索'}</button><span class="muted" style="font-size:11px;margin-left:6px">${(kb.retrieval_enabled_for_user ?? true) ? '对话可用' : '对话不可用'}（仅对当前用户生效）</span></span>
+      <span class="k">对话检索</span><span>${(kb.retrieval_enabled_for_user ?? true) ? `<button class="btn" id="kb-retrieval-toggle" style="padding:2px 10px;font-size:12px">禁止检索</button><span class="muted" style="font-size:11px;margin-left:6px">对话可用（仅对当前用户生效）</span>` : `<button class="btn" id="kb-retrieval-toggle" style="padding:2px 10px;font-size:12px">允许检索</button><span class="badge disable" style="margin-left:6px;animation:none">⚑ 已禁用</span><span class="muted" style="font-size:11px;margin-left:4px">仅当前用户，其他用户不受影响</span>`}</span>
       <span class="k">创建时间</span><span>${fmtTime(kb.created_at)}</span>
     </div>
     ${kb.embedding_mismatch ? '<div class="warn-banner" style="margin-top:10px;padding:8px 10px;background:#fff7e6;border:1px solid #ffd591;border-radius:8px;color:#ad6800;font-size:12.5px">⚠️ ' + esc(kb.embedding_mismatch) + '</div>' : ''}
@@ -1611,9 +1700,10 @@ async function openKBDetail(kbId) {
       <input type="checkbox" id="kb-copy-mode">
       完全复制（不过嵌入模型，嵌入配置原样继承，新库为我的私人库）
     </label>
-    <div style="display:flex;gap:10px;align-items:center" id="kb-rebuild-fields">
+    <!-- 按钮独立于嵌入字段容器之外：勾选"完全复制"只藏嵌入配置，按钮常驻、文案切换 -->
+    <button class="btn" id="kb-rebuild-btn">重建</button>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:8px" id="kb-rebuild-fields">
       <div style="flex:1">${embedSelectHTML("kb-rebuild-embed")}</div>
-      <button class="btn" id="kb-rebuild-btn">重建</button>
     </div>
     <div id="kb-rebuild-key-field" style="margin-top:8px">
       <input class="input mono" id="kb-rebuild-key" type="password" placeholder="新模型的嵌入 API Key（可选，留空沿用原库密钥/系统默认）">
@@ -1761,24 +1851,24 @@ async function openKBDetail(kbId) {
     } catch (e) { toast(e.message, "err"); }
   };
 
-  // 完全复制模式：隐藏嵌入相关字段（配置原样继承）
-  $("#kb-copy-mode").onchange = e => {
-    const copy = e.target.checked;
+  // 完全复制模式：隐藏嵌入相关字段（配置原样继承）；按钮独立常驻，只切文案
+  const applyCopyMode = copy => {
     $("#kb-rebuild-fields").style.display = copy ? "none" : "flex";
     $("#kb-rebuild-key-field").style.display = copy ? "none" : "block";
     $("#kb-rebuild-base-field").style.display = copy ? "none" : "block";
+    $("#kb-copy-mode").checked = Boolean(copy);
     $("#kb-rebuild-btn").textContent = copy ? "完全复制" : "重建";
   };
+  $("#kb-copy-mode").onchange = e => applyCopyMode(e.target.checked);
 
   $("#kb-rebuild-btn").onclick = async () => {
     const statusEl = $("#kb-rebuild-status");
     const copy = $("#kb-copy-mode").checked;
     const emb = embedFromSelect("kb-rebuild-embed", "rb-custom");
-    statusEl.innerHTML = copy
-      ? '<span class="badge orange pulse">复制中…</span>'
-      : '<span class="badge orange pulse">重建中…</span>';
+    statusEl.innerHTML = '<span class="badge orange pulse">提交中…</span>';
     try {
-      const newKb = await api(`/api/v1/kbs/${kb.kb_id}/rebuild`, {
+      // 异步：立即拿到 new_kb_id，后台执行，前端轮询进度（全局浮卡，刷新后自动恢复）
+      const r = await api(`/api/v1/kbs/${kb.kb_id}/rebuild`, {
         method: "POST", body: JSON.stringify({
           mode: copy ? "copy" : "reembed",
           embedding_provider: copy ? null : (emb.provider || null),
@@ -1789,11 +1879,7 @@ async function openKBDetail(kbId) {
           user_id: state.user.id,          // 新库强制归本人私人所有
         })
       });
-      statusEl.innerHTML = copy
-        ? `<span class="badge green">已复制新库「${esc(newKb.name)}」（向量直接搬运，未调嵌入 API）</span>`
-        : `<span class="badge green">已生成新库「${esc(newKb.name)}」（${esc(newKb.embedding_model_id)} · dim=${newKb.embedding_dim}）</span>`;
-      toast(copy ? "复制完成，旧库已保留" : "重建完成，旧库已保留", "ok");
-      loadKBs();
+      spawnRebuildCard(r.new_kb_id, kb.name, copy);
     } catch (e) {
       statusEl.innerHTML = `<span class="badge red">${copy ? "复制" : "重建"}失败</span>`;
       toast(e.message, "err");

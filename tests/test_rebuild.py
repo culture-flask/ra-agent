@@ -1,6 +1,7 @@
 """Day 8 测试：每库选模型、知识库重建、双库并存、维度错配防护。"""
 
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -143,7 +144,7 @@ def test_dimension_mismatch_rejected():
 
 
 def test_rebuild_api():
-    """API：重建端点返回新 KB（模型标注更新，且强制私人）。"""
+    """API：重建改为异步——POST 立即返回 new_kb_id，轮询进度到 ready。"""
     _ensure_user("u1")
     with TestClient(app) as c:
         kb = c.post("/api/v1/kbs", json={
@@ -155,10 +156,19 @@ def test_rebuild_api():
                    json={"embedding_provider": "local",
                          "embedding_model_id": "mini-b", "user_id": "u1"})
         assert r.status_code == 200
-        new = r.json()
-        assert new["kb_id"] != kb["kb_id"]
+        body = r.json()
+        assert body["status"] == "reembedding" and body["new_kb_id"]
+        new_id = body["new_kb_id"]
+        # 轮询进度端点 → ready
+        for _ in range(40):
+            p = c.get(f"/api/v1/kbs/{new_id}/rebuild-progress").json()
+            if p and p["status"] in ("ready", "failed"):
+                break
+            time.sleep(0.2)
+        assert p and p["status"] == "ready" and p["pct"] == 100
+        new = c.get(f"/api/v1/kbs/{new_id}").json()
+        assert new["kb_id"] == new_id and new["kb_id"] != kb["kb_id"]
         assert new["embedding_model_id"] == "mini-b"
-        assert new["status"] == "ready"
         assert new["scope"] == "private"           # 重建库默认私人
         assert new["description"] == "量子计算资料"  # 介绍继承原库
 
@@ -335,7 +345,7 @@ def test_copy_kb_full_clone_without_embedding():
 
 
 def test_copy_kb_via_api():
-    """API：POST /kbs/{id}/rebuild mode=copy → 完全复制新库。"""
+    """API：POST /kbs/{id}/rebuild mode=copy → 异步复制，轮询进度到 ready。"""
     _ensure_user("u1")
     with TestClient(app) as c:
         kb = c.post("/api/v1/kbs", json={
@@ -345,9 +355,17 @@ def test_copy_kb_via_api():
         r = c.post(f"/api/v1/kbs/{kb['kb_id']}/rebuild",
                    json={"mode": "copy", "user_id": "u1"})
         assert r.status_code == 200
-        d = r.json()
+        body = r.json()
+        assert body["status"] == "copying" and body["new_kb_id"]
+        new_id = body["new_kb_id"]
+        for _ in range(40):
+            p = c.get(f"/api/v1/kbs/{new_id}/rebuild-progress").json()
+            if p and p["status"] in ("ready", "failed"):
+                break
+            time.sleep(0.2)
+        assert p and p["status"] == "ready" and p["pct"] == 100
+        d = c.get(f"/api/v1/kbs/{new_id}").json()
         assert d["scope"] == "private"
-        assert d["status"] == "ready"
         assert d["kb_id"] != kb["kb_id"]
         assert d["embedding_model_id"] == kb["embedding_model_id"]
 

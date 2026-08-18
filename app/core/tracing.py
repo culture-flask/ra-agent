@@ -1,7 +1,7 @@
 """ToolCallLog 追踪：Postgres 落库 + 层级 parent 追踪 + 查询。
 
 tool_call_log 表（kind/name/args/output/error/parent_id/started_at/finished_at）
-今天启用。每次 LLM/工具/检索调用都写一条，parent_id 形成调用树。
+启用。每次 LLM/工具/检索调用都写一条，parent_id 形成调用树。
 """
 
 import uuid

@@ -1,5 +1,7 @@
 """知识库 ：建库/列表/检索 + 多格式文档上传（后台异步入库）。"""
 
+import uuid
+
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -239,28 +241,47 @@ async def update_kb_retrieval(kb_id: str, req: KBRetrievalUpdateRequest,
 
 
 @router.post("/kbs/{kb_id}/rebuild")
-async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request):
+async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request,
+                     background: BackgroundTasks):
     """复制原 chunk 生成新 KB，旧 KB 保留。两种模式：
 
     - reembed（默认）：新嵌入模型重新向量化（可换模型）
     - copy：完全复制——向量数据原样搬运，不调嵌入 API（秒级，配置原样继承）
+
+    后台异步执行，立即返回 {status, new_kb_id}；前端轮询
+    GET /kbs/{new_kb_id}/rebuild-progress 看进度。
     新库强制为发起者的「私人」库（不继承原库 scope）——不污染公共库。
     """
-    kb = await _get_kb(request, kb_id)
+    await _get_kb(request, kb_id)
+    svc = request.app.state.kb_service
+    new_kb_id = uuid.uuid4().hex[:12]
     if req.mode == "copy":
-        new_kb = await run_in_threadpool(
-            request.app.state.kb_service.copy_kb, kb.kb_id, req.user_id)
-        return _kb_dict(new_kb, req.user_id)
+        background.add_task(svc.copy_kb, kb_id, req.user_id, new_kb_id)
+        return {"status": "copying", "new_kb_id": new_kb_id}
+    # reembed：先同步校验嵌入配置（非法 provider 立刻 400，不排队进后台）
     try:
-        new_kb = await run_in_threadpool(
-            request.app.state.kb_service.rebuild,
-            kb.kb_id, provider=req.embedding_provider,
-            model_id=req.embedding_model_id, dim=req.embedding_dim,
-            api_key=req.embedding_api_key, base_url=req.embedding_base_url,
-            user_id=req.user_id)
+        svc.resolve_embedding_meta(req.embedding_provider,
+                                   req.embedding_model_id,
+                                   req.embedding_dim,
+                                   req.embedding_base_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return _kb_dict(new_kb)
+    background.add_task(svc.rebuild, kb_id,
+                        provider=req.embedding_provider,
+                        model_id=req.embedding_model_id,
+                        dim=req.embedding_dim,
+                        api_key=req.embedding_api_key,
+                        base_url=req.embedding_base_url,
+                        user_id=req.user_id, new_kb_id=new_kb_id)
+    return {"status": "reembedding", "new_kb_id": new_kb_id}
+
+
+@router.get("/kbs/{kb_id}/rebuild-progress")
+async def get_rebuild_progress(kb_id: str, request: Request):
+    """重建/复制进度：{status, phase, total, done, pct, error}；无记录返回 null。"""
+    await _get_kb(request, kb_id)
+    return await run_in_threadpool(
+        request.app.state.kb_service.rebuild_progress, kb_id)
 
 
 @router.delete("/kbs/{kb_id}")

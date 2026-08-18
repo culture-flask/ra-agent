@@ -1,6 +1,7 @@
 # 向量存储抽象
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Callable
 
 import chromadb
 
@@ -67,7 +68,9 @@ class ChromaVectorStore(VectorStore):
     # 拆成小批写入，避免 7342 个 chunk 的重建整体失败。
     MAX_ADD_BATCH = 1000
 
-    def add(self, chunks: list[ChunkRecord]) -> None:
+    def add(self, chunks: list[ChunkRecord],
+            on_batch: Callable[[int], None] | None = None) -> None:
+        """批量写入向量；on_batch(done_count) 每批写完后回调（进度上报用）。"""
         if not chunks:
             return
         for i in range(0, len(chunks), self.MAX_ADD_BATCH):
@@ -78,6 +81,8 @@ class ChromaVectorStore(VectorStore):
                 metadatas=[c.payload for c in batch],
                 embeddings=self.embedding_model.embed_texts([c.text for c in batch]),
             )
+            if on_batch:
+                on_batch(i + len(batch))
 
     def copy_from(self, src_store: "ChromaVectorStore") -> int:
         """把源 collection 的向量数据原样搬到本 collection（不调嵌入 API）。

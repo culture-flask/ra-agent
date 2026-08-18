@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import chromadb
@@ -91,6 +92,7 @@ class KBService:
         self._bm25_cache: dict[str, Bm25Index] = {}   # kb_id -> BM25 索引（懒构建）
         self._chunks_cache: dict[str, list[ChunkRecord]] = {}  # kb_id -> 全量 chunk（聚合父块用）
         self._ingest_progress: dict[str, dict] = {}   # kb_id -> 最近一批入库进度（前端轮询）
+        self._rebuild_progress: dict[str, dict] = {}  # new_kb_id -> 重建/复制进度（前端轮询）
 
     # ---------- 模型解析 ----------
     def resolve_embedding_meta(self, provider: str | None = None,
@@ -644,18 +646,24 @@ class KBService:
                     kb_id, meta.provider, meta.model_id, meta.dim, meta.base_url)
         return self.get_kb(kb_id)
 
+    def rebuild_progress(self, kb_id: str) -> dict | None:
+        """重建/复制进度：{status, phase, total, done, pct, error}；无记录返回 None。"""
+        return self._rebuild_progress.get(kb_id)
+
     # ---------- 知识库重建 ----------
     def rebuild(self, src_kb_id: str, provider: str | None = None,
                 model_id: str | None = None, dim: int | None = None,
                 api_key: str | None = None,
                 base_url: str | None = None,
-                user_id: str | None = None) -> KnowledgeBase:
+                user_id: str | None = None,
+                new_kb_id: str | None = None) -> KnowledgeBase:
         """复制原 chunk + 新嵌入模型重新向量化 → 新 KB（新 collection），旧库保留。
 
         免重新解析：chunk 已落盘，直接读盘重向量化。
         api_key / base_url 缺省继承原库；但 base_url 仅在 provider 未变时才继承
         （换了 provider 还沿用旧端点是错的，此时回退新 provider 的默认端点）。
         状态机：reembedding → ready | failed。
+        new_kb_id 由 API 层预生成返回（前端据此轮询 rebuild_progress）。
 
         ⚠️ 重建库强制为「私人」库（归属发起重建的用户）：公共库被任何用户重建
         都会变成共有库，影响其他用户——重建只影响发起者自己，不污染公共库。
@@ -665,7 +673,8 @@ class KBService:
         new_base_url = base_url if base_url is not None else (
             src.embedding_base_url if meta.provider == src.embedding_provider else None)
         new_kb = KnowledgeBase(
-            kb_id=uuid.uuid4().hex[:12], name=f"{src.name}{model_id or ''}(重建)",
+            kb_id=new_kb_id or uuid.uuid4().hex[:12],
+            name=f"{src.name}{model_id or ''}(重建)",
             scope="private", owner_user_id=user_id or src.owner_user_id,
             description=src.description,          # 介绍继承原库
             category_id=src.category_id,
@@ -675,6 +684,10 @@ class KBService:
             embedding_api_key=self._crypto.encrypt(api_key) if api_key else src.embedding_api_key,
             source_doc_ids=list(src.source_doc_ids or []),
         )
+        prog = {"status": "reembedding", "phase": "dirs",
+                "total": 0, "done": 0, "pct": 5, "error": None,
+                "started_at": datetime.now().isoformat()}
+        self._rebuild_progress[new_kb.kb_id] = prog
         with SessionLocal() as db:
             db.add(new_kb)
             db.commit()
@@ -691,13 +704,18 @@ class KBService:
                 shutil.copytree(src_docs, self._docs_dir / new_kb.kb_id,
                                 dirs_exist_ok=True)
             chunks = self._read_chunks(new_kb.kb_id, new_kb)   # 读自己的目录
-            self._vector_store(new_kb).add(chunks)            # 新 collection 重向量化
+            prog.update(phase="embedding", total=len(chunks),
+                        done=0, pct=8)          # 向量化进度：8% → 88% 按批上报
+            self._vector_store(new_kb).add(
+                chunks, on_batch=lambda done: prog.update(
+                    done=done, pct=8 + int(done / max(len(chunks), 1) * 80)))
             # BM25 索引与父块 chunk 直接缓存（省一次磁盘重读；目录已复制，
             # 重启后懒构建同样能从新库目录读到）
             bm = Bm25Index()
             bm.build(chunks)
             self._bm25_cache[new_kb.kb_id] = bm
             self._chunks_cache[new_kb.kb_id] = list(chunks)
+            prog.update(phase="index", pct=95)
             with SessionLocal() as db:
                 row = db.get(KnowledgeBase, new_kb.kb_id)
                 row.status = "ready"
@@ -708,10 +726,12 @@ class KBService:
                     "base_url": new_kb.embedding_base_url,
                 }
                 db.commit()
+            prog.update(status="ready", phase="done", pct=100)
             emit("rebuild", {"src_kb_id": src_kb_id, "new_kb_id": new_kb.kb_id,
                              "chunks": len(chunks), "status": "ready"})
         except Exception as e:
             logger.error("rebuild failed src=%s: %s", src_kb_id, e)
+            prog.update(status="failed", error=str(e)[:300])
             with SessionLocal() as db:
                 row = db.get(KnowledgeBase, new_kb.kb_id)
                 row.status = "failed"
@@ -720,7 +740,8 @@ class KBService:
         return self.get_kb(new_kb.kb_id)      # 返回 DB 最新状态（含 ready）
 
     # ---------- 知识库完全复制 ----------
-    def copy_kb(self, src_kb_id: str, user_id: str | None) -> KnowledgeBase:
+    def copy_kb(self, src_kb_id: str, user_id: str | None,
+                new_kb_id: str | None = None) -> KnowledgeBase:
         """完全复制：chunk 目录 + 源文件归档 + 向量数据原样搬运，不过嵌入模型。
 
         与 rebuild 的区别：重建复用 chunk 文本但必须重新向量化（可换模型）；
@@ -729,7 +750,7 @@ class KBService:
         """
         src = self.get_kb(src_kb_id)
         new_kb = KnowledgeBase(
-            kb_id=uuid.uuid4().hex[:12], name=f"{src.name}(复制)",
+            kb_id=new_kb_id or uuid.uuid4().hex[:12], name=f"{src.name}(复制)",
             scope="private", owner_user_id=user_id or src.owner_user_id,
             description=src.description,
             category_id=src.category_id,
@@ -741,6 +762,10 @@ class KBService:
             embedded_model=src.embedded_model,          # 向量是拷来的，写入标注一并继承
             status="copying", source_doc_ids=list(src.source_doc_ids or []),
         )
+        prog = {"status": "copying", "phase": "dirs",
+                "total": 0, "done": 0, "pct": 5, "error": None,
+                "started_at": datetime.now().isoformat()}
+        self._rebuild_progress[new_kb.kb_id] = prog
         with SessionLocal() as db:
             db.add(new_kb)
             db.commit()
@@ -754,9 +779,11 @@ class KBService:
             if src_docs.exists():
                 shutil.copytree(src_docs, self._docs_dir / new_kb.kb_id,
                                 dirs_exist_ok=True)
+            prog.update(phase="vectors", pct=40)   # 目录复制完成，开始搬向量
             # 向量原样搬运（不调嵌入 API），BM25/父块缓存直接构建
             moved = self._vector_store(new_kb).copy_from(
                 self._vector_store(src))
+            prog.update(phase="index", pct=85)
             chunks = self._read_chunks(new_kb.kb_id, new_kb)
             bm = Bm25Index()
             bm.build(chunks)
@@ -766,10 +793,12 @@ class KBService:
                 row = db.get(KnowledgeBase, new_kb.kb_id)
                 row.status = "ready"
                 db.commit()
+            prog.update(status="ready", phase="done", pct=100)
             emit("kb_copy", {"src_kb_id": src_kb_id, "new_kb_id": new_kb.kb_id,
                              "chunks": moved, "status": "ready"})
         except Exception as e:
             logger.error("copy kb failed src=%s: %s", src_kb_id, e)
+            prog.update(status="failed", error=str(e)[:300])
             with SessionLocal() as db:
                 row = db.get(KnowledgeBase, new_kb.kb_id)
                 row.status = "failed"

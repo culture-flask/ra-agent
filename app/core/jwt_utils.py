@@ -9,7 +9,7 @@ from app.settings import settings
 ALGORITHM = "HS256"
 
 
-def create_access_token(user_id: str, expires_minutes: int = 60 * 24) -> str:
+def create_access_token(user_id: str, expires_minutes: int = 60 * 24 * 14) -> str:
     """签发 JWT。payload 含 user_id 与过期时间。"""
     payload = {
         "sub": user_id,                                    # subject = 用户 id
