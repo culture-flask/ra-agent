@@ -10,3 +10,5 @@ tutorials/
 manual_test.py
 docs/
 rag_test/
+docker-compose.api.yml
+docker-compose.yml
