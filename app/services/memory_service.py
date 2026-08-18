@@ -54,6 +54,9 @@ class MemoryService:
             stmt = select(Memory).where(Memory.user_id == user_id)
             if tier:
                 stmt = stmt.where(Memory.tier == tier)
+            # 稳定序：touch() 每轮 UPDATE 后 PG 返回顺序可能漂移，
+            # 定序保证注入 prompt 的记忆序列字节级稳定（前缀缓存友好）
+            stmt = stmt.order_by(Memory.key)
             return {m.key: m.value for m in db.scalars(stmt)}
 
     def list(self, user_id: str) -> list[dict]:

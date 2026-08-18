@@ -386,34 +386,63 @@ async def _merge_memories_llm(ctx: WorkflowContext, user_id: str,
         logger.warning("memory merge LLM call failed: %s", e)
         return None
 
-def _build_system_prompt(state: AgentState) -> str:
-    """组装系统提示词：有检索结果 → 基于知识库作答；没有 → 直接用自己的知识作答。
+# 固定身份句：永不变化，置于系统提示词最前，保证所有请求共享同一前缀段
+_IDENTITY = ("你是科研助手。若用户消息后附有【知识库检索结果】，优先据此回答，"
+             "引用时标明来源（public/private）；否则根据你自己的知识回答。")
 
-    自动压缩产生的历史总结放在最前面（替代被压缩掉的旧轮次）。
+
+def _build_system_prompt(state: AgentState) -> str:
+    """组装稳定的系统提示词前缀：固定身份 → 历史总结（低频变化）→ 用户记忆（定序）。
+
+    检索结果不进 system（每轮都变，放前缀会打穿供应商侧前缀缓存），
+    改由 _retrieval_message 打包、_compose_llm_messages 插在最后一条
+    用户消息之后——system 与对话历史跨轮字节级一致，命中 KV 前缀缓存。
     """
-    parts = []
+    parts = [_IDENTITY]
     if state.get("conversation_summary"):
         parts.append(f"[历史对话总结] {state['conversation_summary']}")
-    if state.get("retrievals"):
-        parts.append("你是科研助手，基于知识库检索结果回答用户问题，引用时标明来源（public/private）。")
-        lines = []
-        for r in state["retrievals"]:
-            if r.get("type") == "parent":
-                # 聚合父块：完整段落，标注来源文件/页码与命中片段数
-                loc = r.get("source") or "未知来源"
-                if r.get("pages"):
-                    loc += f" 第{'-'.join(str(p) for p in r['pages'])}页"
-                lines.append(
-                    f"[知识库检索结果·上下文段落 ({r.get('scope')} / {r.get('kb_name')} / {loc}，"
-                    f"含{r.get('hit_chunks')}个命中片段)] {r['text']}")
-            else:
-                lines.append(f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}")
-        parts.append("\n".join(lines))
-    else:
-        parts.append("你是科研助手，根据你自己的知识回答用户问题。")
     if state.get("memory"):
-        parts.append(f"[用户记忆] {json.dumps(state['memory'], ensure_ascii=False)}")
+        # sort_keys：键序不随 DB 返回顺序漂移（get_all 已 ORDER BY key，双保险）
+        parts.append(f"[用户记忆] "
+                     f"{json.dumps(state['memory'], ensure_ascii=False, sort_keys=True)}")
     return "\n\n".join(parts)
+
+
+def _retrieval_message(state: AgentState) -> SystemMessage | None:
+    """把本轮检索结果打包为一条临时消息（只进发送序列，不写 checkpoint）。"""
+    if not state.get("retrievals"):
+        return None
+    lines = ["【知识库检索结果】回答本问题时优先依据以下内容，引用标明来源。"]
+    for r in state["retrievals"]:
+        if r.get("type") == "parent":
+            # 聚合父块：完整段落，标注来源文件/页码与命中片段数
+            loc = r.get("source") or "未知来源"
+            if r.get("pages"):
+                loc += f" 第{'-'.join(str(p) for p in r['pages'])}页"
+            lines.append(
+                f"[知识库检索结果·上下文段落 ({r.get('scope')} / {r.get('kb_name')} / {loc}，"
+                f"含{r.get('hit_chunks')}个命中片段)] {r['text']}")
+        else:
+            lines.append(f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}")
+    return SystemMessage(content="\n".join(lines))
+
+
+def _compose_llm_messages(state: AgentState, system: SystemMessage,
+                          retrieval: SystemMessage | None) -> list:
+    """发送给 LLM 的消息序列：检索块插在最后一条用户消息之后。
+
+    - 不拼进用户消息内容：上轮请求是本序列的严格前缀，供应商前缀缓存
+      （按 token 前缀匹配）可命中全部历史与 system
+    - 工具循环第二轮（末尾已是 AI(tool_calls)/ToolMessage）仍按
+      「最后 human 索引」插入，轮内两次请求前缀完全一致
+    - 检索块不进 messages reducer → checkpoint 不被每轮检索结果污染
+    """
+    msgs = list(state["messages"])
+    if retrieval is None:
+        return [system] + msgs
+    human_idx = [i for i, m in enumerate(msgs) if getattr(m, "type", "") == "human"]
+    idx = human_idx[-1] if human_idx else len(msgs) - 1   # 无 human 时兜底置尾
+    return [system] + msgs[:idx + 1] + [retrieval] + msgs[idx + 1:]
 
 
 async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
@@ -631,12 +660,15 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
         if schemas:
             model = model.bind_tools(schemas)      # 告诉 LLM"你有这些工具可用"
     system = SystemMessage(content=_build_system_prompt(state))
+    # 检索块作为临时消息插在最后一条用户消息后（不进 checkpoint），
+    # 保证发送序列跨轮前缀稳定 → 供应商侧前缀缓存可命中历史
+    payload = _compose_llm_messages(state, system, _retrieval_message(state))
     if ctx.tracer is not None:
         log_id = await asyncio.to_thread(
             ctx.tracer.start, "llm", getattr(model, "model_name", "chat"),
             state["session_id"], state["user_id"])
     resp = None
-    async for chunk in model.astream([system] + state["messages"]):
+    async for chunk in model.astream(payload):
         resp = chunk if resp is None else resp + chunk     # 逐 token 聚合为完整消息
         # 每个 token 实时推给事件总线（SSE 端点持续 drain → 前端打字机效果）
         text = chunk.content
