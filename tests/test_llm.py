@@ -105,10 +105,11 @@ def test_get_chat_model_temperature_override():
 
 
 def test_get_chat_model_temperature_clamped():
-    """越界 temperature 被约束到 0~2。"""
+    """越界 temperature 被约束到 -2~2（o 系列推理模型支持负温度）。"""
     svc = _make_service()
-    assert svc.get_chat_model("nobody-temp2", temperature=-1).temperature == 0.0
-    assert svc.get_chat_model("nobody-temp2", temperature=9).temperature == 2.0
+    assert svc.get_chat_model("nobody-temp2", temperature=-1).temperature == -1.0   # 域内原样通过
+    assert svc.get_chat_model("nobody-temp2", temperature=-9).temperature == -2.0  # 下界
+    assert svc.get_chat_model("nobody-temp2", temperature=9).temperature == 2.0    # 上界
 
 
 def test_extract_context_window_fields():

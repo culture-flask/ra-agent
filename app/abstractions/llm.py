@@ -1,6 +1,5 @@
-"""LLM 服务（Day 9 升级）：用户级配置落库（user_llm_config 表）+ 加密 + 掩码。
+"""LLM 服务：用户级配置落库（user_llm_config 表）+ 加密 + 掩码。
 
-第 3 天的内存 dict 换成第 1 天建好的 user_llm_config 表：
 - get_chat_model：该用户默认配置（解密）→ 工厂构建；未配置回退系统默认；
 - set_user_config：api_key 加密落库，is_default 互斥；
 - list_configs：只回显掩码（永不下发明文）。
@@ -33,7 +32,7 @@ def _is_quota_exhausted(exc: BaseException) -> bool:
 
     glm/doubao 等平台额度用尽时返回的 message 形如
     "Workspace allocated quota exceeded, please increase your quota limit"，
-    属于计费问题，退避重试多少次都一样，必须让用户去平台提升额度。
+    属于计费问题，退避重试多少次都一样。
     """
     text = str(exc)
     resp = getattr(exc, "response", None)
@@ -80,7 +79,7 @@ class RetryableChatModel:
       （已推给前端的半截内容会短暂重复，属预期行为）
     """
 
-    def __init__(self, model, max_retries: int = 9, base_delay: float = 1.0,
+    def __init__(self, model, max_retries: int = 10, base_delay: float = 1.0,
                  label: str = ""):
         self._model = model
         self._max_retries = max_retries
@@ -151,6 +150,7 @@ _CONTEXT_WINDOW_FIELDS = (
     "max_context_length",
     "max_sequence_length",
     "model_max_length",
+    "context",
 )
 
 
@@ -180,7 +180,7 @@ DEFAULT_TEMPERATURE = 0.3
 
 
 class LLMFactory:
-    """OpenAI 协议兼容多家厂商：base_url 可定制即接入 qwen/deepseek/ollama...（§12.2）。"""
+    """OpenAI 协议兼容多家厂商：base_url 可定制即接入 qwen/deepseek/ollama...。"""
 
     @staticmethod
     def build(cfg: LLMConfig) -> ChatOpenAI:
@@ -197,10 +197,10 @@ class LLMFactory:
         )
 
 class LLMService:
-    """按用户级配置构建 ChatModel，未配置回退系统默认（§12.2）。"""
+    """按用户级配置构建 ChatModel，未配置回退系统默认。"""
 
     def __init__(self, system_default: dict, system_api_key: str,
-                 crypto: SecretCrypto, retry_max_retries: int = 3,
+                 crypto: SecretCrypto, retry_max_retries: int = 10,
                  retry_base_delay: float = 1.0,
                  context_window_default: int = 256000):
         self._system = LLMConfig(
@@ -238,7 +238,7 @@ class LLMService:
         """构建用户生效模型；temperature 非 None 时覆盖（按轮次可调，0 也有效）。"""
         cfg = self.get_user_config(user_id) or self._system
         if temperature is not None:
-            temperature = max(0.0, min(2.0, float(temperature)))   # 范围约束 0~2
+            temperature = max(-2.0, min(2.0, float(temperature)))   # 范围约束 -2~2
             cfg = replace(cfg, temperature=temperature)
         model = LLMFactory.build(cfg)
         return RetryableChatModel(model, max_retries=self._retry_max,

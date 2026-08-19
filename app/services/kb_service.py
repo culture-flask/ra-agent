@@ -21,6 +21,7 @@ from sqlalchemy import select
 from app.abstractions.bm25 import Bm25Index, rrf_fuse
 from app.abstractions.embedding import EmbeddingFactory, EmbeddingMeta
 from app.abstractions.vectorstore import ChunkRecord, VectorStoreFactory
+from app.core.cancel import OperationCancelled, _check_cancel, acknowledge_cancel
 from app.core.crypto import SecretCrypto
 from app.core.db import SessionLocal
 from app.core.events import emit
@@ -154,7 +155,7 @@ class KBService:
             # 自建端点（ollama/llama.cpp 等，配置未标 rate_limited）：零间隔 + 小批次，
             # 降低单请求内存峰值（8B 模型配大 n_ctx 的服务器，大批次容易 OOM/断连）
             batch_delay=None if rate_limited else 0.0,
-            batch_size=None if rate_limited else 4)
+            batch_size=None if rate_limited else 16)
         emb = EmbeddingFactory.build(meta, self._secrets_for(kb))
         return VectorStoreFactory.build(self._settings, kb.kb_id, emb)
 
@@ -450,6 +451,13 @@ class KBService:
         for i, (filename, content) in enumerate(files):
             entry = prog["files"][i]
             prog["current"] = filename
+            # 用户取消：文件边界检查点（同步任务无法逐 token 停，此处粒度为文件）
+            try:
+                _check_cancel(kb_id)
+            except OperationCancelled:
+                self._finish_ingest(kb_id, kb, prog, ok_ids, ok_chunks,
+                                    cancelled=True)
+                return ok_chunks
             try:
                 digest, n = self._ingest_one(kb, kb_id, vs, filename, content)
                 entry.update(status="ok", chunks=n)
@@ -457,6 +465,13 @@ class KBService:
                 ok_chunks += n
                 if digest not in ok_ids:
                     ok_ids.append(digest)
+            except OperationCancelled:
+                # 向量化途中被取消：清该文件残留，收尾回滚状态
+                self._cleanup_failed_batch(kb_id, [(filename, content)])
+                prog["current"] = None
+                self._finish_ingest(kb_id, kb, prog, ok_ids, ok_chunks,
+                                    cancelled=True)
+                return ok_chunks
             except Exception as e:
                 logger.warning("ingest file failed %s (kb=%s): %s",
                                filename, kb_id, e)
@@ -511,14 +526,30 @@ class KBService:
         return digest, len(chunks)
 
     def _finish_ingest(self, kb_id: str, kb: KnowledgeBase, prog: dict,
-                       ok_ids: list[str], ok_chunks: int) -> None:
-        """收尾：终态判定 + 元数据落库（source_doc_ids/embedded_model）+ 缓存失效。"""
-        status = "ready" if prog["succeeded"] else "failed"
+                       ok_ids: list[str], ok_chunks: int,
+                       cancelled: bool = False) -> None:
+        """收尾：终态判定 + 元数据落库（source_doc_ids/embedded_model）+ 缓存失效。
+
+        cancelled=True：入库被用户取消。已成功文件照常保留并记入元数据，
+        库状态回到 ready（而非 failed——取消不是失败）；其余 pending 文件标
+        cancelled。最后确认清除取消令牌，允许下一次入库。
+        """
+        acknowledge_cancel(kb_id)
+        if cancelled:
+            status = "cancelled"
+            for entry in prog["files"]:
+                if entry["status"] == "pending":
+                    entry["status"] = "cancelled"
+            # 取消不算失败：库回到就绪（已有文件保留），未嵌完的不计入 source_doc_ids
+            db_status = "ready" if prog["succeeded"] else "ready"
+        else:
+            status = "ready" if prog["succeeded"] else "failed"
+            db_status = status
         prog["status"], prog["current"] = status, None
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
             if row is not None:            # 入库途中库被删 -> 不再写状态
-                row.status = status
+                row.status = db_status
                 if ok_ids:
                     # 关键：list(...) 拷贝成新对象再改。若直接对加载出的 list
                     # 就地 append，SQLAlchemy JSON 列检测不到"原地突变"，
@@ -729,8 +760,9 @@ class KBService:
             prog.update(phase="embedding", total=len(chunks),
                         done=0, pct=8)          # 向量化进度：8% → 88% 按批上报
             self._vector_store(new_kb).add(
-                chunks, on_batch=lambda done: prog.update(
-                    done=done, pct=8 + int(done / max(len(chunks), 1) * 80)))
+                chunks,
+                on_batch=lambda done: self._rebuild_progress_cb(
+                    new_kb.kb_id, prog, chunks, done))
             # BM25 索引与父块 chunk 直接缓存（省一次磁盘重读；目录已复制，
             # 重启后懒构建同样能从新库目录读到）
             bm = Bm25Index()
@@ -751,6 +783,15 @@ class KBService:
             prog.update(status="ready", phase="done", pct=100)
             emit("rebuild", {"src_kb_id": src_kb_id, "new_kb_id": new_kb.kb_id,
                              "chunks": len(chunks), "status": "ready"})
+        except OperationCancelled:
+            # 用户取消：删掉半成品重建库（目录/向量/元数据全清），确认令牌
+            acknowledge_cancel(new_kb.kb_id)
+            try:
+                self.delete_kb(new_kb.kb_id)
+            except Exception as ce:
+                logger.warning("cleanup cancelled rebuild kb=%s failed: %s",
+                               new_kb.kb_id, ce)
+            raise
         except Exception as e:
             logger.error("rebuild failed src=%s: %s", src_kb_id, e)
             prog.update(status="failed", error=str(e)[:300])
@@ -760,6 +801,16 @@ class KBService:
                 db.commit()
             raise
         return self.get_kb(new_kb.kb_id)      # 返回 DB 最新状态（含 ready）
+
+    def _rebuild_progress_cb(self, new_kb_id: str, prog: dict,
+                             chunks: list, done: int) -> None:
+        """重建逐批进度上报 + 取消检查点（每个 MAX_ADD_BATCH 批后触发）。
+
+        取消标记命中即在批次边界抛 OperationCancelled，中断向量化循环。
+        """
+        _check_cancel(new_kb_id)
+        prog.update(done=done,
+                    pct=8 + int(done / max(len(chunks), 1) * 80))
 
     # ---------- 知识库完全复制 ----------
     def copy_kb(self, src_kb_id: str, user_id: str | None,
@@ -802,6 +853,7 @@ class KBService:
                 shutil.copytree(src_docs, self._docs_dir / new_kb.kb_id,
                                 dirs_exist_ok=True)
             prog.update(phase="vectors", pct=40)   # 目录复制完成，开始搬向量
+            _check_cancel(new_kb.kb_id)            # 复制前检查点（复制本身秒级）
             # 向量原样搬运（不调嵌入 API），BM25/父块缓存直接构建
             moved = self._vector_store(new_kb).copy_from(
                 self._vector_store(src))
@@ -818,6 +870,14 @@ class KBService:
             prog.update(status="ready", phase="done", pct=100)
             emit("kb_copy", {"src_kb_id": src_kb_id, "new_kb_id": new_kb.kb_id,
                              "chunks": moved, "status": "ready"})
+        except OperationCancelled:
+            acknowledge_cancel(new_kb.kb_id)
+            try:
+                self.delete_kb(new_kb.kb_id)
+            except Exception as ce:
+                logger.warning("cleanup cancelled copy kb=%s failed: %s",
+                               new_kb.kb_id, ce)
+            raise
         except Exception as e:
             logger.error("copy kb failed src=%s: %s", src_kb_id, e)
             prog.update(status="failed", error=str(e)[:300])

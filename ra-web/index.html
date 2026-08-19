@@ -309,7 +309,13 @@ table.tbl{width:100%;border-collapse:collapse;background:#fff;border:1px solid v
 .rebuild-card .rc-bar{height:8px;background:#eef1f6;border-radius:4px;overflow:hidden}
 .rebuild-card .rc-bar i{display:block;height:100%;background:var(--accent);border-radius:4px;transition:width .4s}
 .rebuild-card.failed .rc-bar i{background:var(--danger)}
+.rebuild-card.cancelled .rc-bar i{background:var(--danger)}
 .rebuild-card .rc-err{color:#c0392b;font-size:12px;margin-top:5px;word-break:break-all}
+.rebuild-card .rc-actions{margin-top:8px;display:flex;justify-content:flex-end}
+.rebuild-card .rc-cancel{border:1px solid var(--danger);background:none;color:var(--danger);border-radius:6px;
+  padding:3px 12px;font-size:12px;cursor:pointer}
+.rebuild-card .rc-cancel:hover{background:var(--danger);color:#fff}
+.rebuild-card .rc-cancel:disabled{opacity:.6;cursor:default}
 .toast{background:#fff;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;
   padding:11px 16px;font-size:13px;box-shadow:0 8px 26px rgba(15,23,42,.14);max-width:380px;
   animation:slidein .25s ease}
@@ -1456,11 +1462,23 @@ function spawnRebuildCard(kbId, kbName, isCopy) {
   card.dataset.kbid = kbId;
   card.innerHTML = `<div class="rc-head"><span>${esc(kbName)} · ${isCopy ? "完全复制" : "重建"}</span>
     <button class="rc-close" title="关闭进度">✕</button></div>
-    <div class="rc-phase">排队中…</div><div class="rc-bar"><i style="width:0%"></i></div>`;
+    <div class="rc-phase">排队中…</div><div class="rc-bar"><i style="width:0%"></i></div>
+    <div class="rc-actions"><button class="rc-cancel" title="终止并删除重建中的半成品库">终止</button></div>`;
   root.appendChild(card);
   card.querySelector(".rc-close").onclick = () => card.remove();
   const phaseEl = card.querySelector(".rc-phase"), barEl = card.querySelector(".rc-bar i");
   const t0 = Date.now();
+  let cancelPending = false;      // 已点终止：等待后端删除半成品库
+  card.querySelector(".rc-cancel").onclick = async e => {
+    e.stopPropagation();
+    if (cancelPending) return;
+    const btn = e.currentTarget;
+    cancelPending = true; btn.disabled = true; btn.textContent = "终止中…";
+    try {
+      await api(`/api/v1/kbs/${kbId}/rebuild/cancel`, { method: "POST" });
+      toast("已请求终止（删除半成品库）", "ok");
+    } catch (err) { toast(err.message, "err"); btn.disabled = false; btn.textContent = "终止"; }
+  };
   const renderProg = p => {
     const pct = Math.max(0, Math.min(100, p.pct || 0));
     // 耗时从重建发起时刻算（后端 started_at），刷新页面后接续不计本地时间
@@ -1480,8 +1498,35 @@ function spawnRebuildCard(kbId, kbName, isCopy) {
     if (!card.isConnected) return;         // 用户手动关闭浮卡 → 停止轮询（后台不受影响）
     let p;
     try { p = await api(`/api/v1/kbs/${kbId}/rebuild-progress`); }
-    catch (e) { toast(e.message, "err"); return; }
+    catch (e) {
+      // 已点终止且后端删掉了半成品库 → /rebuild-progress 前的 404：视为取消完成
+      if (cancelPending && String(e.message).includes("404")) {
+        phaseEl.textContent = "已终止";
+        card.classList.add("cancelled");
+        toast((isCopy ? "复制" : "重建") + "已终止，半成品库已删除", "ok");
+        loadKBs();
+        setTimeout(() => card.remove(), 2500);
+        return;
+      }
+      toast(e.message, "err"); return;
+    }
     if (!p) { setTimeout(poll, 800); return; }   // 任务未起，稍后重试
+    if (p.status === "cancelled" || p.status === "failed") {
+      if (p.status === "cancelled") {
+        phaseEl.textContent = "已终止";
+        card.classList.add("cancelled");
+        toast((isCopy ? "复制" : "重建") + "已终止，半成品库已删除", "ok");
+      } else {
+        card.classList.add("failed");
+        phaseEl.textContent = (isCopy ? "复制" : "重建") + "失败";
+        card.insertAdjacentHTML("beforeend",
+          `<div class="rc-err">${esc(p.error || "未知错误")}</div>`);
+        toast(isCopy ? "复制失败" : "重建失败", "err");
+      }
+      loadKBs();
+      setTimeout(() => card.remove(), 2500);
+      return;
+    }
     renderProg(p);
     if (p.status === "ready") {
       phaseEl.textContent = "已完成";
@@ -1489,13 +1534,6 @@ function spawnRebuildCard(kbId, kbName, isCopy) {
       toast(isCopy ? "复制完成，旧库已保留" : "重建完成，旧库已保留", "ok");
       loadKBs();
       setTimeout(() => card.remove(), 2500);     // 完成几秒后自动收起
-    } else if (p.status === "failed") {
-      card.classList.add("failed");
-      phaseEl.textContent = (isCopy ? "复制" : "重建") + "失败";
-      card.insertAdjacentHTML("beforeend",
-        `<div class="rc-err">${esc(p.error || "未知错误")}</div>`);
-      toast(isCopy ? "复制失败" : "重建失败", "err");
-      loadKBs();
     } else {
       setTimeout(poll, 700);
     }
@@ -1789,11 +1827,19 @@ async function openKBDetail(kbId) {
     const t0 = Date.now();
     btn.disabled = true;                                   // 入库期间禁点，防止重复上传
     // 渲染进度：进度条 + 逐文件状态行（处理中/成功含片段数/失败含错误明细）
+    let cancelPending = false;
+    const statusMsg = (p) => p.status === "cancelled"
+      ? '<div style="margin:6px 0"><span class="badge red">已终止</span><span class="muted" style="margin-left:6px;font-size:12px">已入库文件保留，其余已取消</span></div>'
+      : "";
     const render = (p) => {
       const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
       const sec = Math.round((Date.now() - t0) / 1000);
-      const color = p.status === "failed" ? "#d9534f" : "var(--accent)";
+      const color = (p.status === "failed" || p.status === "cancelled") ? "#d9534f" : "var(--accent)";
+      const cancelBtn = (p.status === "indexing" && !cancelPending)
+        ? `<button class="btn sm danger" id="ingest-cancel-btn" style="margin-right:8px">终止入库</button>`
+        : (cancelPending ? '<span class="muted" style="font-size:12px">终止中…</span>' : "");
       const bar = `<div style="margin:6px 0;display:flex;align-items:center;gap:8px">
+        ${cancelBtn}
         <div style="flex:1;height:8px;background:#eef1f6;border-radius:4px;overflow:hidden">
           <div style="width:${pct}%;height:100%;background:${color};transition:width .4s"></div></div>
         <span class="muted" style="font-size:12px;white-space:nowrap">${p.done}/${p.total} · ${sec}s</span></div>`;
@@ -1801,6 +1847,7 @@ async function openKBDetail(kbId) {
         const processing = p.status === "indexing" && i === p.done && f.status === "pending";
         const icon = f.status === "ok" ? `<span class="badge green">✓ ${f.chunks} 片</span>`
           : f.status === "failed" ? '<span class="badge red">✗ 失败</span>'
+          : f.status === "cancelled" ? '<span class="badge gray">已取消</span>'
           : processing ? '<span class="badge orange pulse">处理中…</span>'
           : '<span class="badge gray">等待</span>';
         const err = f.error ? `<div style="font-size:12px;color:#c0392b;margin-top:3px;word-break:break-all">${esc(f.error)}</div>` : "";
@@ -1808,7 +1855,17 @@ async function openKBDetail(kbId) {
           <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
             <span style="font-size:12.5px;word-break:break-all">${esc(f.filename)}</span><span>${icon}</span></div>${err}</div>`;
       }).join("");
-      statusEl.innerHTML = bar + rows;
+      statusEl.innerHTML = statusMsg(p) + bar + rows;
+      const cb = document.getElementById("ingest-cancel-btn");
+      if (cb) cb.onclick = async () => {
+        cancelPending = true;
+        try {
+          await api("/api/v1/kbs/" + kb.kb_id + "/ingest/cancel", { method: "POST" });
+          toast("已请求终止入库", "ok");
+        } catch (e) {
+          toast(e.message, "err"); cancelPending = false; render(p);
+        }
+      };
     };
     render({ total: files.length, done: 0, status: "indexing",
              files: Array.from(files).map(f => ({ filename: f.name, status: "pending", chunks: 0, error: null })) });
@@ -1831,6 +1888,11 @@ async function openKBDetail(kbId) {
         render(p);
         if (p.status === "indexing") { setTimeout(poll, 1000); return; }
         btn.disabled = false;
+        if (p.status === "cancelled") {
+          // 已由 render 显示"已终止"徽标与取消明细
+          toast("已终止入库，已上传文件保留", "ok");
+          loadKBs(); return;
+        }
         const ok = p.succeeded || 0, bad = p.failed || 0;
         if (bad === 0) toast("文档入库完成（" + ok + " 个文件）", "ok");
         else if (ok === 0) toast("入库失败：" + ((p.files || []).find(f => f.error) || {}).error, "err");

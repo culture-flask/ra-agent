@@ -393,3 +393,94 @@ def test_update_kb_name_and_description():
                        json={"description": ""}).json()["description"] == ""
         assert c.patch("/api/v1/kbs/nonexistent",
                        json={"name": "x"}).status_code == 404
+
+
+# ---------- 取消：入库 / 重建可被用户随时终止 ----------
+def test_ingest_cancel():
+    """request_cancel 后入库 → 状态 cancelled（非 failed），已成功文件保留。"""
+    from app.core.cancel import acknowledge_cancel, request_cancel
+    ks = _make_ks()
+    kb = ks.create_kb("取消入库库", "public", None)
+    acknowledge_cancel(kb.kb_id)                     # 清残留
+    request_cancel(kb.kb_id)                         # 模拟用户点终止入库
+    n = ks.ingest_files(kb.kb_id, [
+        ("a.txt", "量子比特内容".encode()),
+        ("b.txt", "Shor算法内容".encode())])
+    assert n == 0                                    # 未成功入库任何文件
+    prog = ks.ingest_progress(kb.kb_id)
+    assert prog["status"] == "cancelled"             # 取消不是失败
+    assert all(f["status"] in ("pending", "cancelled") for f in prog["files"])
+    # 库状态回到 ready（未被标记 failed）
+    assert ks.get_kb(kb.kb_id).status == "ready"
+    assert not any("a.txt" in (d.get("filename") or "") for d in ks.list_documents(kb.kb_id))
+
+
+def test_ingest_cancel_keeps_finished_files():
+    """入库中途取消：已成功文件保留并入库，其余取消。"""
+    import app.services.kb_service as kbmod
+    from app.core.cancel import acknowledge_cancel, request_cancel
+    ks = _make_ks()
+    kb = ks.create_kb("取消保留库", "public", None)
+    # 把模块级 _check_cancel 包一层：首次（第一个文件边界）通过，
+    # 第二次（第二个文件边界）先 set 取消标记再检查 → 命中
+    orig = kbmod._check_cancel
+    calls = {"n": 0}
+
+    def flaky(key):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            request_cancel(kb.kb_id)
+        return orig(key)
+
+    kbmod._check_cancel = flaky
+    try:
+        ks.ingest_files(kb.kb_id, [
+            ("ok.txt", "第一个文件".encode()),
+            ("later.txt", "第二个文件".encode())])
+    finally:
+        kbmod._check_cancel = orig
+        acknowledge_cancel(kb.kb_id)
+    prog = ks.ingest_progress(kb.kb_id)
+    assert prog["status"] == "cancelled"
+    by_name = {f["filename"]: f["status"] for f in prog["files"]}
+    assert by_name["ok.txt"] == "ok"                 # 已完成的保留
+    assert by_name["later.txt"] == "cancelled"       # 未完成的取消
+    assert [d["filename"] for d in ks.list_documents(kb.kb_id)] == ["ok.txt"]
+
+
+def test_rebuild_cancel_deletes_partial_kb():
+    """重建中途取消 → 抛 OperationCancelled，且半成品库被删除。"""
+    import app.services.kb_service as kbmod
+    from app.core.cancel import OperationCancelled, acknowledge_cancel, request_cancel
+    ks = _make_ks()
+    _ensure_user("u1")
+    src = ks.create_kb("取消重建源", "public", None,
+                       ["量子比特是基本单元，可以处于叠加态。"] * 20,
+                       provider="local")
+    acknowledge_cancel("partial-new-id")
+    # 包一层 _rebuild_progress_cb：首个批次回调时 set 取消标记再检查 → 中断向量化
+    orig_cb = kbmod.KBService._rebuild_progress_cb
+    orig_check = kbmod._check_cancel
+    fired = {"n": 0}
+
+    def cancel_first_cb(self, new_kb_id, prog, chunks, done):
+        fired["n"] += 1
+        if fired["n"] >= 1:
+            request_cancel(new_kb_id)
+        return orig_cb(self, new_kb_id, prog, chunks, done)
+
+    kbmod.KBService._rebuild_progress_cb = cancel_first_cb
+    try:
+        try:
+            ks.rebuild(src.kb_id, provider="local", user_id="u1",
+                       new_kb_id="partial-new-id")
+            raise AssertionError("should have cancelled")
+        except OperationCancelled:
+            pass                                   # 期望取消
+    finally:
+        kbmod.KBService._rebuild_progress_cb = orig_cb
+        kbmod._check_cancel = orig_check
+        acknowledge_cancel("partial-new-id")
+    # 半成品库已被删除
+    with pytest.raises(KeyError):
+        ks.get_kb("partial-new-id")

@@ -6,6 +6,8 @@ from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, Up
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from app.core.cancel import request_cancel
+
 router = APIRouter(prefix="/api/v1", tags=["kbs"])
 
 
@@ -209,6 +211,29 @@ async def get_ingest_progress(kb_id: str, request: Request):
     await _get_kb(request, kb_id)
     return await run_in_threadpool(
         request.app.state.kb_service.ingest_progress, kb_id)
+
+
+@router.post("/kbs/{kb_id}/ingest/cancel")
+async def cancel_ingest(kb_id: str, request: Request):
+    """终止正在进行的入库：设置取消标记，后台任务在文件边界/向量化前
+    检查命中，清残留 chunk 并回滚状态（已成功文件保留）。"""
+    await _get_kb(request, kb_id)
+    request_cancel(kb_id)
+    return {"cancelled": True, "kb_id": kb_id}
+
+
+@router.post("/kbs/{kb_id}/rebuild/cancel")
+async def cancel_rebuild(kb_id: str, request: Request):
+    """终止正在进行的重建/复制（按 new_kb_id）：任务在批次边界检查，
+    命中后删除半成品重建库（目录/向量/元数据全清）。"""
+    await _get_kb(request, kb_id)
+    svc = request.app.state.kb_service
+    prog = svc.rebuild_progress(kb_id)
+    if prog and prog.get("status") in ("reembedding", "copying"):
+        request_cancel(kb_id)
+        return {"cancelled": True, "kb_id": kb_id}
+    return {"cancelled": False, "kb_id": kb_id,
+            "detail": "该库没有正在进行的重建/复制"}
 
 @router.patch("/kbs/{kb_id}/embedding")
 async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,

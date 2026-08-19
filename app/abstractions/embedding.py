@@ -15,7 +15,7 @@ class EmbeddingMeta:
 
 
 class EmbeddingModel(ABC):
-    """嵌入模型抽象接口（架构文档 §11.1）：本地/云端两类实现，业务不感知来源。"""
+    """嵌入模型抽象接口：本地/云端两类实现，业务不感知来源。"""
 
     def __init__(self, meta: EmbeddingMeta):
         self.meta = meta
@@ -56,28 +56,22 @@ class EmbeddingModel(ABC):
                     "dim": outer.meta.dim,
                 }
 
-            @classmethod
-            def build_from_config(cls, config):
-                """Chroma 反序列化（未来版本从配置重建嵌入函数）。"""
-                return cls()
-
         return _Fn()
 
 
 class CloudEmbeddingModel(EmbeddingModel):
     """云端 API：api_key + base_url + model_id（OpenAI 兼容协议）。"""
 
-    BATCH_SIZE = 100      # doubao 单次 input 上限 10 条（实测；各家不同，保守取 10）
-    BATCH_DELAY = 0    # 批次间隔秒数：防 429 限流（测试密钥 RPM 低，实测 0.5s 仍触发）
+    BATCH_SIZE = 16      # 单次 input 上限 10 条
+    BATCH_DELAY = 0.5    # 批次间隔秒数：防 429 限流
     MAX_RETRIES = 10      # 429 重试次数（指数退避）
-    MAX_CONN_RETRIES = 4  # 连接抖动重试次数（0.5+1+2+4≈7.5s；服务器真挂了就快速失败，别空等 8 分钟）
+    MAX_CONN_RETRIES = 4  # 连接抖动重试次数
 
     def __init__(self, meta: EmbeddingMeta, api_key: str):
         super().__init__(meta)
         self._client = OpenAI(api_key=api_key, base_url=meta.base_url)
         # 自建端点（ollama / llama.cpp / vLLM）无限流，跳过批次间隔，避免大批量入库空等
         self.batch_delay = meta.batch_delay if meta.batch_delay is not None else self.BATCH_DELAY
-        # 自建端点用小批次（内存峰值低，8B 模型 + 大 n_ctx 的服务器扛不住 10 条×1000 字）
         self.batch_size = meta.batch_size or self.BATCH_SIZE
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:

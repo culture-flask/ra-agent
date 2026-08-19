@@ -65,8 +65,7 @@ class ChromaVectorStore(VectorStore):
     # Chroma 服务端单次 add 硬上限 5461 条（超出抛
     # "Batch size of N is greater than max batch size of 5461"）。
     # 大库（>5461 chunk）一次全量提交必被拒——入库/重建都走这里，
-    # 拆成小批写入，避免 7342 个 chunk 的重建整体失败。
-    MAX_ADD_BATCH = 1000
+    MAX_ADD_BATCH = 16
 
     def add(self, chunks: list[ChunkRecord],
             on_batch: Callable[[int], None] | None = None) -> None:

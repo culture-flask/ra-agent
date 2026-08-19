@@ -21,7 +21,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 class UserSession(Base):
-    """会话：LangGraph 的 thread_id 落库，便于追踪与续聊。"""
+    """登录会话登记：LangGraph 的 thread_id 落库，便于追踪与续聊。"""
     __tablename__ = "sessions"
     session_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)

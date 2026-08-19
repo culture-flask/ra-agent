@@ -23,3 +23,35 @@ def clear_stop(session_id: str) -> None:
     开始时清保证「上一轮结束后才点的停止」不会误杀本轮对话。
     """
     _stopped.discard(session_id)
+
+
+# ---------- 后台任务取消（入库 / 重建） ----------
+# 与对话停止（_stopped）独立：入库/重建是同步线程池任务，用可复用令牌。
+# key = kb_id（入库）/ new_kb_id（重建）。请求端设标记，任务端在
+# 文件/批次边界检查，命中抛 OperationCancelled 中断，收尾后 acknowledge 清除。
+class OperationCancelled(Exception):
+    """入库 / 重建被用户取消：由任务内部抛，业务层捕获后清理并回滚状态。"""
+
+    def __init__(self, key: str):
+        super().__init__(f"operation cancelled: {key}")
+        self.key = key
+
+
+_cancelled: set[str] = set()
+
+
+def request_cancel(key: str) -> None:
+    """请求取消正在进行的入库 / 重建（幂等）。"""
+    _cancelled.add(key)
+
+
+def _check_cancel(key: str) -> None:
+    """任务内部检查点：命中即抛 OperationCancelled。"""
+    if key in _cancelled:
+        raise OperationCancelled(key)
+
+
+def acknowledge_cancel(key: str) -> None:
+    """任务收尾后确认取消：清除标记，允许发起下一次操作。"""
+    _cancelled.discard(key)
+
