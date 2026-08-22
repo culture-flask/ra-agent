@@ -19,6 +19,32 @@ from app.services.kb_service import join_document_text
 # 完整原文上限：与文件上传读取的截断上限一致（防超长文献撑爆 LLM 上下文）
 FULL_ARTICLE_MAX_CHARS = 100_000
 
+# 工具观测回灌上限（P3-32）：任何工具的单次输出超过该长度即截断，
+# 只保留头尾并附省略标记。背景：read_webpage 单次可注入 3 万字符，
+# 多工具轮次叠加后下一轮 generate 的 prompt 可能突破模型真实窗口——
+# 部分供应商对超限/上游失败的降级语义是返回**空完成**而非报错，
+# 表现为前端"没有输出就结束"（详见清单 P3-31/P3-32）。截断不影响
+# 追踪层（那里另有 4000 字符存储上限），也不影响需要全文的场景：
+# 模型可带更大 max_chars 分次调用，或改走 get_local_document 读知识库。
+TOOL_OUTPUT_MAX_CHARS = 6_000
+_TOOL_TRUNCATED_NOTE = "\n…[输出过长已截断：原始 {total} 字符，保留头尾各 {keep}；" \
+    "如需更多内容请分次调用或缩小范围]"
+
+
+def cap_observation(text: str, limit: int = TOOL_OUTPUT_MAX_CHARS) -> str:
+    """工具观测统一限长：保头保尾（尾部常含结论/统计），中段以标记省略。
+
+    预算制：头 80% + 尾 20%（扣除省略标记后恰好 ≤ limit），
+    保证调用方拿到的长度可预期。"""
+    if len(text) <= limit:
+        return text
+    budget = max(limit - len(_TOOL_TRUNCATED_NOTE.format(total=len(text), keep=0)) - 8,
+                 limit // 2)
+    head = budget * 4 // 5
+    tail = budget - head
+    note = _TOOL_TRUNCATED_NOTE.format(total=len(text), keep=head)
+    return text[:head] + note + (text[-tail:] if tail else "")
+
 
 # ---------- 原生工具定义（本进程内执行，可访问 KBService） ----------
 def _native_tool_specs() -> list[dict]:
@@ -172,6 +198,7 @@ class MCPToolAdapter:
                 result = await tool.ainvoke(args)
             output = json.dumps(result, ensure_ascii=False, default=str) \
                 if not isinstance(result, str) else result
+            output = cap_observation(output)       # P3-32：回灌前统一限长
             await asyncio.to_thread(self.tracer.success, log_id, output)
             return {"output": output}
         except Exception as e:

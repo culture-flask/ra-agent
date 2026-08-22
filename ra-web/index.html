@@ -872,7 +872,71 @@ async function loadSessions() {
   if (!state.sessions.find(s => s.id === state.active)) state.active = state.sessions[0].id;
   saveSessions();
 }
-/* 拉服务端历史：比本地多（跨设备/本地 100 条截断）则替换缓存并重渲染 */
+/* 富字段合并：服务端历史只回纯文本（steps/retrievals/files 仅存本地缓存），
+   必须把本地的富字段并回去——否则一次历史补全就把执行过程面板/
+   引用溯源/附件 chips 打回纯文本（P3-30）。
+
+   两层对齐（修复上一版 role 猜测在"远程多出中间 AI 条目"时的级联错挂）：
+   ① 内容精确匹配（role|content 作键，FIFO 队列容忍重复提问）——覆盖
+     绝大多数消息，位置无关，天然免疫任何增删；
+   ② 剩余未匹配者按时间顺序做 role 兜底配对——吸收服务端剥掉附件标记、
+     轻微文本归一化等造成的键不一致；只在剩余集合内前进，不会跨轮偷位。
+   仍对不上的条目以服务端为准（纯文本展示）。 */
+function mergeRichHistory(remote, local) {
+  const rich = ["steps", "retrievals", "files", "feedback"];
+  const keyOf = m => m.role + "|" + String(m.content ?? "");
+
+  // 本地按内容键建 FIFO 队列（记录原下标，供第二层排除已消费者）
+  const queues = new Map();
+  for (let i = 0; i < local.length; i++) {           // 正序入队：FIFO 保持时间序
+    const k = keyOf(local[i]);
+    if (!queues.has(k)) queues.set(k, []);
+    queues.get(k).push({ idx: i, msg: local[i] });
+  }
+
+  const used = new Set();                             // 已被第一层消费的本地下标
+  const out = remote.map(r => {
+    const q = queues.get(keyOf(r));
+    if (!q || !q.length) return { r };
+    const { idx, msg } = q.shift();
+    used.add(idx);
+    const merged = { ...r };
+    for (const k of rich) {
+      const v = msg[k];
+      if (v !== undefined && v !== null &&
+          (!Array.isArray(v) || v.length)) merged[k] = v;
+    }
+    return merged;
+  });
+
+  // 第二层：剩余远程与剩余本地都按**旧→新**顺序做 role 兜底配对
+  // （跳过 role 不符的本地条目，不回头——保证不跨轮偷位）
+  const restLocal = [];
+  for (let i = 0; i < local.length; i++) {
+    if (!used.has(i)) restLocal.push(local[i]);
+  }
+  let p = 0;
+  for (let i = 0; i < out.length; i++) {
+    if (!out[i].r) continue;                          // 第一层已匹配
+    const want = out[i].r.role;
+    while (p < restLocal.length && restLocal[p].role !== want) p++;
+    if (p >= restLocal.length) break;                 // 剩余本地耗尽
+    const msg = restLocal[p++];
+    const merged = { ...out[i].r };
+    for (const k of rich) {
+      const v = msg[k];
+      if (v !== undefined && v !== null &&
+          (!Array.isArray(v) || v.length)) merged[k] = v;
+    }
+    if (msg.feedback) merged.feedback = msg.feedback;
+    out[i] = merged;
+  }
+  return out.map(x => (x.r ? x.r : x));               // 未匹配还原为服务端条目
+}
+
+/* 拉服务端历史：跨设备/本地 100 条截断时补全。与本地做**合并不降级**：
+   服务端给骨架（role/content），本地的富字段（steps/retrievals/files/
+   feedback）原样保留——修复"切个界面回来执行过程面板消失"的回归。 */
 async function ensureHistory(sid) {
   let remote;
   try {
@@ -882,8 +946,9 @@ async function ensureHistory(sid) {
   } catch { return; }
   let local = [];
   try { local = JSON.parse(localStorage.getItem(store.mk(sid)) || "[]"); } catch { }
-  if (remote.length > local.length) {
-    localStorage.setItem(store.mk(sid), JSON.stringify(remote));
+  const merged = mergeRichHistory(remote, local);
+  if (JSON.stringify(merged) !== JSON.stringify(local)) {
+    localStorage.setItem(store.mk(sid), JSON.stringify(merged));
     if (state.active === sid) renderMessages();
   }
 }

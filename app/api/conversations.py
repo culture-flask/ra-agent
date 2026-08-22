@@ -3,7 +3,9 @@
 此前会话 id 与消息全存浏览器 localStorage，换设备/清缓存即不可见。
 现在每次发消息后端登记 conversations 表（见 chat._register_conversation），
 列表与历史以服务端为准；消息本体仍从 checkpointer 读取（单一事实来源，
-不重复存一份）。历史恢复是纯文本（steps/引用面板等富信息仅存于原设备）。
+不重复存一份）。历史接口只回纯文本骨架（role/content——steps/引用溯源
+等富信息不入 checkpoint），前端拉取后会与本地富缓存做**尾部对齐合并不
+降级**（P3-30）：同设备上执行过程面板/引用溯源不会因历史补全而丢失。
 
 P0-1 鉴权改造：身份一律取自 Bearer token（core.deps.get_current_user），
 客户端传入的 user_id 参数废除——此前任何人改个参数就能读/删他人会话。

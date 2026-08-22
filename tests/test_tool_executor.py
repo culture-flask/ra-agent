@@ -267,4 +267,32 @@ def test_chat_stop_endpoint(auth_factory):
         assert r.json()["stopped"] is True
         assert is_stopped("t-stop-api")
         clear_stop("t-stop-api")
-        assert not is_stopped("t-stop-api")
+
+def test_cap_observation_truncates_long_output():
+    """P3-32：工具观测超长截断——保头保尾 + 省略标记；短输出原样透传。"""
+    from app.mcp.adapter import TOOL_OUTPUT_MAX_CHARS, cap_observation
+
+    short = "正常输出"
+    assert cap_observation(short) == short              # 短输出原样
+
+    big = "HEAD" + "x" * (TOOL_OUTPUT_MAX_CHARS * 2) + "TAILMARK"
+    capped = cap_observation(big)
+    assert len(capped) <= TOOL_OUTPUT_MAX_CHARS + 80    # 含标记仍在限长附近
+    assert capped.startswith("HEAD")                    # 保头
+    assert capped.endswith("TAILMARK")                  # 保尾（结论/统计常在尾部）
+    assert "已截断" in capped and str(len(big)) in capped  # 标记含原始长度
+
+
+def test_stop_marker_cleared_after_endpoint(auth_factory):
+    """端点设停 → 断言标记存在（收尾清理由下一轮 chat 开始时负责）。"""
+    from app.core.cancel import clear_stop, is_stopped
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    with TestClient(app) as c:
+        r = c.post("/api/v1/chat/stop",
+                   headers=auth_factory(),
+                   json={"session_id": "t-stop-api2"})
+        assert r.status_code == 200
+        assert is_stopped("t-stop-api2")
+        clear_stop("t-stop-api2")

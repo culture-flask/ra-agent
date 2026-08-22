@@ -101,6 +101,24 @@ class ToolCallLog(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+class LLMUsage(Base):
+    """Token 用量计量（P3-20）：generate_node 每轮真实用量 best-effort 落库。
+
+    数据供 /usage/summary 成本报表与后续按用户配额演进使用；
+    user_id 不设外键（与 ToolCallLog/Conversation 一致，避免历史数据强约束）。
+    """
+    __tablename__ = "llm_usage"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    session_id: Mapped[str] = mapped_column(String(36), index=True)
+    model: Mapped[str] = mapped_column(String(128), default="")
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Feedback(Base):
     """用户反馈：点赞/点踩一条回答（P3-19 反馈闭环）。
 

@@ -12,6 +12,7 @@ from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.feedbacks import router as feedbacks_router
+from app.api.usage import router as usage_router
 from app.api.kbs import router as kbs_router
 from app.api.traces import router as traces_router
 from app.api.llm_config import router as llm_config_router
@@ -26,7 +27,7 @@ from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter
 from app.mcp.host import MCPHost
-from app.models import Conversation, Feedback, Memory
+from app.models import Conversation, Feedback, LLMUsage, Memory
 from app.services.kb_service import KBService
 from app.services.memory_service import MemoryService
 from app.api.memories import router as memories_router
@@ -52,6 +53,8 @@ async def lifespan(app: FastAPI):
     Memory.__table__.create(engine, checkfirst=True)
     # 用户反馈（P3-19 反馈闭环）：评测集种子数据
     Feedback.__table__.create(engine, checkfirst=True)
+    # Token 用量计量（P3-20）：成本报表与配额演进数据源
+    LLMUsage.__table__.create(engine, checkfirst=True)
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
                           "tier VARCHAR(8) NOT NULL DEFAULT 'core'"))
@@ -121,6 +124,7 @@ app.include_router(kbs_router)
 app.include_router(traces_router)
 app.include_router(memories_router)
 app.include_router(feedbacks_router)
+app.include_router(usage_router)
 app.include_router(llm_config_router)
 app.include_router(settings_router)
 

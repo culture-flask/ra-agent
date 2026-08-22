@@ -117,18 +117,18 @@ def _round_count(messages: list) -> int:
 from app.core.tokens import estimate_tokens
 
 
-def _usage_of(msg) -> dict | None:
-    """从 LLM 响应消息里提取真实 token 用量。
+def _usage_from(obj) -> dict | None:
+    """从单个消息/chunk 提取真实 token 用量（不做任何累加）。
 
-    优先 LangChain 标准 usage_metadata（stream_usage=True 时流式末块携带并聚合），
-    回退 OpenAI 风格 response_metadata.token_usage；都没有返回 None（假模型/未支持）。
+    优先 LangChain 标准 usage_metadata，回退 OpenAI 风格
+    response_metadata.token_usage；都没有返回 None。
     """
-    um = getattr(msg, "usage_metadata", None)
+    um = getattr(obj, "usage_metadata", None)
     if isinstance(um, dict) and um.get("total_tokens"):
         return {"input_tokens": int(um.get("input_tokens") or 0),
                 "output_tokens": int(um.get("output_tokens") or 0),
                 "total_tokens": int(um["total_tokens"])}
-    tu = (getattr(msg, "response_metadata", None) or {}).get("token_usage")
+    tu = (getattr(obj, "response_metadata", None) or {}).get("token_usage")
     if isinstance(tu, dict):
         inp = int(tu.get("prompt_tokens") or 0)
         out = int(tu.get("completion_tokens") or 0)
@@ -136,6 +136,17 @@ def _usage_of(msg) -> dict | None:
             return {"input_tokens": inp, "output_tokens": out,
                     "total_tokens": inp + out}
     return None
+
+
+def _usage_of(msg) -> dict | None:
+    """从聚合后的完整响应提取用量。⚠️ 仅作兜底：
+
+    流式场景下部分供应商会在**每个** chunk 都携带同一份 usage，
+    LangChain 的 chunk 聚合（AIMessageChunk 相加）会把重复 usage 累加，
+    聚合值可膨胀为真实值的数十倍——实测 1M 窗口的对话统计出千万级用量
+    即此因。流式路径以 generate_node 逐 chunk 记录的"末块权威值"为准。
+    """
+    return _usage_from(msg)
 
 
 def _split_keep_and_old(messages: list, keep_rounds: int):
@@ -696,31 +707,90 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     resp = None
     stopped = False
     sid = state["session_id"]
-    async for chunk in model.astream(payload):
-        if is_stopped(sid):                        # 用户点了停止：保留已生成部分
-            stopped = True
-            break
-        resp = chunk if resp is None else resp + chunk     # 逐 token 聚合为完整消息
-        # 每个 token 实时推给事件总线（SSE 端点持续 drain → 前端打字机效果）
-        text = chunk.content
-        if isinstance(text, str):
-            if text:
-                emit("token", {"content": text})
-        elif isinstance(text, list):
-            for p in text:
-                if isinstance(p, dict) and p.get("text"):
-                    emit("token", {"content": p["text"]})
-    if resp is None:
-        resp = AIMessage(content="")
+    last_chunk_usage = None                        # 末块权威用量（防聚合虚高）
+
+    # 空响应防御（P3-31）：部分供应商偶发返回"零内容、零工具调用"的空完成，
+    # 旧逻辑视作正常结束——前端表现为没有任何输出就静默收尾。现在对这种
+    # 轮次做快速指数退避的整轮流式重试（与 llm_retry 的网络重试分层：那层管
+    # 连接/限流，这层管"连上了但什么都没说"）；重试耗尽仍为空则显式抛错，
+    # 走 SSE error 通道给用户明确提示——绝不静默结束。
+    EMPTY_RETRY_MAX = 2
+    for attempt in range(EMPTY_RETRY_MAX + 1):
+        resp = None
+        last_chunk_usage = None
+        async for chunk in model.astream(payload):
+            if is_stopped(sid):                    # 用户点了停止：保留已生成部分
+                stopped = True
+                break
+            resp = chunk if resp is None else resp + chunk   # 逐 token 聚合为完整消息
+            # 用量取"最后一个携带 usage 的 chunk"：供应商要么只在末块带、要么每
+            # 块带同一份累计快照，两种语义下末块都等于真实总量；绝不能信聚合后
+            # 的 resp——LangChain 会把重复出现的 usage 累加成数十倍虚高
+            cu = _usage_from(chunk)
+            if cu is not None:
+                last_chunk_usage = cu
+            # 每个 token 实时推给事件总线（SSE 端点持续 drain → 前端打字机效果）
+            text = chunk.content
+            if isinstance(text, str):
+                if text:
+                    emit("token", {"content": text})
+            elif isinstance(text, list):
+                for part in text:
+                    if isinstance(part, dict) and part.get("text"):
+                        emit("token", {"content": part["text"]})
+        if resp is None:
+            resp = AIMessage(content="")
+        if stopped:
+            break                                  # 停止：跳过空响应判定，直接收尾
+        has_tool_calls = bool(getattr(resp, "tool_calls", None))
+        if str(resp.content or "").strip() or has_tool_calls:
+            break                                  # 有内容或有工具调用：有效轮次
+        if attempt < EMPTY_RETRY_MAX:              # 空响应：退避后整轮重来
+            wait = 0.5 * (2 ** attempt)
+            logger.warning("模型返回空响应（第 %d 次），%.1fs 后整轮重试 model=%s",
+                           attempt + 1, wait,
+                           getattr(model, "model_name", "chat"))
+            await asyncio.sleep(wait)
+
     if stopped:
         # 中断收尾：清标记（不影响下一轮）、剥离半截 tool_calls（防误进工具循环），
         # 部分答复正常写入 checkpoint（前端已累积的打字机文本与历史一致）
         clear_stop(sid)
         resp = AIMessage(content=str(resp.content or ""))
         emit("stopped", {"chars": len(str(resp.content or ""))})
+
     answer = str(resp.content) if resp.content else ""
     if ctx.tracer is not None:
         await asyncio.to_thread(ctx.tracer.success, log_id, answer[:2000])
-    # 真实 token 用量写入 state（stream_usage=True 时流式末块携带并聚合到 resp）
+
+    # 真实用量：末块权威值优先，聚合值仅兜底（见 _usage_of 的警示）
+    usage = last_chunk_usage or _usage_of(resp)
+
+    # P3-20 计量落库：每轮真实用量入 llm_usage 表，供 /usage/summary 报表
+    # 与后续配额演进使用。best-effort：失败只记日志，绝不影响主对话。
+    if usage and usage.get("total_tokens"):
+        def _persist_usage() -> None:
+            from app.core.db import SessionLocal
+            from app.models import LLMUsage
+            with SessionLocal() as db:
+                db.add(LLMUsage(
+                    user_id=state["user_id"], session_id=sid,
+                    model=str(getattr(model, "model_name", "chat")),
+                    input_tokens=int(usage.get("input_tokens") or 0),
+                    output_tokens=int(usage.get("output_tokens") or 0),
+                    total_tokens=int(usage.get("total_tokens") or 0)))
+                db.commit()
+        try:
+            await asyncio.to_thread(_persist_usage)
+        except Exception as e:
+            logger.warning("usage persist failed (不影响对话): %s", e)
+
+    # 重试耗尽仍为空（且非用户主动停止）：显式报错走 SSE error 通道，
+    # 让前端给出明确提示——绝不静默结束让用户面对空白回复。
+    if not stopped and not answer.strip() \
+            and not getattr(resp, "tool_calls", None):
+        raise RuntimeError(
+            "模型连续返回空响应（已自动重试），请稍后重试或更换模型/提供商")
+
     return {"messages": [resp], "answer": answer,
-            "last_usage": _usage_of(resp), "stopped": stopped}
+            "last_usage": usage, "stopped": stopped}
