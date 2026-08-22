@@ -94,9 +94,9 @@ class ChromaVectorStore(VectorStore):
         if total == 0:
             return 0
         moved = 0
-        for off in range(0, total, self.MAX_ADD_BATCH):
+        for off in range(0, total, 1000):
             res = src_store._col.get(
-                limit=self.MAX_ADD_BATCH, offset=off,
+                limit=1000, offset=off,
                 include=["documents", "metadatas", "embeddings"])
             if not res.get("ids"):
                 break

@@ -25,6 +25,15 @@ def test_tokenize_mixed():
     assert "量子" in tokens and "比特" in tokens and "qwen3" in tokens
 
 
+def test_tokenize_keeps_hyphen_underscore():
+    """英文词块保留 - 和 _：复合词不拆（_SEG_RE 与 _WORD_RE 同源，改一处即生效）。"""
+    assert tokenize("CPDI-ND") == ["cpdi-nd"]
+    assert tokenize("related-key") == ["related-key"]
+    assert tokenize("speck32_64") == ["speck32_64"]
+    # 斜杠不是词字符：仍拆开
+    assert tokenize("Speck32/64") == ["speck32", "64"]
+
+
 # ---------- 索引 ----------
 def _chunks():
     return [

@@ -18,7 +18,7 @@ class MemoryDeleteRequest(BaseModel):
 @router.get("/memories")
 async def list_memories(request: Request, user_id: str):
     """查看用户长期记忆（含层级/主题/最近使用时间）。"""
-    return await run_in_threadpool(request.app.state.memory_service.list, user_id)
+    return await run_in_threadpool(request.app.state.memory_service.list_memory, user_id)
 
 
 @router.patch("/memories/{key}/tier")

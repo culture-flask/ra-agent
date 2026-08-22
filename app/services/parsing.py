@@ -54,12 +54,6 @@ PAGE_PARSERS = {
     ".docx": parse_docx_pages,
 }
 
-# 兼容层：全文解析 = 逐页解析的结果拼接
-PARSERS = {
-    ext: (lambda content, fn=fn: "\n".join(t for _, t in fn(content)))
-    for ext, fn in PAGE_PARSERS.items()
-}
-
 
 def parse_file_pages(filename: str, content: bytes) -> list[tuple[int | None, str]]:
     """按扩展名解析文件，返回 [(页码, 文本), ...]。

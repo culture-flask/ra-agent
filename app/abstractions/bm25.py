@@ -13,19 +13,20 @@ from rank_bm25 import BM25Okapi
 
 # 连续 CJK 块（含扩展区）
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+")
-# 英文/数字词块
-_WORD_RE = re.compile(r"[a-zA-Z0-9]+")
+# 英文/数字词块（保留 - 和 _：cpdi-nd / related-key / speck32_64 等复合词不拆）
+_WORD_RE = re.compile(r"[a-zA-Z0-9_\-]+")
+# 分段正则由上面两者拼成——单一事实来源，避免内联正则与 _WORD_RE 脱节改了不生效
+_SEG_RE = re.compile(f"{_CJK_RE.pattern}|{_WORD_RE.pattern}")
 
 
 def tokenize(text: str) -> list[str]:
-    """混合分词：连续中文按 2-gram，英文/数字按词；统一小写。
+    """混合分词：连续中文按 2-gram，英文/数字按词（保留 - 和 _）；统一小写。
 
     例：tokenize("量子比特叠加态 qwen3") -> ["量子","子比","比特","特叠","叠加",
-    "加态","qwen3"]
+    "加态","qwen3"]；tokenize("CPDI-ND") -> ["cpdi-nd"]
     """
     tokens: list[str] = []
-    for seg in re.findall(r"[\u4e00-\u9fff\u3400-\u4dbf]+|[a-zA-Z0-9]+",
-                          text.lower()):
+    for seg in _SEG_RE.findall(text.lower()):
         if not seg:
             continue
         if _CJK_RE.fullmatch(seg):

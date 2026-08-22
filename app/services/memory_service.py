@@ -7,9 +7,6 @@ memories 表（user_id/key/value/tier/topic/last_used_at/updated_at）。
   （编排见 nodes._maintain_memories，本模块只提供同步原语，不掺 LLM 调用）
 """
 
-# 注解惰性求值：类体内 def list() 方法会遮蔽内建 list，后续 list[str] 注解会炸
-from __future__ import annotations
-
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -59,7 +56,7 @@ class MemoryService:
             stmt = stmt.order_by(Memory.key)
             return {m.key: m.value for m in db.scalars(stmt)}
 
-    def list(self, user_id: str) -> list[dict]:
+    def list_memory(self, user_id: str) -> list[dict]:
         """供 API 展示：含层级/主题/最近使用时间。"""
         with SessionLocal() as db:
             stmt = (select(Memory).where(Memory.user_id == user_id)
