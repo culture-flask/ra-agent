@@ -39,6 +39,13 @@ input,select,textarea{font-family:inherit;font-size:14px;color:var(--ink)}
 .badge.orange{background:#fdf1e0;color:var(--warn)}
 .badge.red{background:#fdecec;color:var(--danger)}
 .badge.gray{background:#eef1f6;color:var(--muted)}
+/* 长期记忆层级徽章（P3-33）：核心=实心强调、短期=虚线描边弱化。
+   不复用 .blue/.gray——浅色主题会把 --chip/--accent 覆写成绿色系，
+   两枚徽章会变成几乎相同的浅绿芯片。颜色+形状双通道区分。 */
+.badge.core{background:var(--accent);color:#fff}
+.badge.short{background:transparent;color:var(--muted);border:1.5px dashed var(--line)}
+html[data-theme="light"] .badge.core{background:#1d6638;color:#fff}
+html[data-theme="light"] .badge.short{color:#435d4b;border-color:#8ea995}
 /* "我禁检索"：红底白字 + 外圈 + 呼吸动画，与 公共/就绪 等状态徽章明显区分 */
 .badge.disable{background:var(--danger);color:#fff;border:1.5px solid #fff;box-shadow:0 0 0 1.5px var(--danger);animation:disable-pulse 1.6s ease-in-out infinite}
 @keyframes disable-pulse{0%,100%{box-shadow:0 0 0 1.5px var(--danger)}50%{box-shadow:0 0 0 4px rgba(217,83,79,.35)}}
@@ -135,6 +142,25 @@ main>header .sub{font-size:12.5px;color:var(--muted);margin-top:2px}
 .ctx-meter .ctx-bar i{display:block;height:100%;width:0;background:var(--accent2);transition:width .3s}
 .ctx-meter.mid .ctx-bar i{background:var(--warn)}
 .ctx-meter.warn .ctx-bar i{background:var(--danger)}
+/* 组合计量条（输入框下方，P3-33）：缓存命中% | 输入 | 输出 | 上下文占用%（hover 明细） */
+.usage-bar{max-width:820px;margin:2px auto 0;padding:0 28px 4px;display:flex;align-items:center;
+  gap:12px;font-size:11.5px;color:var(--muted);flex-wrap:wrap}
+.usage-bar b{color:var(--ink);font-weight:600}
+.usage-bar .u-sep{opacity:.45}
+.usage-bar .tip{position:relative;cursor:help}
+.usage-bar .tip .tip-body{position:absolute;bottom:calc(100% + 7px);left:50%;transform:translateX(-50%);
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;
+  white-space:nowrap;box-shadow:0 6px 18px rgba(0,0,0,.14);display:none;z-index:40;color:var(--ink)}
+.usage-bar .tip:hover .tip-body{display:block}
+.usage-bar .u-ctx.mid b{color:var(--warn)}
+.usage-bar .u-ctx.warn b{color:var(--danger)}
+html[data-theme="light"] .usage-bar{color:#435d4b}
+html[data-theme="light"] .usage-bar b{color:#17251d}
+html[data-theme="light"] .usage-bar .tip .tip-body{background:#ffffff;border-color:#8ea995;color:#17251d}
+.sess-tokens{flex:none;font-size:11px;color:var(--muted);white-space:nowrap}
+.sess-tokens b{color:var(--ink);font-weight:600}
+html[data-theme="light"] .sess-tokens{color:#435d4b}
+html[data-theme="light"] .sess-tokens b{color:#17251d}
 /* 检索模式切换：向量 / 混合(BM25) */
 .retrieval-switch{display:inline-flex;align-items:center;gap:4px;background:#eef1f6;
   border-radius:14px;padding:2px;flex:none}
@@ -504,7 +530,6 @@ html[data-theme="light"] .warn-banner{background:#fff4d6!important;border-color:
     <section class="view" id="view-chat">
       <div id="messages"></div>
       <div id="chat-toolbar">
-        <div id="ctx-meter" class="ctx-meter hidden"></div>
         <div id="retrieval-switch" class="retrieval-switch"></div>
         <label class="rk-input" title="每个知识库检索几条（1~20）">每库 <input id="rk-per" type="number" min="1" max="20"></label>
         <label class="rk-input" title="所有库合并后总共取几条（1~50）">共 <input id="rk-total" type="number" min="1" max="50"></label>
@@ -521,6 +546,7 @@ html[data-theme="light"] .warn-banner{background:#fff4d6!important;border-color:
           <button class="btn danger" id="stop-btn" title="终止当前生成，保留已生成内容" style="display:none">停止</button>
         </div>
       </div>
+      <div id="usage-bar" class="usage-bar hidden"></div>
     </section>
 
     <!-- 知识库 -->
@@ -1103,29 +1129,66 @@ function renderParentGroups() {
   };
 }
 
-/* 上下文占用条：窗口上限 + 当前会话已用 tokens 与比例（图跑完后由 context 事件更新） */
-function renderCtxMeter(ev) {
-  const el = $("#ctx-meter");
-  if (!el) return;
-  if (!ev || !ev.window) { el.classList.add("hidden"); return; }
-  const pct = Math.min(100, Math.max(0, Math.round(ev.used_tokens / ev.window * 100)));
-  el.className = "ctx-meter " + (pct >= 80 ? "warn" : pct >= 60 ? "mid" : "ok");
-  el.innerHTML = `<span>上下文 <b>${ev.window.toLocaleString()}</b> tokens · 已用 <b>${ev.used_tokens.toLocaleString()}</b>（${pct}%）</span><span class="ctx-bar"><i style="width:${pct}%"></i></span>`;
+/* 组合计量条（输入框下方，P3-33）：
+   缓存命中% | 输入 tokens | 输出 tokens | 上下文占用%（hover 显示明细）。
+   会话累计数据缓存于 state.sessionUsage[sid]，上下文占用缓存于
+   state.ctxUsage[sid]——切视图回来先出缓存再静默刷新，不闪不丢。 */
+function renderUsageBar(u, ctxEv, sid) {
+  const el = $("#usage-bar");
+  if (!el || !state.user || state.active !== sid) return;
+  const hasCtx = ctxEv && ctxEv.window;
+  const hasSession = u && u.calls;
+  if (!hasCtx && !hasSession) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+
+  const parts = [];
+  if (hasSession) {
+    const cHit = u.input_tokens > 0
+      ? Math.round(u.cached_tokens / u.input_tokens * 100) : 0;
+    parts.push("缓存命中 <b>" + cHit + "%</b>");
+    parts.push("输入 <b>" + u.input_tokens.toLocaleString() + "</b> tokens");
+    parts.push("输出 <b>" + u.output_tokens.toLocaleString() + "</b> tokens");
+  }
+  if (hasCtx) {
+    const pct = Math.min(100, Math.max(0,
+      Math.round(ctxEv.used_tokens / ctxEv.window * 100)));
+    const cls = pct >= 80 ? "warn" : pct >= 60 ? "mid" : "";
+    parts.push(
+      '<span class="tip u-ctx ' + cls + '">上下文占用 <b>' + pct + "%</b>" +
+      '<span class="tip-body">已用：' + ctxEv.used_tokens.toLocaleString() +
+      " tokens / " + ctxEv.window.toLocaleString() + " tokens</span></span>");
+  }
+  el.innerHTML = parts.map(p => "<span>" + p + "</span>")
+    .join('<span class="u-sep">·</span>');
 }
 
-/* 打开/切换会话时主动拉取上下文占用（对话中由 SSE context 事件实时刷新） */
+/* 打开/切换会话时主动拉取上下文占用与会话累计（对话中由 SSE context 事件实时刷新） */
 let ctxSeq = 0;   // 占用请求序号：旧响应不得覆盖新值（GET 快照的是请求时的 checkpoint）
 
 function loadCtxMeter() {
-  const el = $("#ctx-meter");
-  if (!el || !state.active || !state.user) return;
+  if (!state.active || !state.user) return;
   const sid = state.active;
   const mySeq = ++ctxSeq;
-  el.classList.add("hidden");
   api("/api/v1/chat/context" +
-      "&session_id=" + encodeURIComponent(sid))
-    .then(ev => { if (ctxSeq === mySeq && state.active === sid) renderCtxMeter(ev); })
-    .catch(() => { if (ctxSeq === mySeq && state.active === sid) el.classList.add("hidden"); });
+      "?session_id=" + encodeURIComponent(sid))
+    .then(ev => {
+      if (ctxSeq === mySeq && state.active === sid) {
+        state.ctxUsage = state.ctxUsage || {};
+        state.ctxUsage[sid] = ev;                 // 缓存：切视图先出旧值
+        renderUsageBar((state.sessionUsage || {})[sid], ev, sid);
+      }
+    })
+    .catch(() => { /* 拉取失败暂不显示；不影响对话 */ });
+  loadSessionUsage(sid);                // 本会话累计 tokens（输入/缓存/输出）
+}
+
+async function loadSessionUsage(sid) {
+  try {
+    const u = await api("/api/v1/usage/session/" + encodeURIComponent(sid));
+    state.sessionUsage = state.sessionUsage || {};
+    state.sessionUsage[sid] = u;          // 缓存：切视图先出旧值
+    renderUsageBar(u, (state.ctxUsage || {})[sid], sid);
+  } catch { /* 计量失败不影响对话 */ }
 }
 
 function renderMessages() {
@@ -1388,6 +1451,7 @@ async function sendMessage(text, opts = {}) {
     sb.style.display = "none"; sb.disabled = false; sb.textContent = "停止";
     patchLastMsg(asst);
     saveMsgs(msgs);
+    loadSessionUsage(state.active);      // P3-20：本轮用量已落库，刷新会话累计
     $("#chat-input").focus();
   }
 }
@@ -1490,7 +1554,9 @@ function handleChatEvent(ev, asst, stepByTrace) {
       break;
     case "context":
       ctxSeq++;                  // SSE 是图跑完后的最新值：使在途 GET 旧响应失效
-      renderCtxMeter(ev);
+      state.ctxUsage = state.ctxUsage || {};
+      state.ctxUsage[state.active] = ev;
+      renderUsageBar((state.sessionUsage || {})[state.active], ev, state.active);
       break;
     case "compact":
       asst.steps.push({ kind: "compact", status: "ok",
@@ -2473,7 +2539,7 @@ async function loadMemories() {
       if (v && typeof v === "object" && "v" in v) v = v.v;
       else if (typeof v === "object") v = JSON.stringify(v, null, 1);
       const badge = m.tier === "core"
-        ? '<span class="badge blue">核心</span>' : '<span class="badge gray">短期</span>';
+        ? '<span class="badge core">核心</span>' : '<span class="badge short">短期</span>';
       const tierBtn = m.tier === "core"
         ? `<button class="btn sm" data-demote="${esc(m.key)}" title="不注入对话，14 天未更新自动清除">降为短期</button>`
         : `<button class="btn sm" data-promote="${esc(m.key)}" title="常驻并注入每轮对话">置顶核心</button>`;

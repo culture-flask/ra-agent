@@ -24,3 +24,8 @@ class AgentState(TypedDict, total=False):
     parent_groups: int | None               # 聚合返回的父块名额（None=全局默认；0=关闭聚合）
     last_usage: dict | None                 # 上一次 generate 的真实 token 用量（来自 LLM 响应）
     stopped: bool                           # 本轮生成被用户手动中断（部分答复仍入 checkpoint）
+    # 跨轮检索状态（第一优先，P3-34）：记录上一轮是否检索过、搜了哪些库、命中几条。
+    # 由 checkpointer 持久保留（_initial_state 不重置它），供 supervisor 判断
+    # "延续上轮话题且上轮已基于检索回答"时跳过重复检索。只作路由决策输入，
+    # 绝不注入 system/历史——那会打穿前缀缓存。
+    last_retrieval_state: dict | None

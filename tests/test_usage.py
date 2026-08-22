@@ -151,6 +151,44 @@ class EmptyLLMService:
         return self._impl
 
 
+def test_session_total_scoped_with_cache(auth_factory):
+    """GET /usage/session/{sid}：按会话×本人聚合，含缓存命中；他人同 sid 不并入。"""
+    from app.models.base import utcnow
+
+    def add(user, sid, total, cached):
+        with SessionLocal() as db:
+            db.add(LLMUsage(user_id=user, session_id=sid, model="m",
+                            input_tokens=total, output_tokens=0,
+                            total_tokens=total, cached_tokens=cached,
+                            created_at=utcnow()))
+            db.commit()
+
+    add("sess-u1", "sid-1", 1000, 600)
+    add("sess-u1", "sid-1", 500, 0)           # 同会话第二轮
+    add("sess-u2", "sid-1", 9999, 9999)       # 他人同 sid：不并入
+
+    with TestClient(app) as c:
+        h = auth_factory("sess-u1")
+        r = c.get("/api/v1/usage/session/sid-1", headers=h)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["input_tokens"] == 1500
+        assert body["output_tokens"] == 0
+        assert body["total_tokens"] == 1500
+        assert body["cached_tokens"] == 600
+        assert body["calls"] == 2             # 他人记录不算入轮数
+
+    # 他人视角查询同一 sid → 只看到自己的值（会话 id 可猜测，计量不跨用户）
+    with TestClient(app) as c:
+        r = c.get("/api/v1/usage/session/sid-1",
+                  headers=auth_factory("sess-u2"))
+        body = r.json()
+        assert body["calls"] == 1
+        assert body["total_tokens"] == 9999    # 不含 u1 的 1500
+    with TestClient(app) as c:
+        assert c.get("/api/v1/usage/session/sid-1").status_code == 401
+
+
 def test_empty_response_retried_and_recovered():
     """P3-31：首轮空响应 → 快速退避整轮重试 → 第二轮正常出内容。"""
     svc = EmptyLLMService()

@@ -122,19 +122,27 @@ def _usage_from(obj) -> dict | None:
 
     优先 LangChain 标准 usage_metadata，回退 OpenAI 风格
     response_metadata.token_usage；都没有返回 None。
+    额外提取缓存命中（cached_tokens ⊆ input）：覆盖三家形态——
+    OpenAI 的 prompt_tokens_details.cached_tokens、DeepSeek 的
+    prompt_cache_hit_tokens、LangChain 归一的 input_token_details.cache_read。
     """
     um = getattr(obj, "usage_metadata", None)
     if isinstance(um, dict) and um.get("total_tokens"):
+        details = um.get("input_token_details") or {}
+        cached = int(details.get("cache_read") or 0)
         return {"input_tokens": int(um.get("input_tokens") or 0),
                 "output_tokens": int(um.get("output_tokens") or 0),
-                "total_tokens": int(um["total_tokens"])}
+                "total_tokens": int(um["total_tokens"]),
+                "cached_tokens": cached}
     tu = (getattr(obj, "response_metadata", None) or {}).get("token_usage")
     if isinstance(tu, dict):
         inp = int(tu.get("prompt_tokens") or 0)
         out = int(tu.get("completion_tokens") or 0)
         if inp + out > 0:
+            cached = int(tu.get("prompt_cache_hit_tokens") or 0) \
+                or int((tu.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
             return {"input_tokens": inp, "output_tokens": out,
-                    "total_tokens": inp + out}
+                    "total_tokens": inp + out, "cached_tokens": cached}
     return None
 
 
@@ -245,6 +253,8 @@ ROUTE_PROMPT = """你是问答路由，负责判断用户提问是否需要查�
 - 问题涉及知识库里的具体内容（术语、资料、论文、实验记录、项目背景等），
   或用户明确要求"查/搜/总结知识库" → 需要检索，并选出最相关的库
 - 拿不准时倾向于需要检索，宁可多选一个相关的库也不漏掉
+- 【延续话题，免重复检索】若下方给出了 [上一轮检索状态]，且当前提问只是对
+  上一轮已回答话题的延续/追问/总结（没有引入新的知识需求），则不需要检索。
 
 只输出 JSON，不要任何其他文字：
 {{"needs_retrieval": true或false, "kbs": [{{"name": "库名", "scope": "public或private"}}]}}
@@ -477,7 +487,8 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
                                   state["user_id"])
     if not kbs:
         emit("supervisor", {"needs_retrieval": False, "kb_count": 0, "selected": []})
-        return {"needs_retrieval": False, "selected_kb_ids": []}
+        return {"needs_retrieval": False, "selected_kb_ids": [],
+                "last_retrieval_state": {"kb_ids": [], "kb_names": [], "hit_count": 0}}
 
     catalog = [{"name": kb.name, "scope": kb.scope,
                 "description": kb.description or ""} for kb in kbs]
@@ -493,7 +504,13 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
         summary = str(state.get("conversation_summary") or "").strip()
         if summary:
             prompt += "\n\n[历史对话总结]\n" + summary[:500]
-        resp = await model.ainvoke([SystemMessage(content=prompt)] + state["messages"][-4:])
+        # 第一优先（P3-34）：把上一轮的检索结果状态喂给路由——延续话题且上轮
+        # 已命中可免重复检索。只拼进路由 prompt，绝不进 system/历史（保前缀缓存）。
+        lrs = state.get("last_retrieval_state") or {}
+        if lrs.get("hit_count"):
+            prompt += ("\n\n[上一轮检索状态] 上一轮检索了知识库「%s」，共命中 %d 条。"
+                       % ("、".join(lrs.get("kb_names") or ["?"]), lrs["hit_count"]))
+        resp = await model.ainvoke([SystemMessage(content=prompt)] + state["messages"][-10:])
         route = _parse_route(str(resp.content or ""))
         if not route:                         # LLM 没按 JSON 输出 → 无法判断意图
             raise ValueError("unparseable route output")
@@ -511,7 +528,11 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
         "selected": [{"name": kb.name, "scope": kb.scope} for kb in selected],
     })
     return {"needs_retrieval": needs,
-            "selected_kb_ids": [kb.kb_id for kb in selected]}
+            "selected_kb_ids": [kb.kb_id for kb in selected],
+            # 仅当本轮不检索时在此清空"上一轮检索状态"——检索轮由 retrieve_node
+            # 覆写为真实值，避免"上一轮检索过、本轮没检索但仍沿用旧状态"的误判。
+            "last_retrieval_state": (None if needs
+                                     else {"kb_ids": [], "kb_names": [], "hit_count": 0})}
 
 
 def route_supervisor(state: AgentState) -> str:
@@ -679,7 +700,14 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
          "pages": h.get("pages"), "hit_chunks": h.get("hit_chunks"),
          "text": str(h.get("text", ""))[:300]}
         for h in top]})
-    return {"retrievals": top}
+    return {"retrievals": top,
+            # 第一优先（P3-34）：落一份跨轮检索状态给下一轮的 supervisor 用。
+            # hit_count>0 表示"上一轮检索确有命中、回答大概率基于证据"——
+            # 供"延续话题免重复检索"的规则判断。kb_names 只用于提示文案。
+            "last_retrieval_state": {
+                "kb_ids": [kb.kb_id for kb in targets],
+                "kb_names": [kb.name for kb in targets],
+                "hit_count": len(top)}}
 
 
 async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
@@ -778,7 +806,8 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
                     model=str(getattr(model, "model_name", "chat")),
                     input_tokens=int(usage.get("input_tokens") or 0),
                     output_tokens=int(usage.get("output_tokens") or 0),
-                    total_tokens=int(usage.get("total_tokens") or 0)))
+                    total_tokens=int(usage.get("total_tokens") or 0),
+                    cached_tokens=int(usage.get("cached_tokens") or 0)))
                 db.commit()
         try:
             await asyncio.to_thread(_persist_usage)

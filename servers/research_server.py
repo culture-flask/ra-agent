@@ -4,7 +4,7 @@
 FastMCP 装饰器声明工具 + 类型注解 → 自动生成 JSON Schema。
 Agent 启动时 tools/list 即发现；新增工具 = 加一个 @mcp.tool() 函数，业务零改动。
 
-学术检索三件套（全部免费、零密钥可用）：
+学术检索：
 - arxiv_search   预印本（物理/数学/计算机/密码学），最新研究
 - openalex_search 跨学科全库（2.5 亿+ 篇，含被引数），最稳定
 - s2_search      Semantic Scholar（含被引数；免费共享额度易 429，
@@ -256,43 +256,43 @@ def openalex_search(query: str, top_k: int = 5) -> list[dict]:
     return out
 
 
-@mcp.tool()
-def s2_search(query: str, top_k: int = 5) -> list[dict]:
-    """Semantic Scholar 学术检索（1 亿+ 篇，含被引次数，CS 领域覆盖尤佳）。
+# @mcp.tool()
+# def s2_search(query: str, top_k: int = 5) -> list[dict]:
+#     """Semantic Scholar 学术检索（1 亿+ 篇，含被引次数，CS 领域覆盖尤佳）。
 
-    免费共享额度有限，限流（429）时请改用 openalex_search。
-    可在 .env 配置 S2_API_KEY 获得专属额度（可选）。
-    返回标题/作者/年份/摘要/被引次数/链接。
-    """
-    q = query.strip()
-    if not q:
-        raise ValueError("query 不能为空")
-    k = _clamp_k(top_k)
-    headers = {}
-    key = os.environ.get("S2_API_KEY", "").strip()
-    if key:
-        headers["x-api-key"] = key
-    r = httpx.get(S2_API, params={
-        "query": q, "limit": k,
-        "fields": "title,authors,year,abstract,citationCount,url,externalIds",
-    }, headers=headers, timeout=_TIMEOUT)
-    if r.status_code == 429:
-        # 结构化错误回灌 LLM（adapter 捕获转 {"error": ...}），引导它换工具
-        raise RuntimeError("Semantic Scholar 免费额度限流（429），请改用 openalex_search")
-    r.raise_for_status()
-    out = []
-    for p in r.json().get("data", [])[:k]:
-        out.append({
-            "title": p.get("title") or "",
-            "authors": [a.get("name") or "" for a in (p.get("authors") or [])][:8],
-            "year": p.get("year"),
-            "abstract": (p.get("abstract") or "")[:300],
-            "cited_by_count": p.get("citationCount") or 0,
-            "url": p.get("url")
-                or (p.get("externalIds") or {}).get("DOI") or "",
-            "source": "semantic_scholar",
-        })
-    return out
+#     免费共享额度有限，限流（429）时请改用 openalex_search。
+#     可在 .env 配置 S2_API_KEY 获得专属额度（可选）。
+#     返回标题/作者/年份/摘要/被引次数/链接。
+#     """
+#     q = query.strip()
+#     if not q:
+#         raise ValueError("query 不能为空")
+#     k = _clamp_k(top_k)
+#     headers = {}
+#     key = os.environ.get("S2_API_KEY", "").strip()
+#     if key:
+#         headers["x-api-key"] = key
+#     r = httpx.get(S2_API, params={
+#         "query": q, "limit": k,
+#         "fields": "title,authors,year,abstract,citationCount,url,externalIds",
+#     }, headers=headers, timeout=_TIMEOUT)
+#     if r.status_code == 429:
+#         # 结构化错误回灌 LLM（adapter 捕获转 {"error": ...}），引导它换工具
+#         raise RuntimeError("Semantic Scholar 免费额度限流（429），请改用 openalex_search")
+#     r.raise_for_status()
+#     out = []
+#     for p in r.json().get("data", [])[:k]:
+#         out.append({
+#             "title": p.get("title") or "",
+#             "authors": [a.get("name") or "" for a in (p.get("authors") or [])][:8],
+#             "year": p.get("year"),
+#             "abstract": (p.get("abstract") or "")[:300],
+#             "cited_by_count": p.get("citationCount") or 0,
+#             "url": p.get("url")
+#                 or (p.get("externalIds") or {}).get("DOI") or "",
+#             "source": "semantic_scholar",
+#         })
+#     return out
 
 
 @mcp.tool()

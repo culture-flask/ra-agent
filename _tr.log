@@ -1,0 +1,14 @@
+用户: trace_tmp_1787418093
+会话: trace-7db6f3a6
+[+0.019s] memory_load    
+[+0.224s] supervisor     {"needs_retrieval": true, "kb_count": 1, "selected": [{"name": "\u5bc6\u7801\u5b66-\u795e\u7ecf\u533a\u5206\u5668", "sco
+[+0.401s] retrieve       
+[+0.452s] retrievals     results=10 mode=hybrid
+[+0.464s] trace_start    
+[+0.644s] error          
+[+0.644s] done           
+
+=== 总计 0.6s（7 个事件）===
+
+=== 服务端调用耗时（tool_call_log）===
+17:01:34 llm      deepseek-v4-flash    dur=None     out=0

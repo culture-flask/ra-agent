@@ -70,6 +70,9 @@ async def lifespan(app: FastAPI):
         # 检索开关细化到用户：旧表幂等补列（禁用列表，用户间互不影响）
         conn.execute(text("ALTER TABLE kbs ADD COLUMN IF NOT EXISTS "
                           "retrieval_disabled_users JSON NOT NULL DEFAULT '[]'"))
+        # 用量计量表补列（P3-20）：存量开发库补 cached_tokens
+        conn.execute(text("ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS "
+                          "cached_tokens INTEGER NOT NULL DEFAULT 0"))
 
         # ---- P1-6 孤儿状态自愈 ----
         # 入库/重建/复制是 BackgroundTasks，随进程消亡且进度只存内存字典；
