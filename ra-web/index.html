@@ -2187,7 +2187,7 @@ async function loadLLMConfigs() {
         <button class="btn sm danger" data-delllm="${c.id}">删除</button></td></tr>`).join("") +
     "</table>" +
     '<div class="hint" style="font-size:12px;color:var(--muted);margin-top:8px">' +
-    "「切换模型」在同一提供商下换模型（复用已保存的端点与密钥，无需重新填写），并可同步设置上下文长度；「设为默认」在已保存的配置间切换；点「上下文」列可显式设置该模型的上下文窗口（自动 = 探测模型元数据，兜底 256,000）。均下一轮提问即生效</div>";
+    "「切换模型」在同一提供商下换模型（复用已保存的端点与密钥，无需重新填写），弹窗内可随时点「🔄 获取最新模型」拉取提供商的最新列表，/models 不可用时也可手动输入模型 ID；并可同步设置上下文长度；「设为默认」在已保存的配置间切换；点「上下文」列可显式设置该模型的上下文窗口（自动 = 探测模型元数据，兜底 256,000）。均下一轮提问即生效</div>";
   $$("#llm-config-list [data-delllm]").forEach(el => el.onclick = () => deleteLLMConfig(el.dataset.delllm));
   $$("#llm-config-list [data-usedefault]").forEach(el => el.onclick = () => setDefaultLLMConfig(el.dataset.usedefault));
   $$("#llm-config-list [data-switchllm]").forEach(el => el.onclick = () => switchLLMModel(el.dataset.switchllm));
@@ -2226,21 +2226,31 @@ async function editCtxWindow(id) {
   };
 }
 
+/* 切换模型：复用已保存端点与密钥（api_key 由后端解密调用 /models，不出服务端）。
+   提供商的模型列表会变——打开即拉取一次，弹窗内可随时「获取最新模型」刷新；
+   /models 不可用（部分厂商不实现/网络抖动）时降级为手动输入模型 ID，
+   切换能力永不锁死。 */
 async function switchLLMModel(id) {
-  let cfg, models;
+  let cfg;
   try {
     const rows = await api("/api/v1/llm/configs");
     cfg = rows.find(r => r.id === id);
     if (!cfg) throw new Error("配置不存在");
-    models = await api(`/api/v1/llm/configs/${id}/models`);
   } catch (e) { toast(e.message, "err"); return; }
-  if (!models.length) { toast("该提供商未返回模型列表", "err"); return; }
+
   openModal(`<button class="close-x" onclick="closeModal()">✕</button>
     <h2>切换模型</h2>
     <div class="msub">${esc(cfg.provider)} · <code>${esc(cfg.base_url)}</code>${cfg.is_default ? ' · <span class="badge green">使用中</span>' : ""}</div>
     <div class="hint" style="font-size:12px;color:var(--muted);margin-bottom:10px">当前模型 <code>${esc(cfg.model_id)}</code>，选择下面的模型完成切换（端点与密钥沿用已保存配置），并可同步设置上下文长度</div>
-    <div class="model-chips" id="switch-model-chips">
-      ${models.map(m => `<span class="model-chip ${m.id === cfg.model_id ? "sel" : ""}" data-m="${esc(m.id)}" data-cw="${m.context_window || ""}" title="${m.context_window ? "上下文窗口 " + m.context_window + " tokens" : ""}">${esc(m.id)}${m.context_window ? `<span class="muted" style="font-size:11px"> · ${m.context_window}</span>` : ""}</span>`).join("")}
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+      <button class="btn sm" id="switch-model-refresh">🔄 获取最新模型</button>
+      <span class="muted" id="switch-model-status" style="font-size:12px">加载中…</span>
+    </div>
+    <div class="model-chips" id="switch-model-chips"></div>
+    <div class="field" style="margin:12px 0 0">
+      <label>手动指定模型 ID（/models 获取失败时的兜底；填写后优先于上方选择）</label>
+      <input class="input mono" id="switch-model-manual"
+        placeholder="留空 = 从上方列表选择">
     </div>
     <div class="field" style="margin:12px 0 0">
       <label>上下文长度（tokens，可选）</label>
@@ -2251,27 +2261,56 @@ async function switchLLMModel(id) {
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">取消</button>
       <button class="btn primary" id="switch-model-save">切换</button></div>`);
+
+  const chipsEl = $("#switch-model-chips");
+  const statusEl = $("#switch-model-status");
   let picked = null;
-  $$("#switch-model-chips .model-chip").forEach(el => el.onclick = () => {
-    $$("#switch-model-chips .model-chip").forEach(x => x.classList.remove("sel"));
-    el.classList.add("sel");
-    picked = el.dataset.m;
-    const cwEl = $("#switch-ctxw");
-    cwEl.value = el.dataset.cw || "";   // 元数据带窗口 → 填充；不带 → 旧模型的设置不再适用，恢复自动
-  });
+
+  function renderChips(models) {
+    if (!models.length) {
+      chipsEl.innerHTML = '<span class="muted">该提供商未返回模型列表——可直接在下方手动输入模型 ID 完成切换</span>';
+      return;
+    }
+    chipsEl.innerHTML = models.map(m =>
+      `<span class="model-chip ${m.id === cfg.model_id ? "sel" : ""}" data-m="${esc(m.id)}" data-cw="${m.context_window || ""}" title="${m.context_window ? "上下文窗口 " + m.context_window + " tokens" : ""}">${esc(m.id)}${m.context_window ? `<span class="muted" style="font-size:11px"> · ${m.context_window}</span>` : ""}</span>`).join("");
+    $$("#switch-model-chips .model-chip").forEach(el => el.onclick = () => {
+      $$("#switch-model-chips .model-chip").forEach(x => x.classList.remove("sel"));
+      el.classList.add("sel");
+      picked = el.dataset.m;
+      $("#switch-model-manual").value = "";     // 选了列表项就清手输，避免歧义
+      $("#switch-ctxw").value = el.dataset.cw || "";   // 元数据带窗口 → 填充；不带 → 恢复自动
+    });
+  }
+
+  async function refreshModels() {
+    statusEl.textContent = "获取中…";
+    try {
+      const models = await api(`/api/v1/llm/configs/${id}/models`);
+      statusEl.textContent = `共 ${models.length} 个模型 · 更新于 ${new Date().toLocaleTimeString()}`;
+      renderChips(models);
+    } catch (e) {
+      statusEl.textContent = "获取失败：" + e.message;
+      renderChips([]);
+    }
+  }
+  $("#switch-model-refresh").onclick = refreshModels;
+  refreshModels();                              // 打开即拉取一次
+
   $("#switch-model-save").onclick = async () => {
-    if (!picked) { toast("请先选择一个模型", "err"); return; }
+    const manual = $("#switch-model-manual").value.trim();
+    const target = manual || picked;
+    if (!target) { toast("请选择一个模型，或手动输入模型 ID", "err"); return; }
     const cw = parseCtxWindow($("#switch-ctxw").value.trim());
     if (Number.isNaN(cw)) return;
     const ctxChanged = (cw ?? 0) !== (cfg.context_window || 0);   // null → 0（清除）再比较
-    if (picked === cfg.model_id && !ctxChanged) { closeModal(); return; }
-    const body = { model_id: picked };
+    if (target === cfg.model_id && !ctxChanged) { closeModal(); return; }
+    const body = { model_id: target };
     if (ctxChanged) body.context_window = cw ?? 0;
     try {
       await api(`/api/v1/llm/configs/${id}`, {
         method: "PATCH", body: JSON.stringify(body)
       });
-      toast(picked === cfg.model_id ? "上下文长度已更新，下一轮对话生效" : `已切换到 ${picked}`, "ok");
+      toast(target === cfg.model_id ? "上下文长度已更新，下一轮对话生效" : `已切换到 ${target}`, "ok");
       closeModal(); loadLLMConfigs();
     } catch (e) { toast(e.message, "err"); }
   };
