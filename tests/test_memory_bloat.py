@@ -164,7 +164,7 @@ def test_maintain_pipeline_with_fake_llm():
 
 
 # ---------- API：调级 / 单删 / 批删 ----------
-def test_memory_tier_and_delete_api():
+def test_memory_tier_and_delete_api(auth_factory):
     uid = "mem-b5"
     _ensure_user(uid)
     ms = MemoryService()
@@ -172,28 +172,29 @@ def test_memory_tier_and_delete_api():
     ms.set(uid, "research_topic", {"v": "量子计算"}, tier="core", topic="研究方向")
     ms.set(uid, "temp_task", {"v": "临时任务"}, tier="short", topic="项目")
     try:
+        h = auth_factory(uid)          # P0-1：身份来自 token，视角即 uid 本人
         with TestClient(app) as c:
             # 列表带层级
-            rows = c.get("/api/v1/memories", params={"user_id": uid}).json()
+            rows = c.get("/api/v1/memories", headers=h).json()
             assert {r["key"]: r["tier"] for r in rows} == {
                 "research_topic": "core", "temp_task": "short"}
             # 非法 tier
             assert c.patch(f"/api/v1/memories/temp_task/tier",
-                           params={"user_id": uid},
+                           headers=h,
                            json={"tier": "bad"}).status_code == 400
             # 调级 + 404
             assert c.patch(f"/api/v1/memories/temp_task/tier",
-                           params={"user_id": uid},
+                           headers=h,
                            json={"tier": "core"}).status_code == 200
             assert c.patch(f"/api/v1/memories/ghost/tier",
-                           params={"user_id": uid},
+                           headers=h,
                            json={"tier": "core"}).status_code == 404
             # 单删 + 批删
             assert c.delete(f"/api/v1/memories/temp_task",
-                            params={"user_id": uid}).json()["deleted"] == ["temp_task"]
+                            headers=h).json()["deleted"] == ["temp_task"]
             assert c.delete(f"/api/v1/memories/temp_task",
-                            params={"user_id": uid}).status_code == 404
-            n = c.post(f"/api/v1/memories/delete?user_id={uid}",
+                            headers=h).status_code == 404
+            n = c.post("/api/v1/memories/delete", headers=h,
                        json={"keys": ["research_topic", "ghost"]}).json()["deleted_count"]
             assert n == 1
             assert ms.get_all(uid) == {}

@@ -5,17 +5,18 @@ from langgraph.graph import END, START, StateGraph
 from app.graph.nodes import (
     WorkflowContext,
     compact_node,
-    extract_memory_node,
     generate_node,
     load_memory_node,
     retrieve_node,
     route_after_generate,
     route_supervisor,
-    save_memory_node,
     supervisor_node,
     tool_executor_node,
 )
 from app.graph.state import AgentState
+
+# P1-8：extract_memory / save_memory 不再进图——记忆抽取/落库由 API 层在
+# 答案生成完（SSE 已推 done）之后以后台任务补跑，不阻塞流式结束。
 
 
 async def _build_checkpointer(database_url: str) -> AsyncPostgresSaver:
@@ -37,8 +38,6 @@ async def build_graph(ctx: WorkflowContext) -> StateGraph:
     async def _retrieve(s): return await retrieve_node(ctx, s)
     async def _generate(s): return await generate_node(ctx, s)
     async def _tool_executor(s): return await tool_executor_node(ctx, s)
-    async def _extract_memory(s): return await extract_memory_node(ctx, s)
-    async def _save_memory(s): return await save_memory_node(ctx, s)
 
     builder.add_node("load_memory", _load_memory)
     builder.add_node("compact", _compact)
@@ -46,8 +45,6 @@ async def build_graph(ctx: WorkflowContext) -> StateGraph:
     builder.add_node("retrieve", _retrieve)
     builder.add_node("generate", _generate)
     builder.add_node("tool_executor", _tool_executor)
-    builder.add_node("extract_memory", _extract_memory)
-    builder.add_node("save_memory", _save_memory)
 
     builder.add_edge(START, "load_memory")                 # 先读记忆
     builder.add_edge("load_memory", "compact")             # 再查是否需压缩
@@ -55,11 +52,10 @@ async def build_graph(ctx: WorkflowContext) -> StateGraph:
     builder.add_conditional_edges("supervisor", route_supervisor,
                                   {"retrieve": "retrieve", "generate": "generate"})
     builder.add_edge("retrieve", "generate")
+    # done 直达 END（P1-8）：记忆抽/存在图外后台补跑，SSE 提前结束
     builder.add_conditional_edges("generate", route_after_generate,
-                                  {"tool_executor": "tool_executor", "done": "extract_memory"})
+                                  {"tool_executor": "tool_executor", "done": END})
     builder.add_edge("tool_executor", "generate") 
-    builder.add_edge("extract_memory", "save_memory")      # Day 7：抽→审→存
-    builder.add_edge("save_memory", END)
 
     saver = await _build_checkpointer(ctx.settings.database_url)
     return builder.compile(checkpointer=saver)

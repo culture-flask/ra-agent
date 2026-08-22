@@ -853,7 +853,7 @@ async function loadSessions() {
   catch { }
   let remote = null;
   try {
-    const r = await api("/api/v1/conversations?user_id=" + encodeURIComponent(state.user.id));
+    const r = await api("/api/v1/conversations");
     remote = (r.conversations || []).map(c => ({
       id: c.session_id, title: c.title,
       created: Date.parse(c.updated_at) || 0,
@@ -877,7 +877,7 @@ async function ensureHistory(sid) {
   let remote;
   try {
     const r = await api(`/api/v1/conversations/${encodeURIComponent(sid)}` +
-      `/messages?user_id=${encodeURIComponent(state.user.id)}`);
+      `/messages`);
     remote = r.messages || [];
   } catch { return; }
   let local = [];
@@ -906,7 +906,7 @@ function delSession(id, ev) {
 该会话的对话记录会一并清除，不可恢复。`)) return;
   // 服务端登记行 + checkpoint 一并删除（失败不阻断本地删除）
   api("/api/v1/conversations/" + encodeURIComponent(id) +
-      "?user_id=" + encodeURIComponent(state.user.id), { method: "DELETE" })
+      "", { method: "DELETE" })
     .catch(() => { });
   state.sessions = state.sessions.filter(x => x.id !== id);
   localStorage.removeItem(store.mk(id));
@@ -952,7 +952,7 @@ async function renameSession(id) {
   saveSessions(); renderSessions();
   try {
     await api("/api/v1/conversations/" + encodeURIComponent(id) +
-        "?user_id=" + encodeURIComponent(state.user.id),
+        "",
       { method: "PATCH", body: JSON.stringify({ title: t }) });
   } catch (e) {
     // 404 = 新会话尚未登记（没发过消息）：本地已生效，首次发消息会带新名登记
@@ -1057,7 +1057,7 @@ function loadCtxMeter() {
   const sid = state.active;
   const mySeq = ++ctxSeq;
   el.classList.add("hidden");
-  api("/api/v1/chat/context?user_id=" + encodeURIComponent(state.user.id) +
+  api("/api/v1/chat/context" +
       "&session_id=" + encodeURIComponent(sid))
     .then(ev => { if (ctxSeq === mySeq && state.active === sid) renderCtxMeter(ev); })
     .catch(() => { if (ctxSeq === mySeq && state.active === sid) el.classList.add("hidden"); });
@@ -1091,6 +1091,8 @@ function renderMessages() {
     msgHTML(m, i, i === msgs.length - 1 && m.role === "assistant")).join("");
   $$("#messages [data-fork]").forEach(el => el.onclick = () => forkSession(+el.dataset.fork));
   $$("#messages [data-regen]").forEach(el => el.onclick = regenerateLast);
+  $$("#messages [data-fb]").forEach(el => el.onclick = () =>
+    sendFeedback(+el.dataset.fb, +el.dataset.fbv));
   box.scrollTop = box.scrollHeight;
 }
 
@@ -1142,10 +1144,22 @@ function citesHTML(retrievals) {
   return `<details class="cites"><summary>引用溯源 · ${retrievals.length} 条检索结果${retrievals.some(x => x.type === "parent") ? "（含完整段落）" : ""}</summary><div class="cites-body">${items}</div></details>`;
 }
 
+/* P3-19 反馈按钮：已反馈显示静态徽标防重复提交 */
+function feedbackHTML(m, i) {
+  if (!m.content || m._streaming) return "";
+  if (m.feedback) return m.feedback === 1
+    ? '<span class="badge green" title="已纳入评测候选">已反馈 👍</span>'
+    : '<span class="badge gray" title="已记录">已反馈 👎</span>';
+  return `<button class="btn sm" data-fb="${i}" data-fbv="1" title="回答有用，纳入评测候选集">👍</button>`
+       + `<button class="btn sm" data-fb="${i}" data-fbv="-1" title="回答不对">👎</button>`;
+}
+
 function msgHTML(m, i, isLast) {
+  const fbHTML = m.role === "assistant" ? feedbackHTML(m, i) : "";
   const actions = `<div class="msg-actions">
     <button class="btn sm" data-fork="${i}">分支</button>
     ${isLast ? '<button class="btn sm" data-regen="1">重新生成</button>' : ""}
+    ${fbHTML}
   </div>`;
   if (m.role === "user") {
     const filesHTML = (m.files && m.files.length)
@@ -1173,6 +1187,9 @@ function patchLastMsg(msg) {
   const newNode = wrap.firstChild;
   last.replaceWith(newNode);
   $$("[data-regen]", newNode).forEach(el => el.onclick = regenerateLast);
+  const realIdx = getMsgs().length - 1;
+  $$("[data-fb]", newNode).forEach(el => { el.dataset.fb = realIdx;
+    el.onclick = () => sendFeedback(realIdx, +el.dataset.fbv); });
   $("#messages").scrollTop = $("#messages").scrollHeight;
 }
 
@@ -1233,7 +1250,7 @@ async function sendMessage(text, opts = {}) {
   const msgs = getMsgs();
   const sess = state.sessions.find(s => s.id === state.active);
   const sendFiles = opts.files || [];                    // 本轮附件（已解析成功的）
-  const body = { user_id: state.user.id, session_id: state.active, message: text,
+  const body = { session_id: state.active, message: text,
     retrieval_mode: state.retrievalMode || undefined,
     per_kb_k: state.perKbK || undefined, total_k: state.totalK || undefined,
     temperature: state.temperature,
@@ -1321,9 +1338,41 @@ async function stopGeneration() {
     if (store.token) headers["Authorization"] = "Bearer " + store.token;
     await fetch(store.base + "/api/v1/chat/stop", {
       method: "POST", headers,
-      body: JSON.stringify({ user_id: state.user.id, session_id: state.active })
+      body: JSON.stringify({ session_id: state.active })
     });
   } catch (e) { /* 标记失败也无妨：SSE 流本身会自然结束 */ }
+}
+
+/* ---------------- P3-19 反馈闭环：点赞/点踩一条回答 ----------------
+   rating=1 的记录会经 rag_test/build_golden_from_feedback.py 整理成
+   检索金标准候选——用户的每次点赞都在帮评测集长大。hits 取该条消息
+   引用面板的来源元数据，使每条反馈自成可回放的评测记录。 */
+function nn(v) { return (v === undefined || v === "") ? null : v; }
+
+async function sendFeedback(i, rating) {
+  const msgs = getMsgs();
+  const m = msgs[i];
+  if (!m || m.role !== "assistant" || !m.content || m.feedback) return;
+  try {
+    await api("/api/v1/feedbacks", { method: "POST", body: JSON.stringify({
+      session_id: state.active,
+      rating,
+      question: (msgs[i - 1] && msgs[i - 1].role === "user")
+        ? msgs[i - 1].content : "",
+      answer: m.content,
+      hits: (m.retrievals || []).map(r => ({
+        kb_name: r.kb_name || "", scope: r.scope || "", type: r.type || "",
+        source: nn(r.source), page: nn(r.page),
+        pages: Array.isArray(r.pages) ? r.pages : [],
+        score: nn(r.score), distance: nn(r.distance),
+        bm25_score: nn(r.bm25_score),
+      })),
+    }) });
+    m.feedback = rating;                    // 本地标记 → 按钮变"已反馈"
+    saveMsgs(msgs);
+    renderMessages();
+    toast("已记录反馈，谢谢！");
+  } catch (e) { toast(e.message, "err"); }
 }
 
 /* 分支：从选中消息（含）及之前的历史开一个新会话，后续提问从分支点继续 */
@@ -1553,7 +1602,7 @@ async function loadKBs() {
   const box = $("#kb-list");
   box.innerHTML = '<div class="empty">加载中…</div>';
   try {
-    state.kbs = await api("/api/v1/kbs?user_id=" + encodeURIComponent(state.user.id));
+    state.kbs = await api("/api/v1/kbs");
   } catch (e) {
     box.innerHTML = `<div class="empty"><div class="big">加载失败</div>${esc(e.message)}</div>`;
     return;
@@ -1602,7 +1651,7 @@ async function deleteKB(kbId) {
   const name = kb ? kb.name : kbId;
   if (!confirm(`确定删除知识库「${name}」？\n将同时删除其向量数据与文档 chunk，不可恢复。`)) return;
   try {
-    await api(`/api/v1/kbs/${kbId}?user_id=${encodeURIComponent(state.user.id)}`, { method: "DELETE" });
+    await api(`/api/v1/kbs/${kbId}`, { method: "DELETE" });
     toast("知识库已删除", "ok");
     loadKBs();
   } catch (e) { toast(e.message, "err"); }
@@ -1673,7 +1722,7 @@ function openCreateKB() {
       await api("/api/v1/kbs", {
         method: "POST", body: JSON.stringify({
           name, description: desc, scope: $("#ckb-scope").value,
-          user_id: state.user.id, texts,
+          texts,
           embedding_provider: emb.provider || null,
           embedding_model_id: emb.model || null,
           embedding_dim: emb.dim || null,
@@ -1689,9 +1738,9 @@ function openCreateKB() {
 
 async function openKBDetail(kbId) {
   let kb;
-  // 带 user_id：retrieval_enabled_for_user 是按用户算的，缺省会用后端默认 u1，
+  // 身份由 Bearer token 决定；retrieval_enabled_for_user 按当前登录用户算，
   // 导致私人库（真实 uid 禁用中）详情页永远显示"可用"、出不来"允许检索"按钮
-  try { kb = await api("/api/v1/kbs/" + kbId + "?user_id=" + encodeURIComponent(state.user.id)); } catch (e) { toast(e.message, "err"); return; }
+  try { kb = await api("/api/v1/kbs/" + kbId + ""); } catch (e) { toast(e.message, "err"); return; }
   const st = KB_STATUS[kb.status] || { label: kb.status, cls: "gray" };
   openModal(`<button class="close-x" onclick="closeModal()">✕</button>
     <h2>${esc(kb.name)} <button class="btn" id="kb-info-edit" style="padding:2px 10px;font-size:12px;vertical-align:middle">编辑</button></h2>
@@ -1802,7 +1851,7 @@ async function openKBDetail(kbId) {
   $("#kb-delete-btn").onclick = async () => {
     if (!confirm(`确定删除知识库「${kb.name}」？\n将同时删除其向量数据与文档 chunk，不可恢复。`)) return;
     try {
-      await api(`/api/v1/kbs/${kb.kb_id}?user_id=${encodeURIComponent(state.user.id)}`, { method: "DELETE" });
+      await api(`/api/v1/kbs/${kb.kb_id}`, { method: "DELETE" });
       toast("知识库已删除", "ok");
       closeModal(); loadKBs();
     } catch (e) { toast(e.message, "err"); }
@@ -1877,7 +1926,7 @@ async function openKBDetail(kbId) {
         try { p = await api("/api/v1/kbs/" + kb.kb_id + "/ingest"); }
         catch (e) { btn.disabled = false; toast(e.message, "err"); return; }
         if (!p) {  // 无进度记录（服务重启等异常），回退轮询库状态兜底解锁按钮
-          const cur = await api("/api/v1/kbs/" + kb.kb_id + "?user_id=" + encodeURIComponent(state.user.id));
+          const cur = await api("/api/v1/kbs/" + kb.kb_id + "");
           if (cur.status === "indexing") { setTimeout(poll, 2000); return; }
           btn.disabled = false;
           statusEl.innerHTML = cur.status === "ready"
@@ -1914,7 +1963,7 @@ async function openKBDetail(kbId) {
     box.innerHTML = '<span class="muted">检索中…</span>';
     try {
       const mode = $("#kb-search-mode").value;
-      const hits = await api(`/api/v1/kbs/${kb.kb_id}/search?query=${encodeURIComponent(q)}&k=5&user_id=${encodeURIComponent(state.user.id)}&mode=${mode}`);
+      const hits = await api(`/api/v1/kbs/${kb.kb_id}/search?query=${encodeURIComponent(q)}&k=5&mode=${mode}`);
       if (!hits.length) { box.innerHTML = '<span class="muted">无命中结果</span>'; return; }
       box.innerHTML = '<div class="hint" style="font-size:12px;color:var(--muted);margin-bottom:6px">' +
         (mode === "hybrid" ? "混合检索（向量 + BM25 RRF 融合）" : "纯向量检索") + '</div>' +
@@ -1976,7 +2025,6 @@ async function openKBDetail(kbId) {
           embedding_dim: copy ? null : (emb.dim || null),
           embedding_base_url: copy ? null : ($("#kb-rebuild-base-url").value.trim() || null),
           embedding_api_key: copy ? null : ($("#kb-rebuild-key").value.trim() || null),
-          user_id: state.user.id,          // 新库强制归本人私人所有
         })
       });
       spawnRebuildCard(r.new_kb_id, kb.name, copy);
@@ -1989,7 +2037,7 @@ async function openKBDetail(kbId) {
     // per-user 开关：只影响当前用户自己的对话检索，其他用户不受影响
     const enabled = !(kb.retrieval_enabled_for_user ?? kb.retrieval_enabled);
     try {
-      await api(`/api/v1/kbs/${kb.kb_id}/retrieval?user_id=${encodeURIComponent(state.user.id)}`, {
+      await api(`/api/v1/kbs/${kb.kb_id}/retrieval`, {
         method: "PATCH", body: JSON.stringify({ enabled })
       });
       toast(enabled ? "已允许对话检索（仅影响你）" : "已禁止对话检索（仅影响你，其他用户不受影响）", "ok");
@@ -2118,7 +2166,7 @@ async function loadLLMConfigs() {
   const box = $("#llm-config-list");
   box.innerHTML = '<span class="muted">加载中…</span>';
   let rows;
-  try { rows = await api("/api/v1/llm/configs?user_id=" + encodeURIComponent(state.user.id)); }
+  try { rows = await api("/api/v1/llm/configs"); }
   catch (e) { box.innerHTML = `<span class="muted">${esc(e.message)}</span>`; return; }
   if (!rows.length) {
     box.innerHTML = `<div class="empty"><div class="big">尚未配置自定义模型</div>
@@ -2150,7 +2198,7 @@ async function loadLLMConfigs() {
 async function editCtxWindow(id) {
   let cfg;
   try {
-    const rows = await api("/api/v1/llm/configs?user_id=" + encodeURIComponent(state.user.id));
+    const rows = await api("/api/v1/llm/configs");
     cfg = rows.find(r => r.id === id);
     if (!cfg) throw new Error("配置不存在");
   } catch (e) { toast(e.message, "err"); return; }
@@ -2169,7 +2217,7 @@ async function editCtxWindow(id) {
     const cw = parseCtxWindow($("#ctxw-input").value.trim());
     if (Number.isNaN(cw)) return;
     try {
-      await api(`/api/v1/llm/configs/${id}?user_id=${encodeURIComponent(state.user.id)}`, {
+      await api(`/api/v1/llm/configs/${id}`, {
         method: "PATCH", body: JSON.stringify({ context_window: cw ?? 0 })   // null → 0 = 清除恢复自动
       });
       toast(cw != null ? "上下文长度已更新，下一轮对话生效" : "已恢复自动，下一轮对话生效", "ok");
@@ -2181,10 +2229,10 @@ async function editCtxWindow(id) {
 async function switchLLMModel(id) {
   let cfg, models;
   try {
-    const rows = await api("/api/v1/llm/configs?user_id=" + encodeURIComponent(state.user.id));
+    const rows = await api("/api/v1/llm/configs");
     cfg = rows.find(r => r.id === id);
     if (!cfg) throw new Error("配置不存在");
-    models = await api(`/api/v1/llm/configs/${id}/models?user_id=${encodeURIComponent(state.user.id)}`);
+    models = await api(`/api/v1/llm/configs/${id}/models`);
   } catch (e) { toast(e.message, "err"); return; }
   if (!models.length) { toast("该提供商未返回模型列表", "err"); return; }
   openModal(`<button class="close-x" onclick="closeModal()">✕</button>
@@ -2220,7 +2268,7 @@ async function switchLLMModel(id) {
     const body = { model_id: picked };
     if (ctxChanged) body.context_window = cw ?? 0;
     try {
-      await api(`/api/v1/llm/configs/${id}?user_id=${encodeURIComponent(state.user.id)}`, {
+      await api(`/api/v1/llm/configs/${id}`, {
         method: "PATCH", body: JSON.stringify(body)
       });
       toast(picked === cfg.model_id ? "上下文长度已更新，下一轮对话生效" : `已切换到 ${picked}`, "ok");
@@ -2231,7 +2279,7 @@ async function switchLLMModel(id) {
 
 async function setDefaultLLMConfig(id) {
   try {
-    await api(`/api/v1/llm/configs/${id}/default?user_id=${encodeURIComponent(state.user.id)}`, { method: "PATCH" });
+    await api(`/api/v1/llm/configs/${id}/default`, { method: "PATCH" });
     toast("已切换为默认模型", "ok");
     loadLLMConfigs();
   } catch (e) { toast(e.message, "err"); }
@@ -2240,7 +2288,7 @@ async function setDefaultLLMConfig(id) {
 async function deleteLLMConfig(id) {
   if (!confirm("确定删除这条模型配置？")) return;
   try {
-    await api(`/api/v1/llm/configs/${id}?user_id=${encodeURIComponent(state.user.id)}`, { method: "DELETE" });
+    await api(`/api/v1/llm/configs/${id}`, { method: "DELETE" });
     toast("配置已删除", "ok");
     loadLLMConfigs();
   } catch (e) { toast(e.message, "err"); }
@@ -2275,7 +2323,6 @@ async function saveLLMConfig() {
   const cw = parseCtxWindow($("#llm-ctx-window").value.trim());
   if (Number.isNaN(cw)) return;
   const body = {
-    user_id: state.user.id,
     provider: provider === "__custom__" ? "custom" : provider,
     base_url: $("#llm-base-url").value.trim(),
     model_id: $("#llm-model-id").value.trim(),
@@ -2300,14 +2347,13 @@ async function loadMemories() {
   const box = $("#memory-list");
   box.innerHTML = '<div class="empty">加载中…</div>';
   let rows;
-  try { rows = await api("/api/v1/memories?user_id=" + encodeURIComponent(state.user.id)); }
+  try { rows = await api("/api/v1/memories"); }
   catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (!rows.length) {
     box.innerHTML = `<div class="empty"><div class="big">暂无长期记忆</div>
       对话中提及的研究主题 / 偏好 / 背景会在对话结束后自动抽取写入</div>`;
     return;
   }
-  const uid = encodeURIComponent(state.user.id);
   const sel = new Set();                                   // 勾选待删除的 key
   const coreCount = rows.filter(m => m.tier === "core").length;
   box.innerHTML = `
@@ -2348,7 +2394,7 @@ async function loadMemories() {
   selBtn.onclick = async () => {
     if (!confirm(`确定删除选中的 ${sel.size} 条记忆？不可恢复。`)) return;
     try {
-      await api(`/api/v1/memories/delete?user_id=${uid}`,
+      await api(`/api/v1/memories/delete`,
         { method: "POST", body: JSON.stringify({ keys: [...sel] }) });
       loadMemories();
     } catch (e) { toast(e.message, "err"); }
@@ -2356,7 +2402,7 @@ async function loadMemories() {
   $$("#memory-list [data-del]").forEach(b => b.onclick = async () => {
     if (!confirm(`确定删除记忆「${b.dataset.del}」？不可恢复。`)) return;
     try {
-      await api(`/api/v1/memories/${encodeURIComponent(b.dataset.del)}?user_id=${uid}`,
+      await api(`/api/v1/memories/${encodeURIComponent(b.dataset.del)}`,
         { method: "DELETE" });
       loadMemories();
     } catch (e) { toast(e.message, "err"); }
@@ -2365,7 +2411,7 @@ async function loadMemories() {
     const key = b.dataset.promote || b.dataset.demote;
     const tier = b.dataset.promote ? "core" : "short";
     try {
-      await api(`/api/v1/memories/${encodeURIComponent(key)}/tier?user_id=${uid}`,
+      await api(`/api/v1/memories/${encodeURIComponent(key)}/tier`,
         { method: "PATCH", body: JSON.stringify({ tier }) });
       loadMemories();
     } catch (e) { toast(e.message, "err"); }
@@ -2385,7 +2431,7 @@ async function loadTraces() {
     sidEl.onclick = ev => copyText(state.active, "session_id 已复制", ev);
   }
   const sid = $("#trace-session").value.trim();
-  let url = "/api/v1/traces?user_id=" + encodeURIComponent(state.user.id);
+  let url = "/api/v1/traces";
   if (sid) url += "&session_id=" + encodeURIComponent(sid);
   let rows;
   try { rows = await api(url); }

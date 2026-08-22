@@ -2,18 +2,23 @@
 一键获取模型列表。"""
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-router = APIRouter(prefix="/api/v1/llm", tags=["llm"])
+from app.core.deps import get_current_user
+from app.models import User
+
+# 路由级闸门：本组全部端点要求登录态（配置是用户级资产，含加密 api_key）
+router = APIRouter(prefix="/api/v1/llm", tags=["llm"],
+                   dependencies=[Depends(get_current_user)])
 
 # 上下文窗口允许范围（token）：下限防误填过小立刻触发压缩，上限覆盖长窗口模型
 _CTX_WINDOW_MIN, _CTX_WINDOW_MAX = 1024, 10_000_000
 
 
 class LLMConfigRequest(BaseModel):
-    user_id: str
+    # 归属用户取自 Bearer token（P0-1），请求体不再携带 user_id
     provider: str
     base_url: str
     model_id: str
@@ -84,19 +89,20 @@ async def list_providers(request: Request):
 
 
 @router.get("/configs")
-async def list_configs(request: Request, user_id: str):
-    """该用户的配置列表：api_key 只回显掩码（sk-...1234）。"""
+async def list_configs(request: Request, user: User = Depends(get_current_user)):
+    """当前用户的配置列表：api_key 只回显掩码（sk-...1234）。"""
     return await run_in_threadpool(request.app.state.llm_service.list_configs,
-                                   user_id)
+                                   user.id)
 
 
 @router.post("/configs")
-async def save_config(req: LLMConfigRequest, request: Request):
-    """保存用户配置：api_key 加密落库；is_default 时互斥。"""
+async def save_config(req: LLMConfigRequest, request: Request,
+                      user: User = Depends(get_current_user)):
+    """保存【当前用户】的配置：api_key 加密落库；is_default 时互斥。"""
     try:
         config_id = await run_in_threadpool(
             request.app.state.llm_service.set_user_config,
-            req.user_id, req.provider, req.base_url, req.model_id,
+            user.id, req.provider, req.base_url, req.model_id,
             req.api_key, req.is_default, req.context_window)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"invalid config: {e}")
@@ -110,20 +116,22 @@ def _mask(key: str) -> str:
 
 
 @router.delete("/configs/{config_id}")
-async def delete_config(config_id: str, request: Request, user_id: str):
+async def delete_config(config_id: str, request: Request,
+                        user: User = Depends(get_current_user)):
     """删除一条配置：仅本人可删。"""
     ok = await run_in_threadpool(request.app.state.llm_service.delete_config,
-                                 user_id, config_id)
+                                 user.id, config_id)
     if not ok:
         raise HTTPException(status_code=404, detail="config not found")
     return {"deleted": config_id}
 
 
 @router.patch("/configs/{config_id}/default")
-async def set_default_config(config_id: str, request: Request, user_id: str):
+async def set_default_config(config_id: str, request: Request,
+                             user: User = Depends(get_current_user)):
     """把已保存的配置切换为默认模型（互斥：清除该用户其他默认）。"""
     ok = await run_in_threadpool(request.app.state.llm_service.set_default_config,
-                                 user_id, config_id)
+                                 user.id, config_id)
     if not ok:
         raise HTTPException(status_code=404, detail="config not found")
     return {"default": config_id}
@@ -138,13 +146,14 @@ async def list_models(req: LLMModelsRequest, request: Request):
 
 
 @router.get("/configs/{config_id}/models")
-async def list_config_models(config_id: str, request: Request, user_id: str):
+async def list_config_models(config_id: str, request: Request,
+                             user: User = Depends(get_current_user)):
     """某条已保存配置的可选模型列表：api_key 由后端解密调用，不离开服务端。
 
-    前端切换模型时不需要重新输入 base_url / api_key。
+    前端切换模型时不需要重新输入 base_url / api_key。仅本人配置可见。
     """
     svc = request.app.state.llm_service
-    cfg = await run_in_threadpool(svc.get_config, user_id, config_id)
+    cfg = await run_in_threadpool(svc.get_config, user.id, config_id)
     if cfg is None:
         raise HTTPException(status_code=404, detail="config not found")
     return await _fetch_models(request.app.state.settings,
@@ -153,11 +162,12 @@ async def list_config_models(config_id: str, request: Request, user_id: str):
 
 @router.patch("/configs/{config_id}")
 async def update_config(config_id: str, req: LLMConfigUpdateRequest,
-                        request: Request, user_id: str):
+                        request: Request,
+                        user: User = Depends(get_current_user)):
     """更新已保存配置（切换模型）：只传要改的字段，None 保持原值。"""
     ok = await run_in_threadpool(
         request.app.state.llm_service.update_config,
-        user_id, config_id,
+        user.id, config_id,
         provider=req.provider, base_url=req.base_url,
         model_id=req.model_id, api_key=req.api_key,
         context_window=req.context_window)

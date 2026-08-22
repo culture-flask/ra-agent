@@ -94,14 +94,15 @@ def test_private_kb_visibility():
     assert "公共库" in u2_kbs
 
 
-def test_upload_document_state_machine():
+def test_upload_document_state_machine(auth_factory):
     """API 批量上传：一次带多个文件 → 立即返回 indexing → 轮询到 ready → 可检索。"""
+    h = auth_factory()
     with TestClient(app) as c:
-        kb = c.request("POST", "/api/v1/kbs",
-                       json={"name": "上传库", "scope": "public", "user_id": "u1",
+        kb = c.request("POST", "/api/v1/kbs", headers=h,
+                       json={"name": "上传库", "scope": "public",
                              "description": "批量上传测试库"}).json()
 
-        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents",
+        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents", headers=h,
                    files=[("files", ("hello.txt", "量子比特可以处于叠加态。".encode(), "text/plain")),
                           ("files", ("second.md", "# 批量上传\n第二个文件的内容。".encode(), "text/markdown"))])
         assert r.status_code == 200
@@ -110,16 +111,16 @@ def test_upload_document_state_machine():
         assert body["count"] == 2                 # 两个文件都在一批里
 
         for _ in range(30):                       # 轮询最多 15 秒
-            status = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()["status"]
+            status = c.get(f"/api/v1/kbs/{kb['kb_id']}", headers=h).json()["status"]
             if status == "ready":
                 break
             time.sleep(0.5)
         assert status == "ready"
-        cur = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()
+        cur = c.get(f"/api/v1/kbs/{kb['kb_id']}", headers=h).json()
         assert len(cur["source_doc_ids"]) == 2    # 两个文件都已入库
 
-        hits = c.get(f"/api/v1/kbs/{kb['kb_id']}/search",
-                     params={"query": "叠加态", "user_id": "u1"}).json()
+        hits = c.get(f"/api/v1/kbs/{kb['kb_id']}/search", headers=h,
+                     params={"query": "叠加态"}).json()
         assert hits and "量子比特" in hits[0]["text"]   # 上传内容可检索到
 
 
@@ -266,17 +267,18 @@ def test_search_mode_default_from_settings():
     assert hits and hits[0].get("score") is not None        # hybrid 生效
 
 
-def test_upload_unsupported_file_goes_failed():
+def test_upload_unsupported_file_goes_failed(auth_factory):
     """不支持的格式 → 后台任务失败 → 状态机走到 failed（而不是永久 indexing）。"""
+    h = auth_factory()
     with TestClient(app) as c:
-        kb = c.request("POST", "/api/v1/kbs",
-                       json={"name": "坏文件库", "scope": "public", "user_id": "u1",
+        kb = c.request("POST", "/api/v1/kbs", headers=h,
+                       json={"name": "坏文件库", "scope": "public",
                              "description": "坏文件测试库"}).json()
-        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents",
+        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents", headers=h,
                    files={"files": ("data.xlsx", b"binary", "application/octet-stream")})
         assert r.status_code == 200          # 上传立即成功
         for _ in range(30):
-            status = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()["status"]
+            status = c.get(f"/api/v1/kbs/{kb['kb_id']}", headers=h).json()["status"]
             if status in ("ready", "failed"):
                 break
             time.sleep(0.5)
@@ -411,20 +413,56 @@ def test_ingest_all_failed_status_and_error_detail():
     assert all(f["error"] for f in prog["files"])       # 每个失败文件都有原因
 
 
-def test_ingest_progress_api_endpoint():
-    """API：GET /kbs/{id}/ingest 返回进度明细；从未入库过返回 null。"""
+def test_startup_resets_orphan_indexing_status(auth_factory):
+    """P1-6 孤儿状态自愈：进程崩溃残留的 indexing/reembedding/copying，
+    在下一次服务启动（lifespan）时统一复位为 failed，409 死锁解除。
+
+    复现路径：直接把库标成 indexing（模拟进程被 kill -9 时的落库残态），
+    再起 TestClient——lifespan 的复位 SQL 应把它拉回 failed。
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    h = auth_factory()
+    kb = None
+    with TestClient(app) as c:          # 先正常起一次：建库
+        kb = c.post("/api/v1/kbs", headers=h, json={
+            "name": "孤儿库", "scope": "public",
+            "description": "启动自愈测试"}).json()
+    # 模拟进程崩溃残态：绕过服务层直改状态（真实世界里这是 kill -9 的结果）
+    from app.core.db import SessionLocal
+    from app.models import KnowledgeBase
+    with SessionLocal() as db:
+        row = db.get(KnowledgeBase, kb["kb_id"])
+        row.status = "indexing"
+        db.commit()
+
+    # 重启服务（新 TestClient = 新一轮 lifespan）：复位生效
     with TestClient(app) as c:
-        kb = c.post("/api/v1/kbs", json={
-            "name": "进度API库", "scope": "public", "user_id": "u1",
+        status = c.get(f"/api/v1/kbs/{kb['kb_id']}", headers=h).json()["status"]
+        assert status == "failed"                       # 不再卡 indexing
+        # 且可以再次上传（409 死锁解除）——上传后走到终态而非 409
+        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/documents", headers=h,
+                   files=[("files", ("ok.txt", "量子比特可以处于叠加态。".encode(),
+                                     "text/plain"))])
+        assert r.status_code == 200                     # 不再 409 already indexing
+
+
+def test_ingest_progress_api_endpoint(auth_factory):
+    """API：GET /kbs/{id}/ingest 返回进度明细；从未入库过返回 null。"""
+    h = auth_factory()
+    with TestClient(app) as c:
+        kb = c.post("/api/v1/kbs", headers=h, json={
+            "name": "进度API库", "scope": "public",
             "description": "进度端点测试库"}).json()
         kb_id = kb["kb_id"]
-        assert c.get(f"/api/v1/kbs/{kb_id}/ingest").json() is None   # 未入库过
-        c.post(f"/api/v1/kbs/{kb_id}/documents", files=[
+        assert c.get(f"/api/v1/kbs/{kb_id}/ingest", headers=h).json() is None   # 未入库过
+        c.post(f"/api/v1/kbs/{kb_id}/documents", headers=h, files=[
             ("files", ("ok.txt", "量子比特可以处于叠加态。".encode(), "text/plain")),
             ("files", ("bad.xlsx", b"binary", "application/octet-stream"))])
         prog = None
         for _ in range(30):                            # 后台任务完成后进度到终态
-            prog = c.get(f"/api/v1/kbs/{kb_id}/ingest").json()
+            prog = c.get(f"/api/v1/kbs/{kb_id}/ingest", headers=h).json()
             if prog and prog["status"] in ("ready", "failed"):
                 break
             time.sleep(0.3)

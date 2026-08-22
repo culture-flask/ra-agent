@@ -6,11 +6,12 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.core.tokens import estimate_tokens
 from app.graph.nodes import (
     COMPACT_KEEP_ROUNDS,
     COMPACT_MIN_ROUNDS,
+    COMPACT_MIN_TOKEN_RATIO,
     _build_system_prompt,
-    _estimate_tokens,
     _round_count,
     _split_keep_and_old,
 )
@@ -38,8 +39,8 @@ def _rounds(n: int, prefix: str = "轮"):
 def test_round_count_and_estimate():
     msgs = _rounds(5)
     assert _round_count(msgs) == 5
-    assert _estimate_tokens(msgs) > 0
-    assert _estimate_tokens([]) == 0
+    assert estimate_tokens(msgs) > 0
+    assert estimate_tokens([]) == 0
 
 
 def test_split_keep_and_old():
@@ -101,10 +102,21 @@ def _make_ctx_local(answer="压缩后回答", route_json='{"needs_retrieval": fa
 
 
 def test_compact_triggers_over_20_rounds():
-    """轮数 >20 触发压缩：旧轮次被 RemoveMessage 删除，总结进入系统提示词。"""
+    """轮数 >20 且占用 ≥ 窗口 10% 触发压缩：旧轮次删除，总结进系统提示词。
+
+    P3-25 后轮数路径有最小占用门槛，这里把窗口调小（500）：21 轮短消息
+    约 190 字符 ≈ 95 tokens，落在 50（10%×500）~400（80%×500）之间，
+    确保走的是轮数兜底触发而不是 token 主路径。
+    """
     from app.graph.workflow import build_graph
 
-    ctx = _make_ctx_local()
+    settings = Settings.load().model_copy(update={
+        "chroma_persist_dir": Path(tempfile.mkdtemp()),
+        "llm_context_window": 500,
+    })
+    from app.graph.nodes import WorkflowContext
+    from app.services.kb_service import KBService
+    ctx = WorkflowContext(settings, _FakeLLMService("压缩后回答"), KBService(settings))
     graph = _run(build_graph(ctx))
     cfg = {"configurable": {"thread_id": "compact-1"}}
     msgs = _rounds(COMPACT_MIN_ROUNDS + 1)          # 21 轮
@@ -133,6 +145,24 @@ def test_no_compact_below_threshold():
                                  "query": "继续", "messages": msgs}, config=cfg))
     assert not result.get("conversation_summary")
     assert _round_count(result["messages"]) == COMPACT_MIN_ROUNDS   # 全部保留
+
+
+def test_no_compact_low_token_many_rounds():
+    """P3-25：轮数超限但占用极低（< 窗口 10%）→ 不压缩，保住全部细节。
+
+    默认 256k 窗口下 30 轮短对话仅占窗口千分之几——改造前这里会白白把
+    26 轮历史总结掉；现在门槛生效，一条消息都不删。
+    """
+    from app.graph.workflow import build_graph
+
+    ctx = _make_ctx_local()
+    graph = _run(build_graph(ctx))
+    cfg = {"configurable": {"thread_id": "compact-lowtok"}}
+    result = _run(graph.ainvoke(
+        {"user_id": "u1", "session_id": "compact-lowtok", "query": "继续",
+         "messages": _rounds(COMPACT_MIN_ROUNDS + 10)}, config=cfg))
+    assert not result.get("conversation_summary")           # 未产生总结
+    assert _round_count(result["messages"]) == COMPACT_MIN_ROUNDS + 10  # 全部保留
 
 
 def test_compact_triggers_on_window_80_percent():
@@ -165,13 +195,13 @@ def test_context_usage_after_graph_run():
     """对话一轮后：上下文占用 = 窗口上限 + 压缩后消息的 token 估测 + 比例。"""
     from app.api.chat import ChatRequest, _context_usage, _initial_state
     from app.graph.workflow import build_graph
-    from app.graph.nodes import _estimate_tokens
+    from app.core.tokens import estimate_tokens as _estimate_tokens
 
     ctx = _make_ctx_local()
     graph = _run(build_graph(ctx))
     cfg = {"configurable": {"thread_id": "ctx-usage-1"}}
-    req = ChatRequest(user_id="u1", session_id="ctx-usage-1", message="你好")
-    _run(graph.ainvoke(_initial_state(req), config=cfg))
+    req = ChatRequest(session_id="ctx-usage-1", message="你好")
+    _run(graph.ainvoke(_initial_state(req, "u1"), config=cfg))
 
     usage = _run(_context_usage(graph, cfg, window=32768))
     assert usage["window"] == 32768
@@ -186,7 +216,7 @@ def test_context_usage_after_graph_run():
     assert empty["used_tokens"] == 0 and empty["ratio"] == 0
 
 
-def test_chat_context_endpoint(monkeypatch):
+def test_chat_context_endpoint(monkeypatch, auth_factory):
     """GET /chat/context：打开会话时前端拉取上下文占用（不依赖 SSE 事件）。"""
     class FakeResp:
         status_code = 200
@@ -210,7 +240,8 @@ def test_chat_context_endpoint(monkeypatch):
             db.commit()
     with TestClient(app) as c:
         r = c.get("/api/v1/chat/context",
-                  params={"user_id": "ctx-ep-user", "session_id": "ctx-ep-1"})
+                  headers=auth_factory("ctx-ep-user"),
+                  params={"session_id": "ctx-ep-1"})
         assert r.status_code == 200
         body = r.json()
         assert body["window"] == 32768          # 探测到模型元数据里的窗口
@@ -219,7 +250,11 @@ def test_chat_context_endpoint(monkeypatch):
 
 
 def test_compact_failure_skips_gracefully():
-    """压缩 LLM 调用失败 → 静默跳过，不阻断主对话。"""
+    """压缩 LLM 调用失败 → 静默跳过，不阻断主对话。
+
+    同样用小窗口（500）确保真的走到总结调用那一步——否则 P3-25 的
+    低占用门槛会先把它拦下，测的就不是失败兜底了。
+    """
     from app.graph.workflow import build_graph
 
     class BoomModel(_FakeModel):
@@ -237,6 +272,7 @@ def test_compact_failure_skips_gracefully():
     settings = Settings.load().model_copy(update={
         "chroma_persist_dir": Path(tempfile.mkdtemp()),
         "embedding_default_provider": "local",
+        "llm_context_window": 500,
     })
     from app.graph.nodes import WorkflowContext
     from app.services.kb_service import KBService

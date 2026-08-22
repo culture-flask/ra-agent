@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.core.db import SessionLocal
 from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
-from app.models import User
+from app.models import KnowledgeBase, User
 from app.services.kb_service import KBService
 from app.settings import Settings
 
@@ -309,17 +309,47 @@ def test_kb_description_passed_to_router():
     assert "收录量子计算与密码学论文" in route_prompt      # description 进了提示词
 
 
-def test_kb_description_required_by_api():
+def test_retrieve_skips_broken_kb(auth_factory):
+    """P1-5 单库隔离：坏库（嵌入维度不匹配）被跳过，健康库照常出结果。
+
+    场景还原真实事故路径：入库后用户改了库的嵌入配置（维度变化），
+    该库查询必然在 Chroma 层崩溃——改造前会拖垮整轮对话，现在只损失
+    这一个库的贡献，并推 retrieve_error 事件供前端提示。
+    """
+    ctx, kb_service = _make_ctx(
+        "答案",
+        '{"needs_retrieval": true, "kbs": ['
+        '{"name": "好库", "scope": "public"}, {"name": "坏库", "scope": "public"}]}')
+    kb_service.create_kb("好库", "public", "u1",
+                         ["量子比特可以处于叠加态"], description="量子")
+    bad = kb_service.create_kb("坏库", "public", "u1",
+                               ["深度学习需要大量数据"], description="dl")
+    with SessionLocal() as db:
+        row = db.get(KnowledgeBase, bad.kb_id)
+        row.embedding_dim += 1                  # 模拟"入库后改了维度配置"
+        db.commit()
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-dim-iso",
+                                "query": "叠加态是什么"})
+    assert result["answer"] == "答案"            # 整轮对话正常完成
+    srcs = {r.get("kb_name") for r in result.get("retrievals", [])}
+    assert "好库" in srcs                       # 健康库贡献照常
+    assert "坏库" not in srcs                   # 坏库被隔离跳过
+
+
+def test_kb_description_required_by_api(auth_factory):
     """API 建库：介绍为空 → 400；带介绍 → 落库并回显。"""
     from fastapi.testclient import TestClient
     from app.main import app
     with TestClient(app) as c:
-        r1 = c.post("/api/v1/kbs", json={
-            "name": "无介绍库", "scope": "public", "user_id": "u1",
+        h = auth_factory()
+        r1 = c.post("/api/v1/kbs", headers=h, json={
+            "name": "无介绍库", "scope": "public",
             "description": "   ", "embedding_provider": "local"})
         assert r1.status_code == 400                          # 空白介绍被拒
-        r2 = c.post("/api/v1/kbs", json={
-            "name": "有介绍库", "scope": "public", "user_id": "u1",
+        r2 = c.post("/api/v1/kbs", headers=h, json={
+            "name": "有介绍库", "scope": "public",
             "description": "深度学习论文合集", "embedding_provider": "local"})
         assert r2.status_code == 200
         assert r2.json()["description"] == "深度学习论文合集"
@@ -345,13 +375,13 @@ def test_checkpointer_continues_session():
 def test_fork_with_history_initial_state():
     """分支会话：history 随首次请求传入，初始 messages = history + 新提问。"""
     from app.api.chat import ChatRequest, _initial_state
-    req = ChatRequest(user_id="u1", session_id="branch-1", message="继续",
+    req = ChatRequest(session_id="branch-1", message="继续",
                       history=[
                           {"role": "user", "content": "第一问"},
                           {"role": "assistant", "content": "第一答"},
                           {"role": "user", "content": "分支点提问"},
                       ])
-    state = _initial_state(req)
+    state = _initial_state(req, "u1")
     assert [m["role"] for m in state["messages"]] == ["user", "assistant", "user", "user"]
     assert state["messages"][0]["content"] == "第一问"
     assert state["messages"][-1]["content"] == "继续"
@@ -363,10 +393,10 @@ def test_fork_history_runs_graph():
     from app.api.chat import ChatRequest, _initial_state
     ctx, _ = _make_ctx("分支回答")
     graph = _run(build_graph(ctx))
-    req = ChatRequest(user_id="u1", session_id="branch-2", message="继续",
+    req = ChatRequest(session_id="branch-2", message="继续",
                       history=[{"role": "user", "content": "分支点提问"}])
     result = _run(graph.ainvoke(
-        _initial_state(req),
+        _initial_state(req, "u1"),
         config={"configurable": {"thread_id": "branch-2"}}))
     assert result["answer"] == "分支回答"
     texts = [m.content for m in result["messages"]]
@@ -381,8 +411,8 @@ def test_rewind_regenerates_last_answer():
     # 第一轮：提问 → 旧回答
     ctx1, _ = _make_ctx("旧回答")
     graph1 = _run(build_graph(ctx1))
-    req1 = ChatRequest(user_id="u1", session_id="rewind-1", message="1+1等于几")
-    r1 = _run(graph1.ainvoke(_initial_state(req1), config=cfg))
+    req1 = ChatRequest(session_id="rewind-1", message="1+1等于几")
+    r1 = _run(graph1.ainvoke(_initial_state(req1, "u1"), config=cfg))
     assert r1["answer"] == "旧回答"
     assert [m.content for m in r1["messages"]] == ["1+1等于几", "旧回答"]
 
@@ -394,8 +424,8 @@ def test_rewind_regenerates_last_answer():
     # 重新生成（同一 thread，不追加消息）：新回答，无旧回答残留、无重复提问
     ctx2, _ = _make_ctx("新回答")
     graph2 = _run(build_graph(ctx2))
-    req2 = ChatRequest(user_id="u1", session_id="rewind-1", message="1+1等于几")
-    result = _run(graph2.ainvoke(_initial_state(req2, append_message=False),
+    req2 = ChatRequest(session_id="rewind-1", message="1+1等于几")
+    result = _run(graph2.ainvoke(_initial_state(req2, "u1", append_message=False),
                                  config=cfg))
     assert result["answer"] == "新回答"
     assert [m.content for m in result["messages"]] == ["1+1等于几", "新回答"]

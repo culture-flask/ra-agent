@@ -249,15 +249,20 @@ def test_stop_generation_keeps_partial():
     clear_stop("t-stop-1")
 
 
-def test_chat_stop_endpoint():
-    """POST /chat/stop 设置停止标记；下一轮对话开始时自动清除。"""
+def test_chat_stop_endpoint(auth_factory):
+    """POST /chat/stop 设置停止标记；下一轮对话开始时自动清除。
+
+    P0-1 后需登录态；未登记的会话（首轮进行中）放行——属主校验只拦已登记
+    且属于他人的会话。
+    """
     from app.core.cancel import clear_stop, is_stopped
     from fastapi.testclient import TestClient
     from app.main import app
 
     with TestClient(app) as c:
         r = c.post("/api/v1/chat/stop",
-                   json={"session_id": "t-stop-api", "user_id": "u1"})
+                   headers=auth_factory(),
+                   json={"session_id": "t-stop-api"})
         assert r.status_code == 200
         assert r.json()["stopped"] is True
         assert is_stopped("t-stop-api")

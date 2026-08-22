@@ -2,20 +2,23 @@
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.core.cancel import request_cancel
+from app.core.deps import get_current_user
+from app.models import User
 
-router = APIRouter(prefix="/api/v1", tags=["kbs"])
+# 路由级闸门：本组全部端点要求登录态（可见性过滤按 token 身份计算）
+router = APIRouter(prefix="/api/v1", tags=["kbs"],
+                   dependencies=[Depends(get_current_user)])
 
 
 class KBCreateRequest(BaseModel):
     name: str
     description: str = ""          # 知识库介绍：必填，LLM 选库参考
     scope: str = "public"          # public | private
-    user_id: str = "u1"
     texts: list[str] = []
     embedding_provider: str | None = None      # 每库可选嵌入模型
     embedding_model_id: str | None = None
@@ -30,7 +33,7 @@ class KBRebuildRequest(BaseModel):
     embedding_dim: int | None = None
     embedding_base_url: str | None = None      # 不传则按 provider 继承/默认
     embedding_api_key: str | None = None       # 不传则沿用原库密钥
-    user_id: str = "u1"                        # 重建/复制发起者：新库强制归其私人所有
+    # 发起者取自鉴权 token：新库强制归其私人所有（不污染公共库）
 
 class KBEmbeddingUpdateRequest(BaseModel):
     """修改嵌入配置（创建后随时可改）：只更新传了的字段。"""
@@ -96,14 +99,18 @@ async def _get_kb(request: Request, kb_id: str):
 
 
 @router.post("/kbs")
-async def create_kb(req: KBCreateRequest, request: Request):
-    """建库：知识库介绍必填（不能为空），供 LLM 选库时判断相关性。"""
+async def create_kb(req: KBCreateRequest, request: Request,
+                    user: User = Depends(get_current_user)):
+    """建库：知识库介绍必填（不能为空），供 LLM 选库时判断相关性。
+
+    私人库属主 = 当前登录用户（token 注入，不可指定他人）。
+    """
     if not req.description.strip():
         raise HTTPException(status_code=400, detail="知识库介绍不能为空")
     try:
         kb = await run_in_threadpool(
             request.app.state.kb_service.create_kb,
-            name=req.name, scope=req.scope, user_id=req.user_id, texts=req.texts,
+            name=req.name, scope=req.scope, user_id=user.id, texts=req.texts,
             provider=req.embedding_provider, model_id=req.embedding_model_id,
             dim=req.embedding_dim, api_key=req.embedding_api_key,
             base_url=req.embedding_base_url, description=req.description)
@@ -113,15 +120,16 @@ async def create_kb(req: KBCreateRequest, request: Request):
 
 
 @router.get("/kbs")
-async def list_kbs(request: Request, user_id: str = "u1"):
-    kbs = await run_in_threadpool(request.app.state.kb_service.list_kbs, user_id)
-    return [_kb_dict(kb, user_id) for kb in kbs]
+async def list_kbs(request: Request, user: User = Depends(get_current_user)):
+    kbs = await run_in_threadpool(request.app.state.kb_service.list_kbs, user.id)
+    return [_kb_dict(kb, user.id) for kb in kbs]
 
 
 @router.get("/kbs/{kb_id}")
-async def get_kb(kb_id: str, request: Request, user_id: str = "u1"):
-    """查单个 KB（含入库状态，轮询入库进度用）。"""
-    return _kb_dict(await _get_kb(request, kb_id), user_id)
+async def get_kb(kb_id: str, request: Request,
+                 user: User = Depends(get_current_user)):
+    """查单个 KB（含入库状态，轮询入库进度用；per-user 视角字段按本人算）。"""
+    return _kb_dict(await _get_kb(request, kb_id), user.id)
 
 
 @router.patch("/kbs/{kb_id}")
@@ -139,13 +147,17 @@ async def update_kb(kb_id: str, req: KBUpdateRequest, request: Request):
 
 @router.get("/kbs/{kb_id}/search")
 async def search_kb(kb_id: str, query: str, request: Request, k: int = 5,
-                    user_id: str = "u1", mode: str | None = None):
-    """检索测试：mode=vector（纯向量）| hybrid（向量+BM25），默认全局配置。"""
+                    mode: str | None = None,
+                    user: User = Depends(get_current_user)):
+    """检索测试：mode=vector（纯向量）| hybrid（向量+BM25），默认全局配置。
+
+    可见性过滤按当前登录用户（public + 本人 private）。
+    """
     kb = await _get_kb(request, kb_id)
     mode = mode or request.app.state.settings.retrieval_mode
     return await run_in_threadpool(request.app.state.kb_service.search,
                                    kb.kb_id, query, k=k,
-                                   user_id=user_id, mode=mode)
+                                   user_id=user.id, mode=mode)
 
 
 class KBDeleteRequest(BaseModel):
@@ -257,17 +269,19 @@ async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,
 
 @router.patch("/kbs/{kb_id}/retrieval")
 async def update_kb_retrieval(kb_id: str, req: KBRetrievalUpdateRequest,
-                              request: Request, user_id: str = "u1"):
+                              request: Request,
+                              user: User = Depends(get_current_user)):
     """允许/禁止【当前用户】的对话检索此库（per-user，不影响其他用户）。"""
     await _get_kb(request, kb_id)
     kb = await run_in_threadpool(request.app.state.kb_service.set_retrieval,
-                                 kb_id, user_id, req.enabled)
-    return _kb_dict(kb, user_id)
+                                 kb_id, user.id, req.enabled)
+    return _kb_dict(kb, user.id)
 
 
 @router.post("/kbs/{kb_id}/rebuild")
 async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request,
-                     background: BackgroundTasks):
+                     background: BackgroundTasks,
+                     user: User = Depends(get_current_user)):
     """复制原 chunk 生成新 KB，旧 KB 保留。两种模式：
 
     - reembed（默认）：新嵌入模型重新向量化（可换模型）
@@ -281,7 +295,7 @@ async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request,
     svc = request.app.state.kb_service
     new_kb_id = uuid.uuid4().hex[:12]
     if req.mode == "copy":
-        background.add_task(svc.copy_kb, kb_id, req.user_id, new_kb_id)
+        background.add_task(svc.copy_kb, kb_id, user.id, new_kb_id)
         return {"status": "copying", "new_kb_id": new_kb_id}
     # reembed：先同步校验嵌入配置（非法 provider 立刻 400，不排队进后台）
     try:
@@ -297,7 +311,7 @@ async def rebuild_kb(kb_id: str, req: KBRebuildRequest, request: Request,
                         dim=req.embedding_dim,
                         api_key=req.embedding_api_key,
                         base_url=req.embedding_base_url,
-                        user_id=req.user_id, new_kb_id=new_kb_id)
+                        user_id=user.id, new_kb_id=new_kb_id)
     return {"status": "reembedding", "new_kb_id": new_kb_id}
 
 
@@ -310,10 +324,11 @@ async def get_rebuild_progress(kb_id: str, request: Request):
 
 
 @router.delete("/kbs/{kb_id}")
-async def delete_kb(kb_id: str, request: Request, user_id: str = "u1"):
+async def delete_kb(kb_id: str, request: Request,
+                    user: User = Depends(get_current_user)):
     """删除知识库：私人库仅属主可删；清理向量库 / 磁盘 chunk / 元数据。"""
     kb = await _get_kb(request, kb_id)
-    if kb.scope == "private" and kb.owner_user_id and kb.owner_user_id != user_id:
+    if kb.scope == "private" and kb.owner_user_id and kb.owner_user_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden: not kb owner")
     await run_in_threadpool(request.app.state.kb_service.delete_kb, kb_id)
     return {"deleted": kb_id}

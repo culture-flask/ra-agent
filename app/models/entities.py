@@ -2,7 +2,7 @@ from email.policy import default
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, SmallInteger, String, Text
 from sqlalchemy.orm import Mapped, mapped_collection, mapped_column, session
 
 from app.models.base import Base, utcnow
@@ -100,6 +100,29 @@ class ToolCallLog(Base):
     parent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class Feedback(Base):
+    """用户反馈：点赞/点踩一条回答（P3-19 反馈闭环）。
+
+    定位是**评测集的种子数据**：rating=1 的记录经 rag_test/build_golden_from_feedback.py
+    半自动整理成检索金标准，让评测集随真实使用增长。
+    hits 冗余存回答时引用面板的来源元数据（kb/scope/source/page/分数），
+    使每条 feedback 自成一条可回放的评测记录——不依赖 checkpoint 还在、
+    也不依赖前端 localStorage 存活。question/answer 落库前服务端截断，
+    防超大 payload。
+    """
+    __tablename__ = "feedbacks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    session_id: Mapped[str] = mapped_column(String(36), index=True)
+    rating: Mapped[int] = mapped_column(SmallInteger)   # 1 赞 / -1 踩
+    question: Mapped[str] = mapped_column(Text, default="")
+    answer: Mapped[str] = mapped_column(Text, default="")
+    hits: Mapped[list] = mapped_column(JSON, default=list)
+    comment: Mapped[str] = mapped_column(String(1000), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
 
 class Memory(Base):
     """长记忆：用户级命名空间，跨会话读取。

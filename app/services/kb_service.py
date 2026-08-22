@@ -32,6 +32,14 @@ from app.services.parsing import parse_file_pages
 logger = get_logger("kb_service")
 
 
+class KBRetrievalUnavailable(RuntimeError):
+    """该库当前不可检索（如嵌入模型与已入库向量维度不匹配）。
+
+    由 search() 在撞 Chroma 底层维度错误之前抛出（P1-5 fail-fast），
+    retrieve_node 捕获后跳过该库——一个坏库不拖垮整轮对话。
+    """
+
+
 def split_chunks(text: str, size: int = 1000, overlap: int = 150) -> list[str]:
     """分块：固定窗口 + 重叠（正式解析流程的第 2 步）。"""
     text = text.strip()
@@ -634,6 +642,15 @@ class KBService:
         warn = self.embedding_mismatch(kb)
         if warn:
             logger.warning("embedding mismatch kb=%s: %s", kb_id, warn)
+        # P1-5 fail-fast：维度不一致时查询向量与库存向量必然在 Chroma 层崩溃——
+        # 与其让异常以底层形态炸出拖垮整轮对话，不如提前抛类型化异常交由
+        # retrieve_node 的单库隔离跳过。（仅 provider/model 不同但维度相同的库
+        # 仍可查，语义偏差由 embedding_mismatch 提醒，不在此拦截。）
+        em = kb.embedded_model or {}
+        if em and em.get("dim") != kb.embedding_dim:
+            raise KBRetrievalUnavailable(
+                f"知识库「{kb.name}」({kb_id}) 向量由 dim={em.get('dim')} 嵌入，"
+                f"当前配置 dim={kb.embedding_dim}，请重新上传文档或重建后再参与检索")
 
         if mode == "hybrid":
             # 每腿取 max(k, 15)：候选池略深于输出 k，避免一路深位（第 9~15 名）

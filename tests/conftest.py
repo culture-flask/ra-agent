@@ -62,12 +62,15 @@ os.environ["CHROMA_DIR"] = tempfile.mkdtemp(prefix="ra-test-chroma-")
 import pytest
 from sqlalchemy import text
 
-from app.core.db import engine
-from app.models import Conversation, Memory
+from app.core.db import SessionLocal, engine
+from app.core.jwt_utils import create_access_token
+from app.core.security import hash_password
+from app.models import Conversation, Feedback, Memory, User
 
 # 测试库 schema 迁移（与 app.main lifespan 相同的幂等 DDL）：
 # service 级测试不走 lifespan，先在这里补表/补列，否则查询新列直接报错
 Conversation.__table__.create(engine, checkfirst=True)
+Feedback.__table__.create(engine, checkfirst=True)   # P3-19 反馈闭环
 Memory.__table__.create(engine, checkfirst=True)
 with engine.begin() as conn:
     conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
@@ -93,6 +96,7 @@ def clean_db():
     这是"测试可重复"的最简单方案；更完整的"每个测试事务回滚"技术在第 7 天讲。
     """
     with engine.begin() as conn:          # 事务：DELETE 执行后自动提交
+        conn.execute(text("DELETE FROM feedbacks"))
         conn.execute(text("DELETE FROM user_llm_config"))
         conn.execute(text("DELETE FROM memories"))  # 子表链按外键方向删
         conn.execute(text("DELETE FROM kbs"))       # 再删子表(有外键指向 users)
@@ -101,3 +105,31 @@ def clean_db():
         # 按 thread_id 泄漏进下一轮测试（会话状态必须每轮重置）
         conn.execute(text("TRUNCATE checkpoint_writes, checkpoint_blobs, checkpoints CASCADE"))
     yield
+
+
+# ---------- P0-1 鉴权辅助 ----------
+def ensure_user(user_id: str) -> None:
+    """按给定 id 直接建用户（幂等）。
+
+    服务层/图状态的测试惯用字面量 u1/u2/conv-u1 标识用户；鉴权改造后
+    API 身份来自 token 且 get_current_user 要查真实用户行，这里按需补行
+    （用户名加 t- 前缀避免与注册类测试撞 unique 约束）。
+    """
+    with SessionLocal() as db:
+        if not db.get(User, user_id):
+            db.add(User(id=user_id, username=f"t-{user_id}",
+                        password_hash=hash_password("x")))
+            db.commit()
+
+
+@pytest.fixture
+def auth_factory():
+    """造指定用户的 Bearer 头：auth_factory("u2") -> {Authorization: ...}。
+
+    服务端签发（create_access_token），与生产 /auth/login 同一密钥与算法；
+    不走 HTTP 注册是为了让既有测试的字面量 user_id 继续成立。
+    """
+    def _make(user_id: str = "u1") -> dict:
+        ensure_user(user_id)
+        return {"Authorization": f"Bearer {create_access_token(user_id)}"}
+    return _make

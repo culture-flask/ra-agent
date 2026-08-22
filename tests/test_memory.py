@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.db import SessionLocal
 from app.core.tracing import Tracer
-from app.graph.nodes import WorkflowContext
+from app.graph.nodes import WorkflowContext, extract_memory_node, save_memory_node
 from app.models import User
 from app.graph.workflow import build_graph
 from app.services.kb_service import KBService
@@ -79,11 +79,32 @@ def _make_ctx(responses, captured=None):
 
 
 def _chat(ctx, session_id: str, message: str):
+    """跑一轮对话并显式补跑记忆管线。
+
+    P1-8 之后 extract/save 不在图内——生产由 API 层在 done 之后以后台任务
+    补跑；测试里直接调用同一段节点逻辑，保持对抽取/审核/落库行为的覆盖。
+    """
     graph = _run(build_graph(ctx))
-    return _run(graph.ainvoke(
+    result = _run(graph.ainvoke(
         {"user_id": "u1", "session_id": session_id, "query": message,
          "messages": [HumanMessage(content=message)]},
         config={"configurable": {"thread_id": session_id}}))
+    state = {"user_id": "u1",
+             "messages": result["messages"],
+             "temperature": None}
+    out = _run(extract_memory_node(ctx, state))
+    state.update(out)
+    _run(save_memory_node(ctx, state))
+    return result
+
+
+def test_graph_topology_moves_memory_out():
+    """P1-8 结构守卫：记忆抽/存移出图（由 API 层后台补跑），load/compact 仍在图内。"""
+    ctx, _ = _make_ctx([])
+    g = _run(build_graph(ctx))
+    assert {"load_memory", "compact"} <= set(g.nodes)
+    assert "extract_memory" not in g.nodes
+    assert "save_memory" not in g.nodes
 
 
 def test_memory_saved_after_chat():
@@ -136,11 +157,11 @@ def test_review_rejects_bad_memory():
     assert ms.get_all("u1") == {}
 
 
-def test_memory_api():
-    """GET /api/v1/memories 返回用户记忆。"""
+def test_memory_api(auth_factory):
+    """GET /api/v1/memories 返回当前用户记忆（P0-1 后身份来自 token）。"""
     from fastapi.testclient import TestClient
     from app.main import app
     with TestClient(app) as c:
-        r = c.get("/api/v1/memories", params={"user_id": "u1"})
+        r = c.get("/api/v1/memories", headers=auth_factory("u1"))
         assert r.status_code == 200
         assert isinstance(r.json(), list)

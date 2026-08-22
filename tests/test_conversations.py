@@ -1,4 +1,8 @@
-"""会话跨设备同步：conversations 登记 + 列表/历史/删除 API。"""
+"""会话跨设备同步：conversations 登记 + 列表/历史/删除 API。
+
+P0-1 鉴权改造后：身份来自 Bearer token（auth_factory 夹具按字面量 id
+造真实用户行并签发 token），403 场景改为"第二个用户的 token"。
+"""
 
 import asyncio
 import tempfile
@@ -42,7 +46,7 @@ def test_split_attachments():
     assert q2 == "普通消息" and names2 == []
 
 
-def test_register_and_list():
+def test_register_and_list(auth_factory):
     _register_conversation("conv-u1", "conv-list-a", "第一个会话")
     _register_conversation("conv-u1", "conv-list-b", "第二个会话")
     _register_conversation("conv-u2", "conv-list-c", "别人的会话")
@@ -50,12 +54,13 @@ def test_register_and_list():
         time.sleep(0.02)                            # 确保 updated_at 分得开
         _register_conversation("conv-u1", "conv-list-a", "不该覆盖")  # 仅刷新时间
         with TestClient(app) as c:
-            r = c.get("/api/v1/conversations", params={"user_id": "conv-u1"})
+            r = c.get("/api/v1/conversations",
+                      headers=auth_factory("conv-u1"))
             assert r.status_code == 200
             convs = r.json()["conversations"]
             ids = [x["session_id"] for x in convs]
             assert {"conv-list-a", "conv-list-b"} <= set(ids)
-            assert "conv-list-c" not in ids          # 用户隔离
+            assert "conv-list-c" not in ids          # 用户隔离（token 视角）
             a = next(x for x in convs if x["session_id"] == "conv-list-a")
             b = next(x for x in convs if x["session_id"] == "conv-list-b")
             assert a["title"] == "第一个会话"         # 标题不随刷新变化
@@ -64,20 +69,22 @@ def test_register_and_list():
         _del_rows("conv-list-a", "conv-list-b", "conv-list-c")
 
 
-def test_rename_conversation():
+def test_rename_conversation(auth_factory):
     """会话改名：PATCH title 生效；改名后再发消息登记不覆盖；权限与空名校验。"""
     _register_conversation("conv-u1", "conv-ren-a", "自动标题：量子计算入门")
     try:
         with TestClient(app) as c:
+            h1 = auth_factory("conv-u1")
+            h2 = auth_factory("conv-u2")
             # 改名
             r = c.patch("/api/v1/conversations/conv-ren-a",
-                        params={"user_id": "conv-u1"},
+                        headers=h1,
                         json={"title": "量子计算资料整理"})
             assert r.status_code == 200
             assert r.json()["title"] == "量子计算资料整理"
             # 列表可见新名
             convs = c.get("/api/v1/conversations",
-                          params={"user_id": "conv-u1"}).json()["conversations"]
+                          headers=h1).json()["conversations"]
             a = next(x for x in convs if x["session_id"] == "conv-ren-a")
             assert a["title"] == "量子计算资料整理"
             # 改名后再登记（发消息）：title 不被自动标题覆盖
@@ -86,14 +93,14 @@ def test_rename_conversation():
                 assert db.get(Conversation, "conv-ren-a").title == "量子计算资料整理"
             # 空名 → 400
             assert c.patch("/api/v1/conversations/conv-ren-a",
-                           params={"user_id": "conv-u1"},
+                           headers=h1,
                            json={"title": "   "}).status_code == 400
             # 非本人 → 403；不存在 → 404
             assert c.patch("/api/v1/conversations/conv-ren-a",
-                           params={"user_id": "conv-u2"},
+                           headers=h2,
                            json={"title": "x"}).status_code == 403
             assert c.patch("/api/v1/conversations/ghost",
-                           params={"user_id": "conv-u1"},
+                           headers=h1,
                            json={"title": "x"}).status_code == 404
     finally:
         _del_rows("conv-ren-a")
@@ -115,7 +122,7 @@ class _FakeLLMService:
         return _FakeModel()
 
 
-def test_messages_history_and_delete():
+def test_messages_history_and_delete(auth_factory):
     """假 LLM 图跑一轮（写真实 checkpointer）→ API 读回历史（附件拆 chips）→ 删除清理。"""
     from app.graph.nodes import WorkflowContext
     from app.graph.workflow import build_graph
@@ -136,10 +143,11 @@ def test_messages_history_and_delete():
                             "messages": [{"role": "user", "content": user_content}]},
                            config=cfg))
         _register_conversation("conv-u1", sid, "这是什么方法？")
+        h1 = auth_factory("conv-u1")
+        h2 = auth_factory("conv-intruder")
         with TestClient(app) as c:
             app.state.graph = graph                 # 换成假 LLM 图（同一 checkpointer）
-            r = c.get(f"/api/v1/conversations/{sid}/messages",
-                      params={"user_id": "conv-u1"})
+            r = c.get(f"/api/v1/conversations/{sid}/messages", headers=h1)
             assert r.status_code == 200
             msgs = r.json()["messages"]
             assert msgs[0]["role"] == "user"
@@ -148,15 +156,12 @@ def test_messages_history_and_delete():
             assert msgs[-1]["role"] == "assistant"
             assert msgs[-1]["content"] == "历史回答"
 
-            r2 = c.get(f"/api/v1/conversations/{sid}/messages",
-                       params={"user_id": "intruder"})
+            r2 = c.get(f"/api/v1/conversations/{sid}/messages", headers=h2)
             assert r2.status_code == 403             # 他人不可读
 
-            r3 = c.delete(f"/api/v1/conversations/{sid}",
-                          params={"user_id": "conv-u1"})
+            r3 = c.delete(f"/api/v1/conversations/{sid}", headers=h1)
             assert r3.status_code == 200             # 行 + checkpoint 一并删
-            r4 = c.get(f"/api/v1/conversations/{sid}/messages",
-                       params={"user_id": "conv-u1"})
+            r4 = c.get(f"/api/v1/conversations/{sid}/messages", headers=h1)
             assert r4.json()["messages"] == []       # 行已删 → 视为没聊过
     finally:
         _del_rows(sid)

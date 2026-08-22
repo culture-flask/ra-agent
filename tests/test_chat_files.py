@@ -1,4 +1,7 @@
-"""对话附件：/chat/files 上传解析 + 附件文本拼进用户消息。"""
+"""对话附件：/chat/files 上传解析 + 附件文本拼进用户消息。
+
+P0-1 后 /chat/files 要求登录态；_initial_state 的 user_id 为显式参数。
+"""
 
 from fastapi.testclient import TestClient
 
@@ -6,10 +9,11 @@ from app.api.chat import _CHAT_FILES, ChatRequest, _initial_state
 from app.main import app
 
 
-def test_upload_files_mixed():
+def test_upload_files_mixed(auth_factory):
     """批量上传：合法 txt 解析成功，空文件/不支持的格式逐个报错，互不影响。"""
     with TestClient(app) as c:
-        r = c.post("/api/v1/chat/files", files=[
+        r = c.post("/api/v1/chat/files", headers=auth_factory(),
+                   files=[
             ("files", ("note.txt", "附件内容：神经区分器训练技巧".encode(), "text/plain")),
             ("files", ("bad.xyz", b"\x00\x01", "application/octet-stream")),
             ("files", ("empty.txt", b"", "text/plain")),
@@ -26,9 +30,9 @@ def test_upload_files_mixed():
 def test_initial_state_merges_attachments():
     """附件全文拼进本轮用户消息（进 checkpoint），query 保持原始问题。"""
     _CHAT_FILES["f1"] = {"filename": "note.txt", "text": "文件正文ABC"}
-    req = ChatRequest(user_id="u1", session_id="s", message="总结一下",
+    req = ChatRequest(session_id="s", message="总结一下",
                       attachments=["f1", "ghost"])     # ghost：未知 id 忽略
-    state = _initial_state(req)
+    state = _initial_state(req, "u1")
     msg = state["messages"][-1]
     assert msg["content"].startswith("总结一下")        # 问题在前（标题提取用）
     assert "[附件：note.txt]" in msg["content"] and "文件正文ABC" in msg["content"]
@@ -38,6 +42,6 @@ def test_initial_state_merges_attachments():
 def test_rewind_does_not_append_or_merge():
     """rewind 场景：不追加消息也不拼附件（checkpoint 里已含上次的完整文本）。"""
     _CHAT_FILES["f2"] = {"filename": "a.md", "text": "X"}
-    req = ChatRequest(user_id="u1", session_id="s", message="重答", attachments=["f2"])
-    state = _initial_state(req, append_message=False)
+    req = ChatRequest(session_id="s", message="重答", attachments=["f2"])
+    state = _initial_state(req, "u1", append_message=False)
     assert state["messages"] == []

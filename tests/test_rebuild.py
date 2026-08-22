@@ -143,30 +143,31 @@ def test_dimension_mismatch_rejected():
         bad_vs.add([ChunkRecord(id="x1", text="错维", payload={"scope": "public"})])
 
 
-def test_rebuild_api():
+def test_rebuild_api(auth_factory):
     """API：重建改为异步——POST 立即返回 new_kb_id，轮询进度到 ready。"""
-    _ensure_user("u1")
+    _ensure_user("u1")                        # 重建库私人归属 u1，FK 需要用户行
+    h = auth_factory("u1")
     with TestClient(app) as c:
-        kb = c.post("/api/v1/kbs", json={
-            "name": "API重建", "scope": "public", "user_id": "u1",
+        kb = c.post("/api/v1/kbs", headers=h, json={
+            "name": "API重建", "scope": "public",
             "texts": ["量子比特是基本单元"],
             "description": "量子计算资料",
             "embedding_provider": "local"}).json()
-        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/rebuild",
+        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/rebuild", headers=h,
                    json={"embedding_provider": "local",
-                         "embedding_model_id": "mini-b", "user_id": "u1"})
+                         "embedding_model_id": "mini-b"})
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "reembedding" and body["new_kb_id"]
         new_id = body["new_kb_id"]
         # 轮询进度端点 → ready
         for _ in range(40):
-            p = c.get(f"/api/v1/kbs/{new_id}/rebuild-progress").json()
+            p = c.get(f"/api/v1/kbs/{new_id}/rebuild-progress", headers=h).json()
             if p and p["status"] in ("ready", "failed"):
                 break
             time.sleep(0.2)
         assert p and p["status"] == "ready" and p["pct"] == 100
-        new = c.get(f"/api/v1/kbs/{new_id}").json()
+        new = c.get(f"/api/v1/kbs/{new_id}", headers=h).json()
         assert new["kb_id"] == new_id and new["kb_id"] != kb["kb_id"]
         assert new["embedding_model_id"] == "mini-b"
         assert new["scope"] == "private"           # 重建库默认私人
@@ -227,15 +228,16 @@ def test_ingest_failure_after_config_change_keeps_old_files():
     assert [d["filename"] for d in ks.list_documents(kb.kb_id)] == ["a.txt"]
 
 
-def test_api_update_embedding():
+def test_api_update_embedding(auth_factory):
     """API：PATCH /kbs/{id}/embedding 修改配置；非法 provider → 400。"""
+    h = auth_factory()
     with TestClient(app) as c:
-        kb = c.post("/api/v1/kbs", json={
-            "name": "API改库", "scope": "public", "user_id": "u1",
+        kb = c.post("/api/v1/kbs", headers=h, json={
+            "name": "API改库", "scope": "public",
             "description": "改配置测试库",
             "embedding_provider": "local"}).json()
         # 换到自定义端点（llama.cpp 风格）→ 200
-        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/embedding", json={
+        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/embedding", headers=h, json={
             "embedding_provider": "llama.cpp", "embedding_model_id": "qwen3-embedding:8b",
             "embedding_dim": 4096, "embedding_base_url": "http://127.0.0.1:18080/v1"})
         assert r.status_code == 200
@@ -243,12 +245,34 @@ def test_api_update_embedding():
         assert d["embedding_provider"] == "llama.cpp"
         assert d["embedding_dim"] == 4096
         # 非法 provider 且无可用端点（base_url 被清空）→ 400 且配置不变
-        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/embedding",
+        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/embedding", headers=h,
                      json={"embedding_provider": "nonexistent",
                            "embedding_base_url": ""})
         assert r2.status_code == 400
-        d2 = c.get(f"/api/v1/kbs/{kb['kb_id']}").json()
+        d2 = c.get(f"/api/v1/kbs/{kb['kb_id']}", headers=h).json()
         assert d2["embedding_provider"] == "llama.cpp"
+
+
+def test_search_fails_fast_on_dim_mismatch():
+    """P1-5 fail-fast：入库后改了维度配置 → search 抛类型化异常而非底层崩溃。
+
+    异常由 retrieve_node 的单库隔离捕获跳过（见 test_graph 的
+    test_retrieve_skips_broken_kb），这里验证服务层语义与提示文案。
+    """
+    from app.services.kb_service import KBRetrievalUnavailable
+
+    ks = _make_ks()
+    kb = ks.create_kb("错维库", "public", None,
+                      ["量子比特可以处于叠加态"], description="x")
+    with SessionLocal() as db:
+        row = db.get(KnowledgeBase, kb.kb_id)
+        row.embedding_dim += 1                  # 模拟"入库后改了配置"
+        db.commit()
+    try:
+        ks.search(kb.kb_id, "叠加态", k=2, user_id="u1")
+        raise AssertionError("应当抛出 KBRetrievalUnavailable")
+    except KBRetrievalUnavailable as e:
+        assert "dim=385" in str(e) and "重建" in str(e)   # 文案带两侧维度与出路
 
 
 def test_set_retrieval_per_user_isolated():
@@ -292,27 +316,33 @@ def test_set_retrieval_recovers_legacy_global_disable():
     assert kb.kb_id in {k.kb_id for k in ks.list_queryable_kbs("u2")}
 
 
-def test_api_retrieval_toggle_per_user():
-    """API：PATCH /kbs/{id}/retrieval?user_id= per-user 开关；缺 enabled → 422。"""
+def test_api_retrieval_toggle_per_user(auth_factory):
+    """API：PATCH /kbs/{id}/retrieval 的 per-user 开关；缺 enabled → 422。
+
+    P0-1 后视角由 token 决定：u1/u2 各持一个 token，互不干扰。
+    """
+    h1 = auth_factory("u1")
+    h2 = auth_factory("u2")
     with TestClient(app) as c:
-        kb = c.post("/api/v1/kbs", json={
-            "name": "API开关库", "scope": "public", "user_id": "u1",
+        kb = c.post("/api/v1/kbs", headers=h1, json={
+            "name": "API开关库", "scope": "public",
             "description": "检索开关测试库"}).json()
         assert kb["retrieval_enabled_for_user"] is True
 
         # u1 禁用：只影响 u1，u2 视角仍是可用
-        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval?user_id=u1",
-                    json={"enabled": False})
+        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval",
+                    headers=h1, json={"enabled": False})
         assert r.status_code == 200
         assert r.json()["retrieval_enabled_for_user"] is False
-        assert c.get(f"/api/v1/kbs/{kb['kb_id']}?user_id=u2"
+        assert c.get(f"/api/v1/kbs/{kb['kb_id']}", headers=h2
                      ).json()["retrieval_enabled_for_user"] is True
 
-        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval?user_id=u1",
-                     json={"enabled": True})
+        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval",
+                     headers=h1, json={"enabled": True})
         assert r2.json()["retrieval_enabled_for_user"] is True
 
-        r3 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval?user_id=u1", json={})
+        r3 = c.patch(f"/api/v1/kbs/{kb['kb_id']}/retrieval",
+                     headers=h1, json={})
         assert r3.status_code == 422
 
 
@@ -344,54 +374,56 @@ def test_copy_kb_full_clone_without_embedding():
     assert ks.search(new.kb_id, "量子比特", k=2, user_id="u1")
 
 
-def test_copy_kb_via_api():
+def test_copy_kb_via_api(auth_factory):
     """API：POST /kbs/{id}/rebuild mode=copy → 异步复制，轮询进度到 ready。"""
-    _ensure_user("u1")
+    _ensure_user("u1")                        # 复制库私人归属 u1，FK 需要用户行
+    h = auth_factory("u1")
     with TestClient(app) as c:
-        kb = c.post("/api/v1/kbs", json={
-            "name": "API复制源", "scope": "public", "user_id": "u1",
+        kb = c.post("/api/v1/kbs", headers=h, json={
+            "name": "API复制源", "scope": "public",
             "texts": ["量子纠错需要冗余量子比特"],
             "description": "API 复制测试", "embedding_provider": "local"}).json()
-        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/rebuild",
-                   json={"mode": "copy", "user_id": "u1"})
+        r = c.post(f"/api/v1/kbs/{kb['kb_id']}/rebuild", headers=h,
+                   json={"mode": "copy"})
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "copying" and body["new_kb_id"]
         new_id = body["new_kb_id"]
         for _ in range(40):
-            p = c.get(f"/api/v1/kbs/{new_id}/rebuild-progress").json()
+            p = c.get(f"/api/v1/kbs/{new_id}/rebuild-progress", headers=h).json()
             if p and p["status"] in ("ready", "failed"):
                 break
             time.sleep(0.2)
         assert p and p["status"] == "ready" and p["pct"] == 100
-        d = c.get(f"/api/v1/kbs/{new_id}").json()
+        d = c.get(f"/api/v1/kbs/{new_id}", headers=h).json()
         assert d["scope"] == "private"
         assert d["kb_id"] != kb["kb_id"]
         assert d["embedding_model_id"] == kb["embedding_model_id"]
 
 
-def test_update_kb_name_and_description():
+def test_update_kb_name_and_description(auth_factory):
     """名称/介绍创建后随时可改：PATCH /kbs/{id}；空名 400；不存在的库 404。"""
+    h = auth_factory()
     with TestClient(app) as c:
-        kb = c.post("/api/v1/kbs", json={
-            "name": "旧名字", "scope": "public", "user_id": "u1",
+        kb = c.post("/api/v1/kbs", headers=h, json={
+            "name": "旧名字", "scope": "public",
             "description": "旧介绍", "embedding_provider": "local"}).json()
         # 只改名字
-        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}",
+        r = c.patch(f"/api/v1/kbs/{kb['kb_id']}", headers=h,
                     json={"name": "新名字"})
         assert r.status_code == 200
         d = r.json()
         assert d["name"] == "新名字" and d["description"] == "旧介绍"
         # 名字 + 介绍一起改
-        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}",
+        r2 = c.patch(f"/api/v1/kbs/{kb['kb_id']}", headers=h,
                      json={"name": "更好名字", "description": "新介绍"})
         assert r2.json()["description"] == "新介绍"
         # 空名 → 400；空介绍允许（仅清空）
-        assert c.patch(f"/api/v1/kbs/{kb['kb_id']}",
+        assert c.patch(f"/api/v1/kbs/{kb['kb_id']}", headers=h,
                        json={"name": "  "}).status_code == 400
-        assert c.patch(f"/api/v1/kbs/{kb['kb_id']}",
+        assert c.patch(f"/api/v1/kbs/{kb['kb_id']}", headers=h,
                        json={"description": ""}).json()["description"] == ""
-        assert c.patch("/api/v1/kbs/nonexistent",
+        assert c.patch("/api/v1/kbs/nonexistent", headers=h,
                        json={"name": "x"}).status_code == 404
 
 

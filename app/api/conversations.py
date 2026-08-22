@@ -4,23 +4,29 @@
 现在每次发消息后端登记 conversations 表（见 chat._register_conversation），
 列表与历史以服务端为准；消息本体仍从 checkpointer 读取（单一事实来源，
 不重复存一份）。历史恢复是纯文本（steps/引用面板等富信息仅存于原设备）。
+
+P0-1 鉴权改造：身份一律取自 Bearer token（core.deps.get_current_user），
+客户端传入的 user_id 参数废除——此前任何人改个参数就能读/删他人会话。
 """
 
 import re
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.chat import _ATT_MARK
 from app.core.db import SessionLocal
+from app.core.deps import get_current_user
 from app.core.logging import get_logger
-from app.models import Conversation
+from app.models import Conversation, User
 
 logger = get_logger("conversations")
 
-router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
+# 路由级闸门：本组全部端点要求登录态
+router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"],
+                   dependencies=[Depends(get_current_user)])
 
 
 def _get_row(session_id: str) -> Conversation | None:
@@ -52,12 +58,14 @@ def _content_text(content) -> str:
 
 
 @router.get("")
-async def list_conversations(user_id: str = "u1"):
-    """该用户的会话列表（按最近活跃倒序），跨设备共享。"""
+async def list_conversations(user: User = Depends(get_current_user)):
+    """当前用户的会话列表（按最近活跃倒序），跨设备共享。"""
+    uid = user.id
+
     def _list() -> list[dict]:
         with SessionLocal() as db:
             rows = db.scalars(select(Conversation).where(
-                Conversation.user_id == user_id)
+                Conversation.user_id == uid)
                 .order_by(Conversation.updated_at.desc()).limit(200)).all()
             return [{"session_id": r.session_id, "title": r.title,
                      "updated_at": r.updated_at.isoformat()}
@@ -67,15 +75,16 @@ async def list_conversations(user_id: str = "u1"):
 
 @router.get("/{session_id}/messages")
 async def conversation_messages(session_id: str, request: Request,
-                                user_id: str = "u1"):
+                                user: User = Depends(get_current_user)):
     """会话历史：从 checkpointer 读消息（user/assistant 交替的纯文本）。
 
-    未登记的会话视为没聊过，返回空列表（前端当作新会话处理）。
+    未登记的会话视为没聊过，返回空列表（前端当作新会话处理）；
+    已登记但不属于当前用户 → 403（不暴露他人会话存在性之外的任何内容）。
     """
     row = await run_in_threadpool(_get_row, session_id)
     if row is None:
         return {"session_id": session_id, "messages": []}
-    if row.user_id != user_id:
+    if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not conversation owner")
     graph = request.app.state.graph
     snap = await graph.aget_state({"configurable": {"thread_id": session_id}})
@@ -103,7 +112,7 @@ class ConversationRenameRequest(BaseModel):
 
 @router.patch("/{session_id}")
 async def rename_conversation(session_id: str, req: ConversationRenameRequest,
-                              user_id: str = "u1"):
+                              user: User = Depends(get_current_user)):
     """修改会话名称（仅本人）。改名后不被自动标题覆盖——
     发消息只刷新 updated_at，title 仅首次登记时生成（见 chat._register_conversation）。
     """
@@ -113,7 +122,7 @@ async def rename_conversation(session_id: str, req: ConversationRenameRequest,
     row = await run_in_threadpool(_get_row, session_id)
     if row is None:
         raise HTTPException(status_code=404, detail="conversation not found")
-    if row.user_id != user_id:
+    if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not conversation owner")
 
     def _rename():
@@ -127,12 +136,12 @@ async def rename_conversation(session_id: str, req: ConversationRenameRequest,
 
 @router.delete("/{session_id}")
 async def delete_conversation(session_id: str, request: Request,
-                              user_id: str = "u1"):
+                              user: User = Depends(get_current_user)):
     """删除会话：登记行 + checkpoint 线程一并清理（仅本人可删）。"""
     row = await run_in_threadpool(_get_row, session_id)
     if row is None:
         raise HTTPException(status_code=404, detail="conversation not found")
-    if row.user_id != user_id:
+    if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not conversation owner")
 
     def _delete():

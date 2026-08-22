@@ -1,4 +1,8 @@
-"""Day 9 API 测试：provider 目录、配置 CRUD（掩码）、一键模型列表（mock）、隔离。"""
+"""Day 9 API 测试：provider 目录、配置 CRUD（掩码）、一键模型列表（mock）、隔离。
+
+P0-1 鉴权改造后：全部端点要求 Bearer token，身份由 token 决定，
+请求体/query 的 user_id 参数废除——隔离语义改为"换 token 即换视角"。
+"""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,15 +11,20 @@ from app.main import app
 
 
 def _register(c, username):
+    """注册并返回该用户的 access_token（不再返回 id——身份以 token 为准）。"""
     reg = c.post("/api/v1/auth/register",
                  json={"username": username, "password": "pass1234"}).json()
-    return c.get("/api/v1/auth/me",
-                 headers={"Authorization": f"Bearer {reg['access_token']}"}).json()["id"]
+    return reg["access_token"]
+
+
+def _auth(tok):
+    return {"Authorization": f"Bearer {tok}"}
 
 
 def test_providers_catalog():
     with TestClient(app) as c:
-        p = c.get("/api/v1/llm/providers").json()
+        tok = _register(c, "provcat")
+        p = c.get("/api/v1/llm/providers", headers=_auth(tok)).json()
         assert "sensenova" not in p                 # 已从厂商目录移除
         assert "openai" in p and "deepseek" in p
         assert "moonshot" in p and "zhipu" in p     # 新增常用厂商
@@ -26,7 +35,8 @@ def test_retrieval_settings_endpoint():
     """GET /settings/retrieval 返回 yaml 检索参数（前端默认值来源，与 yaml 一致）。"""
     from app.settings import Settings
     with TestClient(app) as c:
-        s = c.get("/api/v1/settings/retrieval").json()
+        tok = _register(c, "setcat")
+        s = c.get("/api/v1/settings/retrieval", headers=_auth(tok)).json()
         cfg = Settings.load()
         assert s["per_kb_k"] == cfg.retrieval_per_kb_k
         assert s["total_k"] == cfg.retrieval_total_k
@@ -36,29 +46,44 @@ def test_retrieval_settings_endpoint():
         assert s["mode"] == cfg.retrieval_mode
 
 
+def test_unauthenticated_rejected():
+    """P0-1：无 token 访问业务端点 → 401（改造前任何参数都能通）。"""
+    with TestClient(app) as c:
+        assert c.get("/api/v1/llm/configs").status_code == 401
+        assert c.get("/api/v1/conversations").status_code == 401
+        assert c.get("/api/v1/kbs").status_code == 401
+        assert c.get("/api/v1/memories").status_code == 401
+        assert c.get("/api/v1/traces").status_code == 401
+        # 假 token（签名不对）同样 401
+        bad = {"Authorization": "Bearer not-a-real-token"}
+        assert c.get("/api/v1/llm/configs", headers=bad).status_code == 401
+
+
 def test_config_save_and_masked_list():
     with TestClient(app) as c:
-        uid = _register(c, "cfgtest1")
-        r = c.post("/api/v1/llm/configs", json={
-            "user_id": uid, "provider": "sensenova",
+        tok = _register(c, "cfgtest1")
+        r = c.post("/api/v1/llm/configs", headers=_auth(tok), json={
+            "provider": "sensenova",
             "base_url": "https://token.sensenova.cn/v1",
             "model_id": "deepseek-v4-flash",
             "api_key": "sk-abcdefgh123456", "is_default": True})
         assert r.status_code == 200
         assert r.json()["api_key_masked"] == "sk-a...3456"
 
-        cfgs = c.get("/api/v1/llm/configs", params={"user_id": uid}).json()
+        cfgs = c.get("/api/v1/llm/configs", headers=_auth(tok)).json()
         assert len(cfgs) == 1
         assert "abcdefgh" not in str(cfgs)            # 永不明文
 
 
 def test_configs_user_isolated():
+    """换 token 即换视角：B 看不到 A 存的配置。"""
     with TestClient(app) as c:
-        uid1 = _register(c, "cfgtest2")
-        c.post("/api/v1/llm/configs", json={
-            "user_id": uid1, "provider": "sensenova",
+        tok1 = _register(c, "cfgtest2")
+        c.post("/api/v1/llm/configs", headers=_auth(tok1), json={
+            "provider": "sensenova",
             "base_url": "https://x/v1", "model_id": "m1", "api_key": "k1"})
-        cfgs = c.get("/api/v1/llm/configs", params={"user_id": "u2"}).json()
+        tok2 = _register(c, "cfgtest2b")
+        cfgs = c.get("/api/v1/llm/configs", headers=_auth(tok2)).json()
         assert cfgs == []                             # 他人配置不可见
 
 
@@ -96,7 +121,8 @@ def test_custom_provider_mocked():
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(m.httpx, "AsyncClient", FakeClient)
     with TestClient(a) as c:
-        r = c.post("/api/v1/llm/models", json={
+        tok = _register(c, "customprov")
+        r = c.post("/api/v1/llm/models", headers=_auth(tok), json={
             "provider": "ollama", "base_url": "http://x:11434/v1", "api_key": "k"})
         assert r.status_code == 200
         assert r.json() == [{"id": "local-model", "context_window": None}]
@@ -106,65 +132,67 @@ def test_custom_provider_mocked():
 def test_set_default_switches_between_configs():
     """已保存的配置之间可随时切换默认（互斥，且不影响他人）。"""
     with TestClient(app) as c:
-        uid = _register(c, "cfgswitch1")
-        r1 = c.post("/api/v1/llm/configs", json={
-            "user_id": uid, "provider": "sensenova",
+        tok = _register(c, "cfgswitch1")
+        h = _auth(tok)
+        r1 = c.post("/api/v1/llm/configs", headers=h, json={
+            "provider": "sensenova",
             "base_url": "https://a/v1", "model_id": "m-a",
             "api_key": "sk-aaaaaaaa1111", "is_default": True}).json()
-        r2 = c.post("/api/v1/llm/configs", json={
-            "user_id": uid, "provider": "openai",
+        r2 = c.post("/api/v1/llm/configs", headers=h, json={
+            "provider": "openai",
             "base_url": "https://b/v1", "model_id": "m-b",
             "api_key": "sk-bbbbbbbb2222", "is_default": False}).json()
 
         def defaults():
             return [x["id"] for x in c.get("/api/v1/llm/configs",
-                                           params={"user_id": uid}).json()
+                                           headers=h).json()
                     if x["is_default"]]
 
         assert defaults() == [r1["id"]]
 
         # 把 m-b 切换为默认 → 互斥：m-a 不再是默认
         assert c.patch(f"/api/v1/llm/configs/{r2['id']}/default",
-                       params={"user_id": uid}).status_code == 200
+                       headers=h).status_code == 200
         assert defaults() == [r2["id"]]
 
         # 再切回 m-a
         assert c.patch(f"/api/v1/llm/configs/{r1['id']}/default",
-                       params={"user_id": uid}).status_code == 200
+                       headers=h).status_code == 200
         assert defaults() == [r1["id"]]
 
 
 def test_set_default_rejects_other_users_config():
-    """不能把别人的配置设为默认（越权防护）。"""
+    """不能把别人的配置设为默认（越权防护）：服务层校验属主 → 404。"""
     with TestClient(app) as c:
-        uid = _register(c, "cfgswitch2")
-        r = c.post("/api/v1/llm/configs", json={
-            "user_id": uid, "provider": "sensenova",
+        tok_a = _register(c, "cfgswitch2")
+        r = c.post("/api/v1/llm/configs", headers=_auth(tok_a), json={
+            "provider": "sensenova",
             "base_url": "https://a/v1", "model_id": "m-a",
             "api_key": "sk-aaaaaaaa1111"}).json()
+        tok_b = _register(c, "cfgswitch2b")
         resp = c.patch(f"/api/v1/llm/configs/{r['id']}/default",
-                       params={"user_id": "someone-else"})
+                       headers=_auth(tok_b))
         assert resp.status_code == 404
-        # 原用户的默认状态不受影响（本就没设默认，仍无默认）
-        cfgs = c.get("/api/v1/llm/configs", params={"user_id": uid}).json()
+        # 原用户的配置不受影响（本就没设默认，仍无默认）
+        cfgs = c.get("/api/v1/llm/configs", headers=_auth(tok_a)).json()
         assert not any(x["is_default"] for x in cfgs)
 
 
 def test_update_config_switches_model():
     """PATCH 只改 model_id：同一条配置内切换模型，密钥掩码与默认状态不变。"""
     with TestClient(app) as c:
-        uid = _register(c, "cfgpatch1")
-        r = c.post("/api/v1/llm/configs", json={
-            "user_id": uid, "provider": "sensenova",
+        tok = _register(c, "cfgpatch1")
+        h = _auth(tok)
+        r = c.post("/api/v1/llm/configs", headers=h, json={
+            "provider": "sensenova",
             "base_url": "https://a/v1", "model_id": "m-a",
             "api_key": "sk-aaaaaaaa1111", "is_default": True}).json()
 
         resp = c.patch(f"/api/v1/llm/configs/{r['id']}",
-                       params={"user_id": uid},
-                       json={"model_id": "m-b"})
+                       headers=h, json={"model_id": "m-b"})
         assert resp.status_code == 200
 
-        cfgs = c.get("/api/v1/llm/configs", params={"user_id": uid}).json()
+        cfgs = c.get("/api/v1/llm/configs", headers=h).json()
         assert len(cfgs) == 1                       # 仍是同一条配置
         assert cfgs[0]["model_id"] == "m-b"
         assert cfgs[0]["api_key_masked"] == "sk-a...1111"   # 密钥没被改
@@ -172,17 +200,33 @@ def test_update_config_switches_model():
 
 
 def test_update_config_rejects_other_user():
-    """他人 user_id 不能改我的配置。"""
+    """他人 token 不能改我的配置。"""
     with TestClient(app) as c:
-        uid = _register(c, "cfgpatch2")
-        r = c.post("/api/v1/llm/configs", json={
-            "user_id": uid, "provider": "sensenova",
+        tok_a = _register(c, "cfgpatch2")
+        r = c.post("/api/v1/llm/configs", headers=_auth(tok_a), json={
+            "provider": "sensenova",
             "base_url": "https://a/v1", "model_id": "m-a",
             "api_key": "sk-aaaaaaaa1111"}).json()
+        tok_b = _register(c, "cfgpatch2b")
         resp = c.patch(f"/api/v1/llm/configs/{r['id']}",
-                       params={"user_id": "someone-else"},
+                       headers=_auth(tok_b),
                        json={"model_id": "m-b"})
         assert resp.status_code == 404
+
+
+def test_delete_config_rejects_other_user():
+    """他人 token 不能删我的配置；本人删除正常。"""
+    with TestClient(app) as c:
+        tok_a = _register(c, "cfgdel1")
+        r = c.post("/api/v1/llm/configs", headers=_auth(tok_a), json={
+            "provider": "sensenova",
+            "base_url": "https://a/v1", "model_id": "m-a",
+            "api_key": "sk-aaaaaaaa1111"}).json()
+        tok_b = _register(c, "cfgdel1b")
+        assert c.delete(f"/api/v1/llm/configs/{r['id']}",
+                        headers=_auth(tok_b)).status_code == 404
+        assert c.delete(f"/api/v1/llm/configs/{r['id']}",
+                        headers=_auth(tok_a)).json()["deleted"] == r["id"]
 
 
 def test_config_models_uses_stored_key(monkeypatch):
@@ -216,13 +260,13 @@ def test_config_models_uses_stored_key(monkeypatch):
     import app.api.llm_config as m
     monkeypatch.setattr(m.httpx, "AsyncClient", FakeClient)
     with TestClient(app) as c:
-        uid = _register(c, "cfgpatch3")
-        r = c.post("/api/v1/llm/configs", json={
-            "user_id": uid, "provider": "sensenova",
+        tok = _register(c, "cfgpatch3")
+        r = c.post("/api/v1/llm/configs", headers=_auth(tok), json={
+            "provider": "sensenova",
             "base_url": "https://a/v1", "model_id": "m-a",
             "api_key": "sk-abcdefgh123456"}).json()
         resp = c.get(f"/api/v1/llm/configs/{r['id']}/models",
-                     params={"user_id": uid})
+                     headers=_auth(tok))
         assert resp.status_code == 200
         assert resp.json() == [
             {"id": "deepseek-v4-flash", "context_window": None},
@@ -259,7 +303,8 @@ def test_list_models_mocked(monkeypatch):
     import app.api.llm_config as m
     monkeypatch.setattr(m.httpx, "AsyncClient", FakeClient)
     with TestClient(app) as c:
-        r = c.post("/api/v1/llm/models", json={
+        tok = _register(c, "lmodels")
+        r = c.post("/api/v1/llm/models", headers=_auth(tok), json={
             "provider": "sensenova", "base_url": "https://token.sensenova.cn/v1",
             "api_key": "k"})
         assert r.status_code == 200

@@ -11,6 +11,7 @@ from app.abstractions.llm import LLMService
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
+from app.api.feedbacks import router as feedbacks_router
 from app.api.kbs import router as kbs_router
 from app.api.traces import router as traces_router
 from app.api.llm_config import router as llm_config_router
@@ -25,7 +26,7 @@ from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter
 from app.mcp.host import MCPHost
-from app.models import Conversation, Memory
+from app.models import Conversation, Feedback, Memory
 from app.services.kb_service import KBService
 from app.services.memory_service import MemoryService
 from app.api.memories import router as memories_router
@@ -49,6 +50,8 @@ async def lifespan(app: FastAPI):
     Conversation.__table__.create(engine, checkfirst=True)
     # 记忆分层列（膨胀控制）：新建表含新列；旧表幂等补列 + 存量回填
     Memory.__table__.create(engine, checkfirst=True)
+    # 用户反馈（P3-19 反馈闭环）：评测集种子数据
+    Feedback.__table__.create(engine, checkfirst=True)
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
                           "tier VARCHAR(8) NOT NULL DEFAULT 'core'"))
@@ -64,6 +67,18 @@ async def lifespan(app: FastAPI):
         # 检索开关细化到用户：旧表幂等补列（禁用列表，用户间互不影响）
         conn.execute(text("ALTER TABLE kbs ADD COLUMN IF NOT EXISTS "
                           "retrieval_disabled_users JSON NOT NULL DEFAULT '[]'"))
+
+        # ---- P1-6 孤儿状态自愈 ----
+        # 入库/重建/复制是 BackgroundTasks，随进程消亡且进度只存内存字典；
+        # 进程中途被杀会把 kbs.status 永久卡在非终态——此后该库上传永远
+        # 409 "already indexing"，只能手改数据库解救。启动时统一复位：
+        # 标 failed（诚实——部分文件可能没嵌完）并立刻解除 409 死锁，
+        # 用户重新上传即可（_finish_ingest 允许失败库继续入库）。
+        res = conn.execute(text("UPDATE kbs SET status = 'failed' "
+                                "WHERE status IN ('indexing', 'reembedding', 'copying')"))
+        if res.rowcount:
+            logger.warning("启动复位 %d 个非终态知识库（上次进程中断残留）",
+                           res.rowcount)
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)
@@ -82,6 +97,7 @@ async def lifespan(app: FastAPI):
 
     memory_service = MemoryService()
     ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer, memory_service)
+    app.state.workflow_ctx = ctx                  # P1-8：API 层后台记忆管线复用同一编排上下文
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver
     app.state.kb_service = kb_service
     app.state.tracer = tracer
@@ -104,6 +120,7 @@ app.include_router(conversations_router)
 app.include_router(kbs_router)
 app.include_router(traces_router)
 app.include_router(memories_router)
+app.include_router(feedbacks_router)
 app.include_router(llm_config_router)
 app.include_router(settings_router)
 

@@ -98,6 +98,7 @@ def _normalize_memory(m: dict) -> dict:
 # ---------- 自动上下文压缩 ----------
 COMPACT_KEEP_ROUNDS = 4          # 压缩后保留的最近轮数
 COMPACT_MIN_ROUNDS = 20          # 轮数超过该值触发压缩（>20 轮）
+COMPACT_MIN_TOKEN_RATIO = 0.1    # 轮数路径的最小占用门槛（占窗口比例，P3-25）
 
 COMPACT_PROMPT = """你是对话总结助手。下面是用户与科研助手的多轮对话历史。
 请把它整理成一份简洁的中文总结，保留以下信息：
@@ -111,11 +112,9 @@ def _round_count(messages: list) -> int:
     """轮数 = 用户提问条数（一对 user+assistant 算一轮）。"""
     return sum(1 for m in messages if getattr(m, "type", "") == "human")
 
-
-def _estimate_tokens(messages: list) -> int:
-    """粗估 token 数：中英文混合约 2 字符/token（宁可早压缩也不爆窗）。"""
-    chars = sum(len(str(getattr(m, "content", ""))) for m in messages)
-    return chars // 2
+# _estimate_tokens 已挪至 core/tokens.py（P2-17 分层修正：API 层也要用，
+# 不能让 api 反向依赖编排层私有符号），此处按公共名导入。
+from app.core.tokens import estimate_tokens
 
 
 def _usage_of(msg) -> dict | None:
@@ -158,8 +157,9 @@ def _split_keep_and_old(messages: list, keep_rounds: int):
 
 
 async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """自动上下文压缩（图的第一站）：轮数 >20 或 token 估测达上下文上限 80% 时，
-    把最近 4 轮之外的历史交给 LLM 总结，后续生成使用「总结 + 最近 4 轮」。
+    """自动上下文压缩（图的第一站）：token 估测达上下文上限 80%，或轮数 >20
+    且占用 ≥ 窗口 10%（P3-25 最小门槛）时，把最近 4 轮之外的历史交给 LLM 总结，
+    后续生成使用「总结 + 最近 4 轮」。
 
     - 总结存入 conversation_summary（拼进系统提示词），旧消息用 RemoveMessage
       删除（messages 是 add_messages reducer，直接传列表只会追加）
@@ -181,9 +181,16 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
     # token 占用优先取上一轮 generate 的真实用量（含系统提示词+检索结果，
     # 比 _estimate_tokens 准）；没有时（首轮/假模型）回退字符估算
     last_usage = state.get("last_usage") or {}
-    tokens = int(last_usage.get("total_tokens") or 0) or _estimate_tokens(messages)
-    if rounds <= COMPACT_MIN_ROUNDS and tokens <= window * 0.8:
-        return {}
+    tokens = int(last_usage.get("total_tokens") or 0) or estimate_tokens(messages)
+    triggered_by_tokens = tokens > window * 0.8
+    if not triggered_by_tokens:
+        if rounds <= COMPACT_MIN_ROUNDS:
+            return {}
+        # P3-25：轮数兜底触发也要有最小占用门槛——256k 大窗下 21 轮短对话
+        # 可能只占窗口百分之几，此时总结丢细节纯属浪费；占用低于窗口 10%
+        # 一律不压（token 达 80% 的主动路径不受此门槛约束）。
+        if tokens <= window * COMPACT_MIN_TOKEN_RATIO:
+            return {}
 
     keep, old = _split_keep_and_old(messages, COMPACT_KEEP_ROUNDS)
     if not old:
@@ -469,6 +476,12 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
             ctx.llm_service.get_chat_model,
             state["user_id"], temperature=state.get("temperature"))
         prompt = ROUTE_PROMPT.format(catalog=json.dumps(catalog, ensure_ascii=False))
+        # P3-24：路由输入只带最近 4 条消息，指代上文的追问（"接着刚才那个
+        # 方案说"）会因看不到上文被误判为无需检索——把压缩总结（低频变化、
+        # 已定序，不破坏前缀缓存）附在目录后，让路由 LLM 知道"刚才在聊什么"。
+        summary = str(state.get("conversation_summary") or "").strip()
+        if summary:
+            prompt += "\n\n[历史对话总结]\n" + summary[:500]
         resp = await model.ainvoke([SystemMessage(content=prompt)] + state["messages"][-4:])
         route = _parse_route(str(resp.content or ""))
         if not route:                         # LLM 没按 JSON 输出 → 无法判断意图
@@ -616,10 +629,20 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
     max_chars = int(getattr(ctx.settings, "retrieval_parent_max_chars", 4000))
     hits = []
     for kb in targets:
-        # 检索链路全同步（查询嵌入 HTTP + Chroma + BM25 磁盘读），必须放线程池
-        kb_hits = await asyncio.to_thread(
-            ctx.kb_service.search, kb.kb_id, state["query"], k=per_kb,
-            user_id=state["user_id"], mode=mode)
+        # 检索链路全同步（查询嵌入 HTTP + Chroma + BM25 磁盘读），必须放线程池。
+        # P1-5 单库隔离：一个库坏掉（嵌入维度不匹配/端点不可达/磁盘缺文件）
+        # 不拖垮整轮对话——记日志、推 retrieve_error 事件供前端提示，
+        # 继续其余健康库；全部失败时 hits 为空，generate 自然按自身知识兜底。
+        try:
+            kb_hits = await asyncio.to_thread(
+                ctx.kb_service.search, kb.kb_id, state["query"], k=per_kb,
+                user_id=state["user_id"], mode=mode)
+        except Exception as e:
+            logger.warning("kb search failed, skip kb=%s(%s): %s",
+                           kb.name, kb.kb_id, e)
+            emit("retrieve_error", {"kb_id": kb.kb_id, "kb_name": kb.name,
+                                    "error": str(e)[:200]})
+            continue
         hits.extend(kb_hits)
     hits.sort(key=_hit_rank_key)
     if parent_groups > 0:

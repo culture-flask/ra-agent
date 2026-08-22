@@ -2,11 +2,16 @@
 
 前端 UI 默认值此前硬编码在 JS 里（3/5/3），改 yaml 无感知；
 现在由这里下发，前端未手动设置时跟随 yaml。
+P0-1：纳入全局鉴权（内容虽非敏感，业务面统一收口）。
 """
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
-router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+from app.core.deps import get_current_user
+
+# 路由级闸门：本组全部端点要求登录态
+router = APIRouter(prefix="/api/v1/settings", tags=["settings"],
+                   dependencies=[Depends(get_current_user)])
 
 
 @router.get("/retrieval")
