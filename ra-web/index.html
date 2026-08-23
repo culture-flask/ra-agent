@@ -214,6 +214,20 @@ html[data-theme="light"] .sess-tokens b{color:#17251d}
 .step .slabel{font-weight:600;flex:none}
 .step .sdesc{color:var(--muted);word-break:break-all}
 .step .sdesc code{background:var(--chip);padding:0 4px;border-radius:4px;font-size:11.5px}
+/* 思考面板：reasoning 事件实时流式；最终输出轮 reasoning_end 定格（可折叠看全文），
+   工具轮/空转轮 reasoning_discard 撤回——思考过程不留在界面上 */
+.think{margin-bottom:8px}
+.think summary{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;
+  color:#8a6d1f;padding:4px 10px;background:#fdf4df;border:1px solid #ecd9a8;border-radius:16px;
+  list-style:none;user-select:none}
+.think summary::-webkit-details-marker{display:none}
+.think summary:hover,.think[open] summary{border-color:#c9a94a;color:#8a6d1f}
+.think-body{background:#fdf4df;border:1px solid #ecd9a8;border-radius:10px;margin-top:6px;padding:9px 12px;
+  font-size:12.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;
+  max-height:260px;overflow-y:auto;color:#6d6237}
+.think .pulse-dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:none;
+  background:#c9a94a;animation:thinkpulse 1.2s ease-in-out infinite}
+@keyframes thinkpulse{50%{opacity:.3}}
 details.cites{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
 details.cites summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);
   list-style:none;display:inline-flex;align-items:center;gap:6px;user-select:none}
@@ -387,6 +401,9 @@ aside{background:rgba(23,20,20,.92);border-right-color:var(--line);backdrop-filt
 .side-foot,main>header,#composer{border-color:var(--line);background:rgba(23,20,20,.88);backdrop-filter:blur(12px)}
 main>header{padding:20px 30px}main>header h1{font-size:21px;color:#f0d49b}.view{padding:26px 30px}
 .msg.assistant .bubble,.steps summary,.step-list,.hint-card,.kb-card,.tbl{background:rgba(37,31,28,.96);border-color:var(--line);color:#f2ead8}
+.think summary{background:rgba(58,47,26,.92);border-color:#5d4a26;color:#e0c37c}
+.think[open] summary{border-color:#c9a94a;color:#e0c37c}
+.think-body{background:rgba(58,47,26,.92);border-color:#5d4a26;color:#d8cba4}
 .steps summary:hover,details.cites summary:hover{color:#f3d18d}
 .msg.user .bubble{background:linear-gradient(135deg,#76518a,#a77bba);color:#fffaf0}.msg.assistant .avatar{background:#7f8f6c}.msg.user .avatar{background:#8c668f}
 #chat-toolbar{padding-top:8px}.retrieval-switch{background:#0f0d0e;border:1px solid var(--line)}.retrieval-switch .rs-btn.on{background:rgba(201,154,74,.18);color:#f3d18d;box-shadow:none}
@@ -422,6 +439,8 @@ html[data-theme="light"] .retrieval-switch .rs-btn.on{background:#1d6638;color:#
 html[data-theme="light"] .input::placeholder,html[data-theme="light"] #chat-input::placeholder{color:#435d4b;opacity:1}
 html[data-theme="light"] .btn:hover{color:#123d24;border-color:#1d6638;background:#e4f0e5}html[data-theme="light"] .btn.primary{background:#1d6638;border-color:#1d6638;color:#fff}
 html[data-theme="light"] .msg.assistant .bubble,html[data-theme="light"] .steps summary,html[data-theme="light"] .step-list,html[data-theme="light"] .hint-card,html[data-theme="light"] .kb-card,html[data-theme="light"] table.tbl,html[data-theme="light"] .cite,html[data-theme="light"] .search-hit{background:#ffffff;color:#17251d;border-color:#8ea995}
+html[data-theme="light"] .think summary{background:#fdf4df;border-color:#ecd9a8;color:#8a6d1f}
+html[data-theme="light"] .think-body{background:#fdf4df;border-color:#ecd9a8;color:#6d6237}
 html[data-theme="light"] .msg.user .bubble{background:linear-gradient(135deg,#2d7046,#1d6638);color:#fff}
 html[data-theme="light"] .tbl th{background:#cfe4d1;color:#123d24;border-bottom-color:#8eaf94}html[data-theme="light"] .tbl td{color:#17251d;border-bottom-color:#c5d5c7}
 html[data-theme="light"] .bubble code,html[data-theme="light"] .step .sdesc code,html[data-theme="light"] .kv code{background:#dbe9dd;color:#123d24}
@@ -909,7 +928,7 @@ async function loadSessions() {
      轻微文本归一化等造成的键不一致；只在剩余集合内前进，不会跨轮偷位。
    仍对不上的条目以服务端为准（纯文本展示）。 */
 function mergeRichHistory(remote, local) {
-  const rich = ["steps", "retrievals", "files", "feedback"];
+  const rich = ["steps", "retrievals", "files", "feedback", "reasoning", "reasoningState"];
   const keyOf = m => m.role + "|" + String(m.content ?? "");
 
   // 本地按内容键建 FIFO 队列（记录原下标，供第二层排除已消费者）
@@ -1239,6 +1258,22 @@ function stepsHTML(steps) {
   return `<details class="steps"><summary>执行过程 · ${steps.length} 步</summary><div class="step-list">${items}</div></details>`;
 }
 
+/* 思考面板：reasoning 事件流式累积；reasoning_end 定格可折叠看全文；
+   reasoning_discard 清空（工具轮/空转轮思考不留在界面）。
+   流式期间只渲染最新 800 字尾窗——超长思考（实测可达两万字符）逐 delta
+   全量重渲染会拖垮 patchLastMsg。 */
+function thinkingHTML(m) {
+  if (!m.reasoning) return "";
+  const chars = m.reasoning.length;
+  if (m.reasoningState === "thinking") {
+    const tail = chars > 800
+      ? "…（共 " + chars + " 字，仅显示最新部分）\n\n" + m.reasoning.slice(-800)
+      : m.reasoning;
+    return `<details class="think" open><summary><span class="pulse-dot"></span>思考中…（${chars} 字）</summary><div class="think-body">${esc(tail)}</div></details>`;
+  }
+  return `<details class="think"><summary>🧠 思考过程（${chars} 字）</summary><div class="think-body">${esc(m.reasoning)}</div></details>`;
+}
+
 function citesHTML(retrievals) {
   if (!retrievals || !retrievals.length) return "";
   const items = retrievals.map((r, i) => {
@@ -1300,7 +1335,7 @@ function msgHTML(m, i, isLast) {
   }
   return `<div class="msg assistant"><div class="row">
     <div class="avatar">RA</div>
-    <div class="bubble-wrap">${stepsHTML(m.steps)}
+    <div class="bubble-wrap">${thinkingHTML(m)}${stepsHTML(m.steps)}
       <div class="bubble">${m._streaming ? md(m.content) + '<span class="cursor"></span>' : md(m.content)}</div>
       ${citesHTML(m.retrievals)}${actions}</div></div></div>`;
 }
@@ -1603,6 +1638,17 @@ function handleChatEvent(ev, asst, stepByTrace) {
     case "memory_save":
       if (ev.saved > 0)
         asst.steps.push({ kind: "memory_save", status: "ok", desc: `审核通过，写入 ${ev.saved} 条` });
+      break;
+    case "reasoning":                 // 思考内容流（thinking 端点）：实时累积
+      asst.reasoning = (asst.reasoning || "") + (ev.content || "");
+      asst.reasoningState = "thinking";
+      break;
+    case "reasoning_end":               // 最终输出轮：思考面板定格，可折叠看全文
+      asst.reasoningState = "done";
+      break;
+    case "reasoning_discard":           // 工具轮/空转轮/停止：思考过程撤回，不留界面
+      asst.reasoning = "";
+      asst.reasoningState = "discarded";
       break;
     case "stopped":
       asst.steps.push({ kind: "llm", status: "ok", desc: "已手动停止生成（保留部分答复）" });

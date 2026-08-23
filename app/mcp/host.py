@@ -1,4 +1,4 @@
-"""MCP Host/Client（架构文档 §7.3）：连接多 Server，动态发现并聚合工具目录。"""
+"""MCP Host/Client：连接多 Server，动态发现并聚合工具目录。"""
 
 import asyncio
 import logging

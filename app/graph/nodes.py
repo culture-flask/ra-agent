@@ -12,6 +12,7 @@ from app.core.events import emit
 from app.core.logging import get_logger
 from app.services.memory_service import MEMORY_MAX
 from app.graph.state import AgentState
+from app.abstractions.llm import DEFAULT_TEMPERATURE, _is_retryable
 
 logger = get_logger("graph_nodes")
 
@@ -504,7 +505,7 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
         summary = str(state.get("conversation_summary") or "").strip()
         if summary:
             prompt += "\n\n[历史对话总结]\n" + summary[:500]
-        # 第一优先（P3-34）：把上一轮的检索结果状态喂给路由——延续话题且上轮
+        # 第一优先（P3-33）：把上一轮的检索结果状态喂给路由——延续话题且上轮
         # 已命中可免重复检索。只拼进路由 prompt，绝不进 system/历史（保前缀缓存）。
         lrs = state.get("last_retrieval_state") or {}
         if lrs.get("hit_count"):
@@ -701,7 +702,7 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
          "text": str(h.get("text", ""))[:300]}
         for h in top]})
     return {"retrievals": top,
-            # 第一优先（P3-34）：落一份跨轮检索状态给下一轮的 supervisor 用。
+            # 第一优先（P3-33）：落一份跨轮检索状态给下一轮的 supervisor 用。
             # hit_count>0 表示"上一轮检索确有命中、回答大概率基于证据"——
             # 供"延续话题免重复检索"的规则判断。kb_names 只用于提示文案。
             "last_retrieval_state": {
@@ -710,20 +711,250 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
                 "hit_count": len(top)}}
 
 
+# ---------- generate 原生思考流（thinking 端点） ----------
+# langchain-openai（1.2.2，升级 1.6.0 亦同——已源码验证）不提取 OpenAI 兼容
+# 协议里的 reasoning_content：其 delta→chunk 转换只取 content/function_call/
+# tool_calls。而 opencode 网关的 DeepSeek V4 默认开启 thinking：复杂问题
+# （尤其带检索结果）会先"思考"数十秒（实测 9~60s、数百至两万字符），期间
+# content 为空 → 前端收不到任何 token，体感像卡死。
+# 方案：仅当生效配置指向 thinking 端点（opencode）时，generate 改用原生
+# openai SDK 流式，把 reasoning_content 以 reasoning 事件透出；工具调用轮的
+# 思考在轮末撤回（用户不需要看"该调什么工具"的过程），最终输出轮的思考定格。
+
+def _reasoning_endpoint_cfg(ctx: WorkflowContext, user_id: str):
+    """生效 LLM 配置若是 thinking 端点（目前识别 opencode 网关）则返回配置，
+    否则返回 None（generate 走原 langchain 路径，行为不变）。
+    测试夹具的 FakeLLMService 无 get_user_config → getattr 兜底返回 None。"""
+    getter = getattr(ctx.llm_service, "get_user_config", None)
+    if not callable(getter):
+        return None
+    try:
+        cfg = getter(user_id)
+    except Exception:
+        return None
+    if cfg is None:
+        return None
+    base = str(getattr(cfg, "base_url", "") or "").lower()
+    return cfg if "opencode" in base else None
+
+
+def _native_temperature(state: AgentState) -> float:
+    """原生路径的生成温度：与 get_chat_model 的按轮覆盖语义一致
+    （None → 默认 0.3；夹取 -2~2）。"""
+    temp = state.get("temperature")
+    if temp is None:
+        return DEFAULT_TEMPERATURE
+    return max(-2.0, min(2.0, float(temp)))
+
+
+def _to_openai_messages(payload: list) -> list[dict]:
+    """LangChain 消息序列 → 原生 openai SDK 的 Chat Completions 格式。
+
+    检索块（payload 里插在最后一条 human 之后的 SystemMessage）**折进最后
+    一条 user 消息**，而不是原样转发为消息序列中间的 system——A/B 实测
+    （真实检索块 1 万字符）：中间 system 触发 opencode 网关的 DeepSeek V4
+    长思考/重复循环（思考 2988 字、首答 12.7s），折进 user 后思考降到
+    100 字、首答 1.6s。system 仍在最前，前缀缓存不受影响。
+    """
+    out: list[dict] = []
+    extra_system: list[str] = []   # 非开头的 system（检索块），稍后折进 user
+    for m in payload:
+        role = getattr(m, "type", None)
+        content = m.content
+        if isinstance(content, list):      # 内容块列表 → 拼文本
+            content = "".join(p.get("text", "") for p in content
+                              if isinstance(p, dict))
+        if role == "system":
+            if not out:                    # 首个 system 保留原位（前缀稳定）
+                out.append({"role": "system", "content": content or ""})
+            elif content:                  # 中间的 system（检索块）：折进 user
+                extra_system.append(content)
+        elif role == "human":
+            out.append({"role": "user", "content": content or ""})
+        elif role == "ai":
+            item: dict = {"role": "assistant", "content": content or ""}
+            tcs = getattr(m, "tool_calls", None)
+            if tcs:
+                item["tool_calls"] = [{
+                    "id": tc.get("id", ""), "type": "function",
+                    "function": {"name": tc.get("name", ""),
+                                 "arguments": json.dumps(tc.get("args") or {},
+                                                         ensure_ascii=False)},
+                } for tc in tcs]
+            out.append(item)
+        elif role == "tool":
+            out.append({"role": "tool", "content": content or "",
+                        "tool_call_id": getattr(m, "tool_call_id", "")})
+    if extra_system and out:
+        target = next((it for it in reversed(out)
+                       if it["role"] == "user"), out[0])
+        target["content"] = (target["content"] + "\n\n"
+                             + "\n\n".join(extra_system))
+    return out
+
+
+def _to_openai_tools(schemas: list[dict]) -> list[dict]:
+    """schemas_for_llm 的混合格式（裸 function dict 或已包 type/function）
+    → 原生 SDK 的 tools 参数格式。"""
+    out: list[dict] = []
+    for s in schemas:
+        if s.get("type") == "function" and isinstance(s.get("function"), dict):
+            out.append(s)
+        else:
+            out.append({"type": "function",
+                        "function": {"name": s.get("name", ""),
+                                     "description": s.get("description", ""),
+                                     "parameters": s.get("parameters", {})}})
+    return out
+
+
+def _usage_from_native(usage) -> dict | None:
+    """原生 SDK 末块 usage（CompletionUsage）→ 与 _usage_from 相同的内部格式。"""
+    if usage is None:
+        return None
+    inp = int(getattr(usage, "prompt_tokens", 0) or 0)
+    outp = int(getattr(usage, "completion_tokens", 0) or 0)
+    if inp + outp <= 0:
+        return None
+    cached = 0
+    ptd = getattr(usage, "prompt_tokens_details", None)
+    if ptd is not None:
+        cached = int(getattr(ptd, "cached_tokens", 0) or 0)
+    if not cached:      # DeepSeek 系网关的备选形态
+        cached = int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0)
+    return {"input_tokens": inp, "output_tokens": outp,
+            "total_tokens": inp + outp, "cached_tokens": cached}
+
+
+async def _langchain_round(model, payload, sid):
+    """langchain 路径的一轮流式（原 generate_node 的 astream 循环，逻辑原样）。"""
+    resp = None
+    last_usage = None
+    stopped = False
+    async for chunk in model.astream(payload):
+        if is_stopped(sid):                    # 用户点了停止：保留已生成部分
+            stopped = True
+            break
+        resp = chunk if resp is None else resp + chunk   # 逐 token 聚合为完整消息
+        # 用量取"最后一个携带 usage 的 chunk"：供应商要么只在末块带、要么每
+        # 块带同一份累计快照，两种语义下末块都等于真实总量；绝不能信聚合后
+        # 的 resp——LangChain 会把重复出现的 usage 累加成数十倍虚高
+        cu = _usage_from(chunk)
+        if cu is not None:
+            last_usage = cu
+        # 每个 token 实时推给事件总线（SSE 端点持续 drain → 前端打字机效果）
+        text = chunk.content
+        if isinstance(text, str):
+            if text:
+                emit("token", {"content": text})
+        elif isinstance(text, list):
+            for part in text:
+                if isinstance(part, dict) and part.get("text"):
+                    emit("token", {"content": part["text"]})
+    return resp, last_usage, stopped
+
+
+async def _native_round(cfg, payload, tools, temperature, sid):
+    """原生 openai SDK 的一轮流式（thinking 端点）：捕获 reasoning_content。
+
+    - reasoning_content 流式 emit("reasoning")；是否展示由调用方轮末判定
+      （工具轮 reasoning_discard 撤回 / 最终输出轮 reasoning_end 定格）。
+    - 网络层整轮重试与 RetryableChatModel.astream 同语义：流中断从头重来，
+      已 emit 的半截内容会重复（预期行为）。
+    """
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(api_key=cfg.api_key, base_url=cfg.base_url,
+                         timeout=60.0, max_retries=0)
+    msgs = _to_openai_messages(payload)
+    max_retries, base_delay = 10, 1.0
+    for attempt in range(max_retries + 1):
+        stopped = False
+        try:
+            stream = await client.chat.completions.create(
+                model=cfg.model_id, messages=msgs, tools=tools or None,
+                temperature=temperature, stream=True,
+                stream_options={"include_usage": True},
+            )
+            content_parts: list[str] = []
+            tc_map: dict[int, dict] = {}    # index -> {"id","name","arguments"}
+            last_usage = None
+            async for chunk in stream:
+                if is_stopped(sid):
+                    stopped = True
+                    break
+                cu = _usage_from_native(getattr(chunk, "usage", None))
+                if cu is not None:
+                    last_usage = cu
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta is None:
+                    continue
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:                      # 思考内容：实时透传，轮末决定留/撤
+                    emit("reasoning", {"content": rc})
+                if delta.content:           # 正式答案：与 langchain 路径同款 token 事件
+                    content_parts.append(delta.content)
+                    emit("token", {"content": delta.content})
+                for tc in (delta.tool_calls or []):
+                    idx = tc.index if tc.index is not None else 0
+                    e = tc_map.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                    if tc.id:
+                        e["id"] = tc.id
+                    fn = tc.function
+                    if fn is not None:
+                        if fn.name:
+                            e["name"] += fn.name
+                        if fn.arguments:
+                            e["arguments"] += fn.arguments
+            try:                            # 停止提前退出时关闭流
+                await stream.close()
+            except Exception:
+                pass
+            tool_calls = []
+            for idx in sorted(tc_map):      # 分片聚合 → langchain tool_calls 格式
+                e = tc_map[idx]
+                try:
+                    args = json.loads(e["arguments"]) if e["arguments"].strip() else {}
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                tool_calls.append({"name": e["name"], "args": args, "id": e["id"]})
+            # 注意：本版本 langchain-core 的 AIMessage 不接受 tool_calls=None
+            # （必须传 list，空列表 OK）——不传 None 以免触发 pydantic 校验错误
+            resp = AIMessage(content="".join(content_parts),
+                             tool_calls=tool_calls)
+            return resp, last_usage, stopped
+        except Exception as e:
+            if attempt >= max_retries or not _is_retryable(e):
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning("native llm stream broken (attempt %d/%d) model=%s: %s; retry in %.1fs",
+                           attempt + 1, max_retries, cfg.model_id, e, delay)
+            await asyncio.sleep(delay)
+    raise RuntimeError("unreachable")
+
+
 async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """用（用户级）LLM 生成答复：系统提示词带记忆/检索结果 + 用户消息。
 
-    用 astream 逐 token 生成：LangGraph 以 stream_mode="messages" 把每个 token
-    实时推给 SSE 端点（前端打字机效果）；聚合后的完整 message 仍写入 state，
-    tool_calls 也随之聚合，不影响 generate ⇄ tool_executor 循环。
+    - 默认路径：langchain astream 逐 token 生成（前端打字机效果）；
+    - thinking 端点（opencode 网关）：原生 SDK 流式，额外把模型的思考过程
+      （reasoning_content）以 reasoning 事件透传——工具调用轮的思考在轮末
+      撤回（reasoning_discard），只有最终输出轮的思考定格（reasoning_end）。
+    聚合后的完整 message 仍写入 state，tool_calls 也随之聚合，
+    不影响 generate ⇄ tool_executor 循环。
     """
     model = await asyncio.to_thread(
         ctx.llm_service.get_chat_model,
         state["user_id"], temperature=state.get("temperature"))
+    schemas: list[dict] = []
     if ctx.mcp_adapter is not None:
-        schemas = await ctx.mcp_adapter.schemas_for_llm()
-        if schemas:
-            model = model.bind_tools(schemas)      # 告诉 LLM"你有这些工具可用"
+        schemas = await ctx.mcp_adapter.schemas_for_llm() or []
+    # thinking 端点（opencode）走原生 SDK——langchain-openai 会丢弃
+    # reasoning_content；其余端点保持原 langchain 路径不变
+    native_cfg = _reasoning_endpoint_cfg(ctx, state["user_id"])
+    if schemas and native_cfg is None:
+        model = model.bind_tools(schemas)      # 告诉 LLM"你有这些工具可用"
     system = SystemMessage(content=_build_system_prompt(state))
     # 检索块作为临时消息插在最后一条用户消息后（不进 checkpoint），
     # 保证发送序列跨轮前缀稳定 → 供应商侧前缀缓存可命中历史
@@ -736,6 +967,8 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     stopped = False
     sid = state["session_id"]
     last_chunk_usage = None                        # 末块权威用量（防聚合虚高）
+    native_tools = _to_openai_tools(schemas) if native_cfg is not None else None
+    native_temp = _native_temperature(state) if native_cfg is not None else None
 
     # 空响应防御（P3-31）：部分供应商偶发返回"零内容、零工具调用"的空完成，
     # 旧逻辑视作正常结束——前端表现为没有任何输出就静默收尾。现在对这种
@@ -746,32 +979,27 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     for attempt in range(EMPTY_RETRY_MAX + 1):
         resp = None
         last_chunk_usage = None
-        async for chunk in model.astream(payload):
-            if is_stopped(sid):                    # 用户点了停止：保留已生成部分
-                stopped = True
-                break
-            resp = chunk if resp is None else resp + chunk   # 逐 token 聚合为完整消息
-            # 用量取"最后一个携带 usage 的 chunk"：供应商要么只在末块带、要么每
-            # 块带同一份累计快照，两种语义下末块都等于真实总量；绝不能信聚合后
-            # 的 resp——LangChain 会把重复出现的 usage 累加成数十倍虚高
-            cu = _usage_from(chunk)
-            if cu is not None:
-                last_chunk_usage = cu
-            # 每个 token 实时推给事件总线（SSE 端点持续 drain → 前端打字机效果）
-            text = chunk.content
-            if isinstance(text, str):
-                if text:
-                    emit("token", {"content": text})
-            elif isinstance(text, list):
-                for part in text:
-                    if isinstance(part, dict) and part.get("text"):
-                        emit("token", {"content": part["text"]})
+        stopped = False
+        if native_cfg is not None:
+            resp, last_chunk_usage, stopped = await _native_round(
+                native_cfg, payload, native_tools, native_temp, sid)
+        else:
+            resp, last_chunk_usage, stopped = await _langchain_round(
+                model, payload, sid)
         if resp is None:
             resp = AIMessage(content="")
         if stopped:
             break                                  # 停止：跳过空响应判定，直接收尾
         has_tool_calls = bool(getattr(resp, "tool_calls", None))
-        if str(resp.content or "").strip() or has_tool_calls:
+        valid = bool(str(resp.content or "").strip()) or has_tool_calls
+        if native_cfg is not None:
+            # 思考面板收尾：工具轮的思考过程撤回（用户不需要看"该调什么工具"），
+            # 空响应轮同样撤回；只有最终输出轮定格展示
+            if valid and not has_tool_calls:
+                emit("reasoning_end", {})
+            else:
+                emit("reasoning_discard", {})
+        if valid:
             break                                  # 有内容或有工具调用：有效轮次
         if attempt < EMPTY_RETRY_MAX:              # 空响应：退避后整轮重来
             wait = 0.5 * (2 ** attempt)
@@ -786,6 +1014,8 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
         clear_stop(sid)
         resp = AIMessage(content=str(resp.content or ""))
         emit("stopped", {"chars": len(str(resp.content or ""))})
+        if native_cfg is not None:
+            emit("reasoning_discard", {})          # 停止后思考面板不留存
 
     answer = str(resp.content) if resp.content else ""
     if ctx.tracer is not None:
