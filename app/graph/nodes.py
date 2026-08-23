@@ -760,31 +760,29 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
                 "hit_count": len(top)}}
 
 
-# ---------- generate 原生思考流（thinking 端点） ----------
+# ---------- generate 原生思考流（所有端点统一原生 SDK） ----------
 # langchain-openai（1.2.2，升级 1.6.0 亦同——已源码验证）不提取 OpenAI 兼容
-# 协议里的 reasoning_content：其 delta→chunk 转换只取 content/function_call/
-# tool_calls。而 opencode 网关的 DeepSeek V4 默认开启 thinking：复杂问题
-# （尤其带检索结果）会先"思考"数十秒（实测 9~60s、数百至两万字符），期间
+# 协议里的推理字段：delta→chunk 转换只取 content/function_call/tool_calls，
+# reasoning_content 在转换层即被丢弃——langchain 路径上想试也没得试。
+# 背景：thinking 模型（DeepSeek V4 等）复杂问题会先"思考"数十秒，期间
 # content 为空 → 前端收不到任何 token，体感像卡死。
-# 方案：仅当生效配置指向 thinking 端点（opencode）时，generate 改用原生
-# openai SDK 流式，把 reasoning_content 以 reasoning 事件透出；工具调用轮的
-# 思考在轮末撤回（用户不需要看"该调什么工具"的过程），最终输出轮的思考定格。
+# 方案：generate 统一走原生 openai SDK 流式，对所有端点默认尝试捕获推理
+# 内容，兼容两种方言键（DeepSeek 系 reasoning_content / 新事实标准
+# reasoning）；无思考的模型零命中、前端空面板不渲染。仅当拿不到生效配置
+# （测试假服务）才回退原 langchain 路径。工具调用轮的思考在轮末撤回，
+# 最终输出轮的思考定格。
 
-def _reasoning_endpoint_cfg(ctx: WorkflowContext, user_id: str):
-    """生效 LLM 配置若是 thinking 端点（目前识别 opencode 网关）则返回配置，
-    否则返回 None（generate 走原 langchain 路径，行为不变）。
-    测试夹具的 FakeLLMService 无 get_user_config → getattr 兜底返回 None。"""
-    getter = getattr(ctx.llm_service, "get_user_config", None)
+def _native_cfg(ctx: WorkflowContext, user_id: str):
+    """generate 的生效 LLM 配置（用户配置 > 系统默认）。不再按端点名筛选：
+    所有端点统一走原生 SDK 以尝试捕获推理内容；拿不到配置（测试假服务）
+    返回 None → 回退 langchain 路径，行为与旧版一致。"""
+    getter = getattr(ctx.llm_service, "effective_config", None)
     if not callable(getter):
         return None
     try:
-        cfg = getter(user_id)
+        return getter(user_id)
     except Exception:
         return None
-    if cfg is None:
-        return None
-    base = str(getattr(cfg, "base_url", "") or "").lower()
-    return cfg if "opencode" in base else None
 
 
 def _native_temperature(state: AgentState) -> float:
@@ -903,8 +901,23 @@ async def _langchain_round(model, payload, sid):
     return resp, last_usage, stopped
 
 
+_zero_reasoning_seen: set[str] = set()   # 已记录过"零推理"的端点键（每进程一次）
+
+
+def _log_zero_reasoning_once(cfg) -> None:
+    """整轮零推理内容时记一次日志：帮助区分'模型本就不思考'与'方言字段对不上'
+    （如新版 vLLM 改发 reasoning 以外的键）这类静默降级。"""
+    key = f"{getattr(cfg, 'base_url', '')}::{getattr(cfg, 'model_id', '')}"
+    if key in _zero_reasoning_seen:
+        return
+    _zero_reasoning_seen.add(key)
+    logger.info("端点未返回任何推理内容（若该模型应有思考过程，请检查方言字段）"
+                " base=%s model=%s",
+                getattr(cfg, "base_url", ""), getattr(cfg, "model_id", ""))
+
+
 async def _native_round(cfg, payload, tools, temperature, sid):
-    """原生 openai SDK 的一轮流式（thinking 端点）：捕获 reasoning_content。
+    """原生 openai SDK 的一轮流式（统一路径）：捕获推理内容。
 
     - reasoning_content 流式 emit("reasoning")；是否展示由调用方轮末判定
       （工具轮 reasoning_discard 撤回 / 最终输出轮 reasoning_end 定格）。
@@ -927,6 +940,7 @@ async def _native_round(cfg, payload, tools, temperature, sid):
             content_parts: list[str] = []
             tc_map: dict[int, dict] = {}    # index -> {"id","name","arguments"}
             last_usage = None
+            had_reasoning = False           # 本轮是否见过推理内容（方言漂移观测）
             async for chunk in stream:
                 if is_stopped(sid):
                     stopped = True
@@ -939,8 +953,16 @@ async def _native_round(cfg, payload, tools, temperature, sid):
                 delta = chunk.choices[0].delta
                 if delta is None:
                     continue
-                rc = getattr(delta, "reasoning_content", None)
-                if rc:                      # 思考内容：实时透传，轮末决定留/撤
+                # 多方言兼容：DeepSeek 系 reasoning_content / 新事实标准 reasoning。
+                # 优先级：reasoning_content 命中即不再看 reasoning；两者皆无 →
+                # 零命中降级（不发事件，答案流照常，轮末记一次日志）
+                rc = (getattr(delta, "reasoning_content", None)
+                      or getattr(delta, "reasoning", None))
+                if isinstance(rc, list):    # 分片数组形态 [{"text"/"summary": ..}]
+                    rc = "".join((p.get("text") or p.get("summary") or "")
+                                 for p in rc if isinstance(p, dict))
+                if isinstance(rc, str) and rc:   # 类型守卫：非字符串不透传
+                    had_reasoning = True
                     emit("reasoning", {"content": rc})
                 if delta.content:           # 正式答案：与 langchain 路径同款 token 事件
                     content_parts.append(delta.content)
@@ -970,6 +992,8 @@ async def _native_round(cfg, payload, tools, temperature, sid):
                 tool_calls.append({"name": e["name"], "args": args, "id": e["id"]})
             # 注意：本版本 langchain-core 的 AIMessage 不接受 tool_calls=None
             # （必须传 list，空列表 OK）——不传 None 以免触发 pydantic 校验错误
+            if not had_reasoning and not stopped:
+                _log_zero_reasoning_once(cfg)
             resp = AIMessage(content="".join(content_parts),
                              tool_calls=tool_calls)
             return resp, last_usage, stopped
@@ -986,10 +1010,11 @@ async def _native_round(cfg, payload, tools, temperature, sid):
 async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """用（用户级）LLM 生成答复：系统提示词带记忆/检索结果 + 用户消息。
 
-    - 默认路径：langchain astream 逐 token 生成（前端打字机效果）；
-    - thinking 端点（opencode 网关）：原生 SDK 流式，额外把模型的思考过程
-      （reasoning_content）以 reasoning 事件透传——工具调用轮的思考在轮末
-      撤回（reasoning_discard），只有最终输出轮的思考定格（reasoning_end）。
+    - 统一路径：原生 openai SDK 流式逐 token 生成（前端打字机效果），并对
+      所有端点默认尝试捕获推理内容（reasoning_content / reasoning 双方言），
+      以 reasoning 事件透传——工具调用轮的思考撤回（reasoning_discard），
+      最终输出轮定格（reasoning_end）；无思考的模型零命中、面板不渲染。
+    - 仅当拿不到生效配置（测试假服务）时回退 langchain astream 老路径。
     聚合后的完整 message 仍写入 state，tool_calls 也随之聚合，
     不影响 generate ⇄ tool_executor 循环。
     """
@@ -999,9 +1024,9 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     schemas: list[dict] = []
     if ctx.mcp_adapter is not None:
         schemas = await ctx.mcp_adapter.schemas_for_llm() or []
-    # thinking 端点（opencode）走原生 SDK——langchain-openai 会丢弃
-    # reasoning_content；其余端点保持原 langchain 路径不变
-    native_cfg = _reasoning_endpoint_cfg(ctx, state["user_id"])
+    # 所有端点统一走原生 SDK——langchain-openai 会丢弃推理字段，langchain
+    # 路径上无法"尝试"；拿不到配置（假服务）才回退老路径
+    native_cfg = _native_cfg(ctx, state["user_id"])
     if schemas and native_cfg is None:
         model = model.bind_tools(schemas)      # 告诉 LLM"你有这些工具可用"
     system = SystemMessage(content=_build_system_prompt(state))

@@ -245,6 +245,11 @@ class LLMService:
                                   base_delay=self._retry_delay,
                                   label=cfg.model_id)
 
+    def effective_config(self, user_id: str) -> LLMConfig | None:
+        """用户生效配置；无个人配置时回退系统默认（与 get_chat_model 同语义）。
+        供编排层原生流式路径取连接参数（base_url/api_key/model_id）。"""
+        return self.get_user_config(user_id) or self._system
+
     # ---------- 上下文窗口 ----------
     def context_window_for(self, user_id: str) -> int:
         """当前生效模型的上下文窗口（token）。
