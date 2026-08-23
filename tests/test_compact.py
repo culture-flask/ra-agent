@@ -67,7 +67,7 @@ class _FakeModel:
     def bind_tools(self, schemas):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         system = next((m.content for m in messages
                        if getattr(m, "type", "") == "system"), "")
         if "问答路由" in str(system):
@@ -258,7 +258,7 @@ def test_compact_failure_skips_gracefully():
     from app.graph.workflow import build_graph
 
     class BoomModel(_FakeModel):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, **kwargs):
             system = next((m.content for m in messages
                            if getattr(m, "type", "") == "system"), "")
             if "对话总结助手" in str(system):

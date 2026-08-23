@@ -45,7 +45,7 @@ class ScriptedModel:
     def bind_tools(self, schemas):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         if self._captured is not None and messages:
             self._captured.append(str(messages[0].content))   # 记录 system prompt
         return self._responses.pop(0) if self._responses \

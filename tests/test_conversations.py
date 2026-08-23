@@ -110,7 +110,7 @@ class _FakeModel:
     def bind_tools(self, schemas):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         return AIMessage(content="历史回答")
 
     async def astream(self, messages):

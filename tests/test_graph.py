@@ -45,7 +45,7 @@ class RouterAwareFakeModel:
     def bind_tools(self, schemas):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         system = next((m.content for m in messages
                        if getattr(m, "type", "") == "system"), "")
         if self._captured is not None:

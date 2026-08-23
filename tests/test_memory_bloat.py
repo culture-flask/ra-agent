@@ -144,7 +144,7 @@ def test_maintain_pipeline_with_fake_llm():
     ms.set(uid, "current_task", {"v": "本周写论文"}, tier="short", topic="项目")
 
     class _MergeModel:
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, **kwargs):
             return AIMessage(content=json.dumps(
                 {"merged": [{"topic": "研究方向", "key": "research_a",
                              "value": "研究量子纠错与量子退火"}]}, ensure_ascii=False))

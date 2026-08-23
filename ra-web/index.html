@@ -444,6 +444,8 @@ html[data-theme="light"] .think-body{background:#fdf4df;border-color:#ecd9a8;col
 html[data-theme="light"] .msg.user .bubble{background:linear-gradient(135deg,#2d7046,#1d6638);color:#fff}
 html[data-theme="light"] .tbl th{background:#cfe4d1;color:#123d24;border-bottom-color:#8eaf94}html[data-theme="light"] .tbl td{color:#17251d;border-bottom-color:#c5d5c7}
 html[data-theme="light"] .bubble code,html[data-theme="light"] .step .sdesc code,html[data-theme="light"] .kv code{background:#dbe9dd;color:#123d24}
+html[data-theme="light"] .bubble pre,html[data-theme="light"] .tbl pre{background:#fafafa;color:#17251d;border:1px solid #e5e5e5;border-radius:8px}
+html[data-theme="light"] .bubble pre code{background:none;color:inherit}
 html[data-theme="light"] .modal,html[data-theme="light"] .toast{background:#ffffff;color:#17251d}.modal{position:absolute}
 .theme-toggle{display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:rgba(201,154,74,.08);color:var(--ink);font-size:12px;transition:.2s;white-space:nowrap}.theme-toggle:hover{border-color:var(--accent);transform:translateY(-1px)}.theme-icon{font-size:16px;line-height:1}
 html[data-theme="light"] .theme-toggle{background:#d6e8d8;border-color:#789681;color:#123d24}
@@ -475,6 +477,11 @@ html[data-theme="light"] .warn-banner{background:#fff4d6!important;border-color:
 .warn-banner{background:#3b291b!important;border-color:#c58a3c!important;color:#ffd58c!important}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
 </style>
+
+
+<!-- highlight.js 语法高亮 -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" id="hljs-dark">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css" id="hljs-light" disabled>
 </head>
 <body>
 <canvas id="particle-canvas" aria-hidden="true"></canvas>
@@ -683,6 +690,7 @@ const state = {
   view: "chat", user: null,
   sessions: [], active: null,
   streaming: false,
+  streamSid: null, streamMsgs: null,   // 进行中的流所属会话 + 其内存消息数组（允许生成期间切换会话）
   kbs: [], providers: {},
   retrievalMode: "hybrid",   // vector（纯向量）| hybrid（向量+BM25）
   perKbK: 3, totalK: 5,      // 检索数量：每库几条 / 合并后总共几条
@@ -698,6 +706,11 @@ const theme = {
 function applyTheme(mode) {
   const light = mode === "light";
   document.documentElement.dataset.theme = light ? "light" : "dark";
+  // 切换 highlight.js 主题
+  const darkLink = document.getElementById("hljs-dark");
+  const lightLink = document.getElementById("hljs-light");
+  if (darkLink && lightLink) { darkLink.disabled = light; lightLink.disabled = !light; }
+
   const btn = $("#theme-toggle");
   if (btn) { btn.querySelector(".theme-icon").textContent = light ? "☾" : "☼"; btn.querySelector(".theme-label").textContent = light ? "深色模式" : "浅色模式"; btn.title = light ? "切换深色模式" : "切换浅色模式"; btn.setAttribute("aria-label", btn.title); }
 }
@@ -769,7 +782,16 @@ function shortId(id) { return id ? String(id).slice(0, 8) : "-"; }
 /* ---------------- 轻量 Markdown ---------------- */
 function md(text) {
   let t = esc(text);
-  t = t.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => "<pre><code>" + code.replace(/\n$/, "") + "</code></pre>");
+  t = t.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+    const cleanCode = code.replace(/\n$/, "");
+    let highlighted = cleanCode;
+    if (typeof hljs !== 'undefined') {
+      try {
+        highlighted = lang ? hljs.highlight(cleanCode, { language: lang }).value : hljs.highlightAuto(cleanCode).value;
+      } catch (e) { /* 高亮失败 */ }
+    }
+    return '<pre><code' + (lang ? ' class="language-' + lang + '"' : '') + '>' + highlighted + '</code></pre>';
+  });
   t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
   t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
   t = t.replace(/^#{1,3}\s*(.+)$/gm, "<b>$1</b>");
@@ -990,7 +1012,12 @@ async function ensureHistory(sid) {
     remote = r.messages || [];
   } catch { return; }
   let local = [];
-  try { local = JSON.parse(localStorage.getItem(store.mk(sid)) || "[]"); } catch { }
+  // 流进行中且拉的就是流所属会话：localStorage 只有空壳，以内存数组为准
+  if (sid === state.streamSid && state.streaming && state.streamMsgs) {
+    local = state.streamMsgs;
+  } else {
+    try { local = JSON.parse(localStorage.getItem(store.mk(sid)) || "[]"); } catch { }
+  }
   const merged = mergeRichHistory(remote, local);
   if (JSON.stringify(merged) !== JSON.stringify(local)) {
     localStorage.setItem(store.mk(sid), JSON.stringify(merged));
@@ -1032,7 +1059,7 @@ function renderSessions() {
        <span class="ren" data-ren="${esc(s.id)}" title="重命名会话">✎</span>
      </div>`).join("");
   $$("#session-list .sess-item").forEach(el => el.onclick = () => {
-    if (state.streaming) return;
+    // 生成期间也允许切换：流在后台继续（patch/save 都按 streamSid 隔离，见 sendMessage）
     state.active = el.dataset.id; saveSessions(); renderSessions(); renderMessages();
     ensureHistory(el.dataset.id);               // 切换会话时拉服务端历史（跨设备补全）
   });
@@ -1071,10 +1098,13 @@ async function renameSession(id) {
   }
 }
 function getMsgs() {
+  // 流进行中且看的是流所属会话：以内存数组为准（流未结束前 localStorage 只有空壳）
+  if (state.streaming && state.streamSid === state.active && state.streamMsgs)
+    return state.streamMsgs;
   try { return JSON.parse(localStorage.getItem(store.mk(state.active)) || "[]"); }
   catch { return []; }
 }
-function saveMsgs(msgs) { localStorage.setItem(store.mk(state.active), JSON.stringify(msgs.slice(-100))); }
+function saveMsgs(msgs, sid) { localStorage.setItem(store.mk(sid || state.active), JSON.stringify(msgs.slice(-100))); }
 
 /* ================= 对话 ================= */
 const STEP_STYLE = {
@@ -1410,6 +1440,7 @@ function sendChat() {
 /* 发送消息：opts.rewind=true 时不追加新用户消息（后端按 checkpoint 最后一条用户消息重新生成） */
 async function sendMessage(text, opts = {}) {
   if (!text.trim() || state.streaming) return;
+  const streamSid = state.active;          // 流所属会话：期间用户可切换视图，patch/save 按此隔离
   const msgs = getMsgs();
   const sess = state.sessions.find(s => s.id === state.active);
   const sendFiles = opts.files || [];                    // 本轮附件（已解析成功的）
@@ -1436,7 +1467,8 @@ async function sendMessage(text, opts = {}) {
   }
   const asst = { role: "assistant", content: "", steps: [], retrievals: [], _streaming: true };
   msgs.push(asst);
-  saveMsgs(msgs);        // 先落库，renderMessages（从 localStorage 读）才能看到新消息
+  state.streamSid = streamSid; state.streamMsgs = msgs;   // 注册流上下文：切走后 renderMessages 仍以内存为准
+  saveMsgs(msgs, streamSid); // 先落库，renderMessages（从 localStorage 读）才能看到新消息
   renderMessages();
   state.streaming = true;
   $("#send-btn").disabled = true;
@@ -1471,7 +1503,7 @@ async function sendMessage(text, opts = {}) {
           let ev;
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
           handleChatEvent(ev, asst, stepByTrace);
-          patchLastMsg(asst);
+          if (state.active === streamSid) patchLastMsg(asst);   // 视图已切走则只累积不渲染
         }
       }
     }
@@ -1484,9 +1516,11 @@ async function sendMessage(text, opts = {}) {
     $("#send-btn").disabled = false;
     const sb = $("#stop-btn");
     sb.style.display = "none"; sb.disabled = false; sb.textContent = "停止";
-    patchLastMsg(asst);
-    saveMsgs(msgs);
-    loadSessionUsage(state.active);      // P3-20：本轮用量已落库，刷新会话累计
+    if (state.active === streamSid) patchLastMsg(asst);
+    // 会话仍存在才落库（生成期间被删的会话不留幽灵数据）
+    if (state.sessions.some(s => s.id === streamSid)) saveMsgs(msgs, streamSid);
+    state.streamSid = null; state.streamMsgs = null;
+    loadSessionUsage(streamSid);        // P3-20：本轮用量已落库，刷新流所属会话累计
     $("#chat-input").focus();
   }
 }
@@ -1502,7 +1536,7 @@ async function stopGeneration() {
     if (store.token) headers["Authorization"] = "Bearer " + store.token;
     await fetch(store.base + "/api/v1/chat/stop", {
       method: "POST", headers,
-      body: JSON.stringify({ session_id: state.active })
+      body: JSON.stringify({ session_id: state.streamSid || state.active })   // 视图切走也能停对流所属会话
     });
   } catch (e) { /* 标记失败也无妨：SSE 流本身会自然结束 */ }
 }
@@ -1587,12 +1621,14 @@ function handleChatEvent(ev, asst, stepByTrace) {
     case "memory_load":
       asst.steps.push({ kind: "memory_load", status: "ok", desc: `载入 ${ev.count} 条长期记忆` });
       break;
-    case "context":
+    case "context": {
       ctxSeq++;                  // SSE 是图跑完后的最新值：使在途 GET 旧响应失效
+      const sid = state.streamSid || state.active;   // 事件归属流所属会话（视图可能已切走）
       state.ctxUsage = state.ctxUsage || {};
-      state.ctxUsage[state.active] = ev;
-      renderUsageBar((state.sessionUsage || {})[state.active], ev, state.active);
+      state.ctxUsage[sid] = ev;
+      renderUsageBar((state.sessionUsage || {})[sid], ev, sid);
       break;
+    }
     case "compact":
       asst.steps.push({ kind: "compact", status: "ok",
         desc: `对话已达 ${ev.total_rounds} 轮 / 估测 ${ev.tokens_estimated} tokens（窗口 ${ev.window}）→ 总结 ${ev.compacted_rounds} 轮历史，保留最近 ${ev.keep_rounds} 轮` });
@@ -2739,5 +2775,16 @@ $("#trace-current").onclick = () => {
   catch (e) { store.token = null; showAuth(); }
 })();
 </script>
+
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/markdown.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
 </body>
 </html>

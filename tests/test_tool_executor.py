@@ -33,7 +33,7 @@ class ScriptedModel:
     def bind_tools(self, schemas):
         return self          # 测试用：假装绑定了工具
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         return self._responses.pop(0)
 
     async def astream(self, messages):

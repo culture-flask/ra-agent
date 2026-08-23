@@ -250,12 +250,19 @@ ROUTE_PROMPT = """你是问答路由，负责判断用户提问是否需要查�
 {catalog}
 
 判断规则：
-- 闲聊、寒暄、数学计算、写代码、通用常识（无需特定资料就能回答）→ 不需要检索
-- 问题涉及知识库里的具体内容（术语、资料、论文、实验记录、项目背景等），
-  或用户明确要求"查/搜/总结知识库" → 需要检索，并选出最相关的库
+- 以下情况**不需要检索**：闲聊、寒暄、纯情绪与语气词（"好的""牛""哈哈""谢谢"等）、
+  玩笑与吐槽、数学计算、代码解释与调试、通用技术概念问答（框架用法、工具选型等
+  凭通用知识可回答的）、通用常识；
+- 以下情况**需要检索**：问题涉及知识库里的具体内容（论文结论、实验数据、
+  项目细节、文件原文、术语出处），或用户明确要求"查/搜/总结知识库"；
+  只选确实相关的库
+- 判定标准：想象"没有知识库，这个问题能否答好"——能答好就不检索；
+  只有确实需要库内具体内容才检索
 - 拿不准时倾向于需要检索，宁可多选一个相关的库也不漏掉
 - 【延续话题，免重复检索】若下方给出了 [上一轮检索状态]，且当前提问只是对
   上一轮已回答话题的延续/追问/总结（没有引入新的知识需求），则不需要检索。
+
+注意：你只输出 JSON 判定，不跟用户对话、不接梗、不闲聊、不解释。
 
 只输出 JSON，不要任何其他文字：
 {{"needs_retrieval": true或false, "kbs": [{{"name": "库名", "scope": "public或private"}}]}}
@@ -278,6 +285,30 @@ def _parse_route(text: str) -> dict:
         except json.JSONDecodeError:
             return {}
     return data if isinstance(data, dict) else {}
+
+
+def _looks_like_chitchat(state: AgentState) -> bool:
+    """路由输出不可解析时的温和降级判定：最后一条用户消息像闲聊/语气词
+    （短消息、无问句、无检索意图词）→ True（判不检索）。
+
+    背景：带历史上下文时模型偶发"聊天式"输出（用户玩梗"牛来！"时模型
+    接梗不输出 JSON）→ 解析失败走全库检索兜底，无关话题也会带上检索。
+    json_object 模式已从源头压住，此判定作为第二道保险。
+    """
+    msgs = state.get("messages") or []
+    if not msgs:
+        return False
+    text = str(getattr(msgs[-1], "content", "") or "").strip()
+    if not text:
+        return True                       # 空消息：按闲聊处理
+    if len(text) > 20:
+        return False                      # 长消息通常有真实意图
+    if any(k in text for k in ("？", "?", "查", "搜", "论文", "文献", "资料",
+                               "总结", "介绍", "解释", "库",
+                               "什么", "为什么", "怎么", "如何", "哪", "谁",
+                               "区别", "定义", "是")):
+        return False                      # 含检索意图词/疑问词：不按闲聊降级
+    return True
 
 
 def _resolve_selected_kbs(kbs: list, picks: list) -> list:
@@ -511,15 +542,33 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
         if lrs.get("hit_count"):
             prompt += ("\n\n[上一轮检索状态] 上一轮检索了知识库「%s」，共命中 %d 条。"
                        % ("、".join(lrs.get("kb_names") or ["?"]), lrs["hit_count"]))
-        resp = await model.ainvoke([SystemMessage(content=prompt)] + state["messages"][-10:])
+        # 强制 JSON 输出（P3-35）：带历史上下文时模型偶发"聊天式"输出——用户
+        # 玩梗（"牛来！"）时模型接梗不输出 JSON → 解析失败走全库检索降级，
+        # 无关话题也会带上检索。json_object 模式从源头压住；端点不支持时回退
+        # 普通调用（老版本网关/部分自建端点没有 JSON 模式）。
+        try:
+            resp = await model.ainvoke(
+                [SystemMessage(content=prompt)] + state["messages"][-10:],
+                response_format={"type": "json_object"})
+        except Exception as e:
+            if ("response_format" not in str(e).lower()
+                    and "json_object" not in str(e).lower()):
+                raise
+            logger.warning("router json mode unsupported, fallback plain: %s", e)
+            resp = await model.ainvoke(
+                [SystemMessage(content=prompt)] + state["messages"][-10:])
         route = _parse_route(str(resp.content or ""))
         if not route:                         # LLM 没按 JSON 输出 → 无法判断意图
-            raise ValueError("unparseable route output")
-        needs = bool(route.get("needs_retrieval"))
-        if needs:
-            selected = _resolve_selected_kbs(kbs, route.get("kbs"))
-            if not selected:                  # 说要查但一个库都没选中 → 全查，避免漏检索
-                selected = list(kbs)
+            if _looks_like_chitchat(state):
+                needs, selected = False, []   # 明显闲聊：温和降级为不检索
+            else:
+                raise ValueError("unparseable route output")
+        else:
+            needs = bool(route.get("needs_retrieval"))
+            if needs:
+                selected = _resolve_selected_kbs(kbs, route.get("kbs"))
+                if not selected:              # 说要查但一个库都没选中 → 全查，避免漏检索
+                    selected = list(kbs)
     except Exception as e:
         logger.warning("kb routing failed, fallback to all visible kbs: %s", e)
         needs, selected = True, list(kbs)
