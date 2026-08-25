@@ -251,7 +251,7 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
 
 
 # ---------- 知识库路由（LLM 意图判断） ----------
-ROUTE_PROMPT = """你是问答路由，负责判断用户提问是否需要查询知识库，以及查哪些库。
+ROUTE_PROMPT = """你是问答路由，负责快速判断用户提问是否需要查询知识库，以及查哪些库，不要过度思考。
 
 可用知识库（JSON 数组，只列用户可见的库；description 是该库的介绍，
 据此判断它与提问的相关性）：
@@ -264,8 +264,6 @@ ROUTE_PROMPT = """你是问答路由，负责判断用户提问是否需要查�
 - 以下情况**需要检索**：问题涉及知识库里的具体内容（论文结论、实验数据、
   项目细节、文件原文、术语出处），或用户明确要求"查/搜/总结知识库"；
   只选确实相关的库
-- 判定标准：想象"没有知识库，这个问题能否答好"——能答好就不检索；
-  只有确实需要库内具体内容才检索
 - 拿不准时倾向于需要检索，宁可多选一个相关的库也不漏掉
 - 【延续话题，免重复检索】若下方给出了 [上一轮检索状态]，且当前提问只是对
   上一轮已回答话题的延续/追问/总结（没有引入新的知识需求），则不需要检索。
@@ -514,11 +512,40 @@ def _compose_llm_messages(state: AgentState, system: SystemMessage,
     return [system] + msgs[:idx + 1] + [retrieval] + msgs[idx + 1:]
 
 
+# 路由是简单分类任务，思考纯属浪费延迟（业内共识：提示词压不住思考模型，
+# 必须参数级关闭）。各端点只认自家的"关思考"方言键，按序探测：
+# 报参数不识别类错误就换下一个，全不认则裸调（行为同旧版）。
+_THINK_OFF_DIALECTS: tuple[dict, ...] = (
+    {"thinking": {"type": "disabled"}},                    # DeepSeek V4 / 智谱 GLM
+    {"enable_thinking": False},                            # Qwen3（DashScope 兼容模式）
+    {"chat_template_kwargs": {"enable_thinking": False}},  # Qwen3（vLLM/SGLang 自部署）
+    {"reasoning_effort": "low"},                           # OpenAI 系推理模型降档
+)
+# 探测结果按端点缓存（值 None 表示该端点不认任何方言、裸调即可），
+# 进程内每个端点最多完整探测一次，后续路由零探测开销。
+_route_dialect_cache: dict[tuple[str, str], "dict | None"] = {}
+# 参数被端点拒绝的典型错误特征（小写匹配）：命中才换方言，
+# 网络/鉴权等其它错误照旧走重试或上抛。
+_PARAM_REJECT_MARKERS = (
+    "unrecognized", "unexpected", "unknown", "unsupported",
+    "not permitted", "not allowed", "does not support",
+    "extra fields", "extra_forbidden", "invalid_request_error",
+    "thinking", "enable_thinking", "chat_template_kwargs",
+    "reasoning_effort",
+)
+
+
+def _is_param_rejected(e: Exception) -> bool:
+    """判断异常是否为端点不识别请求参数（用于关思考方言探测换挡）。"""
+    msg = str(e).lower()
+    return any(m in msg for m in _PARAM_REJECT_MARKERS)
+
+
 async def _native_route_round(cfg, prompt, msgs_lc, temperature, sid,
                               use_json=True):
-    """supervisor 路由的原生流式调用：思考过程实时以 routing_reasoning
-    事件透传——thinking 模型的路由可能耗时数十秒，让前端看到模型在工作
-    而不是静默卡住。返回模型输出文本（应为 JSON）。
+    """supervisor 路由的原生流式调用：自动携带"关闭思考"参数（按端点方言
+    探测并缓存），避免简单分类任务被 thinking 模型拖到数十秒；残余思考内容
+    仍以 routing_reasoning 事件透传。返回模型输出文本（应为 JSON）。
 
     与 generate 的区别：无"最终答案轮"概念，不需要 reasoning_end/discard；
     use_json 时带 response_format=json_object（端点不支持由调用方回退重试）。
@@ -527,42 +554,52 @@ async def _native_route_round(cfg, prompt, msgs_lc, temperature, sid,
     client = AsyncOpenAI(api_key=cfg.api_key, base_url=cfg.base_url,
                          timeout=180.0, max_retries=0)
     msgs = _to_openai_messages([SystemMessage(content=prompt)] + list(msgs_lc))
-    payload = {"model": cfg.model_id, "messages": msgs,
-               "temperature": temperature, "stream": True}
+    base = {"model": cfg.model_id, "messages": msgs,
+            "temperature": temperature, "stream": True}
     if use_json:
-        payload["response_format"] = {"type": "json_object"}
+        base["response_format"] = {"type": "json_object"}
+    key = (str(cfg.base_url), str(cfg.model_id))
+    if key in _route_dialect_cache:          # 已探测过：直接用可用方言
+        candidates: list = [_route_dialect_cache[key]]
+    else:
+        candidates = list(_THINK_OFF_DIALECTS) + [None]
     last_err = None
-    for attempt in range(2):          # 路由轻量：网络抖动最多补一次
-        try:
-            stream = await client.chat.completions.create(**payload)
-            parts: list[str] = []
-            async for chunk in stream:
-                if is_stopped(sid):    # 用户停止：返回残文走既有降级路径即可
-                    break
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta is None:
-                    continue
-                rc = (getattr(delta, "reasoning_content", None)
-                      or getattr(delta, "reasoning", None))
-                if isinstance(rc, list):   # 分片数组形态 → 拼接
-                    rc = "".join((p.get("text") or p.get("summary") or "")
-                                 for p in rc if isinstance(p, dict))
-                if isinstance(rc, str) and rc:
-                    emit("routing_reasoning", {"content": rc})
-                if delta.content:
-                    parts.append(delta.content)
+    for extras in candidates:
+        payload = {**base, **(extras or {})}
+        for attempt in range(2):          # 路由轻量：网络抖动最多补一次
             try:
-                await stream.close()
-            except Exception:
-                pass
-            return "".join(parts)
-        except Exception as e:
-            last_err = e
-            if attempt >= 1 or not _is_retryable(e):
-                raise
-            await asyncio.sleep(0.5 * (2 ** attempt))
+                stream = await client.chat.completions.create(**payload)
+                parts: list[str] = []
+                async for chunk in stream:
+                    if is_stopped(sid):    # 用户停止：返回残文走既有降级路径即可
+                        break
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta is None:
+                        continue
+                    rc = (getattr(delta, "reasoning_content", None)
+                          or getattr(delta, "reasoning", None))
+                    if isinstance(rc, list):   # 分片数组形态 → 拼接
+                        rc = "".join((p.get("text") or p.get("summary") or "")
+                                     for p in rc if isinstance(p, dict))
+                    if isinstance(rc, str) and rc:
+                        emit("routing_reasoning", {"content": rc})
+                    if delta.content:
+                        parts.append(delta.content)
+                try:
+                    await stream.close()
+                except Exception:
+                    pass
+                _route_dialect_cache[key] = extras   # 记住该端点可用的方言
+                return "".join(parts)
+            except Exception as e:
+                last_err = e
+                if _is_param_rejected(e):
+                    break             # 方言不被识别：立即换下一个，不重试
+                if attempt >= 1 or not _is_retryable(e):
+                    raise
+                await asyncio.sleep(0.5 * (2 ** attempt))
     raise last_err or RuntimeError("unreachable")
 
 
