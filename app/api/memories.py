@@ -1,7 +1,6 @@
 """长期记忆：查看 / 分层调级（置顶核心|降为短期）/ 选择性删除（单个或批量）。
 
-P0-1 鉴权改造：身份一律取自 Bearer token；记忆是用户级隐私数据，
-改造前凭 query 参数即可读删任意用户的记忆，现已收口为强制本人。
+身份一律取自 Bearer token；记忆是用户级隐私数据，
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request

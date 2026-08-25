@@ -3,6 +3,7 @@ import asyncio
 import json
 import random
 import re
+import time
 import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
@@ -10,7 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, Syst
 from app.core.cancel import clear_stop, is_stopped
 from app.core.events import emit
 from app.core.logging import get_logger
-from app.services.memory_service import MEMORY_MAX
+from app.services.memory_service import MEMORY_MAX, MemoryService
 from app.graph.state import AgentState
 from app.abstractions.llm import DEFAULT_TEMPERATURE, _is_retryable
 
@@ -23,9 +24,9 @@ class WorkflowContext:
     settings: object
     llm_service: object
     kb_service: object
-    mcp_adapter: object = None     
-    tracer: object = None
-    memory_service: object = None  
+    mcp_adapter: object | None = None
+    tracer: object | None = None
+    memory_service: MemoryService | None = None
 
 # ---------- 长记忆----------
 EXTRACT_PROMPT = """从这段对话中提取值得记住的用户信息（研究主题、偏好、
@@ -99,21 +100,25 @@ def _normalize_memory(m: dict) -> dict:
 # ---------- 自动上下文压缩 ----------
 COMPACT_KEEP_ROUNDS = 4          # 压缩后保留的最近轮数
 COMPACT_MIN_ROUNDS = 20          # 轮数超过该值触发压缩（>20 轮）
-COMPACT_MIN_TOKEN_RATIO = 0.1    # 轮数路径的最小占用门槛（占窗口比例，P3-25）
+COMPACT_MIN_TOKEN_RATIO = 0.2    # 轮数路径的最小占用门槛
 
-COMPACT_PROMPT = """你是对话总结助手。下面是用户与科研助手的多轮对话历史。
-请把它整理成一份简洁的中文总结，保留以下信息：
-- 用户的研究主题、关键问题与已获得的结论
-- 对话中确认的事实、参数、偏好（后续对话可能继续引用）
-- 尚未解决或待跟进的问题
-要求：第三人称叙述，按主题组织，200~400 字，不要遗漏重要细节。只输出总结正文。"""
+COMPACT_PROMPT = """您正在进行上下文检查点压缩。请为另一个LLM创建一个交接摘要，以便其继续本次对话。
+
+内容包括：
+- 用户的研究主题、关键问题及迄今得出的结论
+- 对话中已确认的事实、参数和用户偏好
+- 未解决的问题或后续跟进事项（明确下一步行动）
+
+请简洁、结构清晰，注重顺畅延续。
+仅输出摘要正文：第三人称，按主题组织，400~1000个汉字，使用中文。
+"""
 
 
 def _round_count(messages: list) -> int:
     """轮数 = 用户提问条数（一对 user+assistant 算一轮）。"""
     return sum(1 for m in messages if getattr(m, "type", "") == "human")
 
-# _estimate_tokens 已挪至 core/tokens.py（P2-17 分层修正：API 层也要用，
+# _estimate_tokens 已挪至 core/tokens.py：API 层也要用，
 # 不能让 api 反向依赖编排层私有符号），此处按公共名导入。
 from app.core.tokens import estimate_tokens
 
@@ -178,7 +183,7 @@ def _split_keep_and_old(messages: list, keep_rounds: int):
 
 async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """自动上下文压缩（图的第一站）：token 估测达上下文上限 80%，或轮数 >20
-    且占用 ≥ 窗口 10%（P3-25 最小门槛）时，把最近 4 轮之外的历史交给 LLM 总结，
+    且占用 ≥ 窗口 20% 时，把最近 4 轮之外的历史交给 LLM 总结，
     后续生成使用「总结 + 最近 4 轮」。
 
     - 总结存入 conversation_summary（拼进系统提示词），旧消息用 RemoveMessage
@@ -206,8 +211,7 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
     if not triggered_by_tokens:
         if rounds <= COMPACT_MIN_ROUNDS:
             return {}
-        # P3-25：轮数兜底触发也要有最小占用门槛——256k 大窗下 21 轮短对话
-        # 可能只占窗口百分之几，此时总结丢细节纯属浪费；占用低于窗口 10%
+        # 可能只占窗口百分之几，此时总结丢细节纯属浪费；占用低于窗口 20%
         # 一律不压（token 达 80% 的主动路径不受此门槛约束）。
         if tokens <= window * COMPACT_MIN_TOKEN_RATIO:
             return {}
@@ -219,7 +223,11 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
         model = await asyncio.to_thread(
             ctx.llm_service.get_chat_model,
             state["user_id"], temperature=state.get("temperature"))
+        _t0 = time.perf_counter()
         resp = await model.ainvoke([SystemMessage(content=COMPACT_PROMPT)] + old)
+        logger.info("compact summarized in %.1fs old_rounds=%d chars=%d",
+                    time.perf_counter() - _t0, len(old),
+                    len(str(resp.content or "")))
         summary = str(resp.content or "").strip()
     except Exception as e:
         logger.warning("context compact failed, skip: %s", e)
@@ -271,27 +279,14 @@ ROUTE_PROMPT = """你是问答路由，负责判断用户提问是否需要查�
 
 def _parse_route(text: str) -> dict:
     """解析路由 LLM 返回的 JSON（容忍围栏/夹带文字）。解析失败返回空 dict。"""
-    text = text.strip()
-    if "```" in text:                            # 去掉 markdown 围栏
-        text = re.sub(r"```(?:json)?", "", text).strip("` \n")
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", text, re.S)
-        if not m:
-            return {}
-        try:
-            data = json.loads(m.group(0))
-        except json.JSONDecodeError:
-            return {}
-    return data if isinstance(data, dict) else {}
+    return _loads_fuzzy(text) or {}
 
 
 def _looks_like_chitchat(state: AgentState) -> bool:
     """路由输出不可解析时的温和降级判定：最后一条用户消息像闲聊/语气词
     （短消息、无问句、无检索意图词）→ True（判不检索）。
 
-    背景：带历史上下文时模型偶发"聊天式"输出（用户玩梗"牛来！"时模型
+    背景：带历史上下文时模型偶发"聊天式"输出（用户玩梗时模型
     接梗不输出 JSON）→ 解析失败走全库检索兜底，无关话题也会带上检索。
     json_object 模式已从源头压住，此判定作为第二道保险。
     """
@@ -337,9 +332,16 @@ def _resolve_selected_kbs(kbs: list, picks: list) -> list:
 
 
 async def load_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """跨会话读取：只把 core 层注入状态（short 不进 prompt，省 token 防噪音）。"""
+    """跨会话读取：只把 core 层注入状态（short 不进 prompt，省 token 防噪音）。
+    会话内只注入一次：首轮读库后随 checkpoint 持久化，后续轮直接复用快照——
+    会话中新抽取的记忆源自历史消息本身，再注入只会与上下文重复；且快照
+    不变让系统提示词跨轮字节级一致（前缀缓存更稳）。
+    """
     if ctx.memory_service is None:
         return {"memory": {}}
+    if state.get("memory"):                    # 非首轮：复用首轮快照，不重查
+        emit("memory_load", {"count": len(state["memory"]), "cached": True})
+        return {}
     uid = state["user_id"]
     memory = await asyncio.to_thread(ctx.memory_service.get_all, uid, "core")
     if memory:
@@ -453,24 +455,30 @@ _IDENTITY = ("你是科研助手。若用户消息后附有【知识库检索结
 
 
 def _build_system_prompt(state: AgentState) -> str:
-    """组装稳定的系统提示词前缀：固定身份 → 历史总结（低频变化）→ 用户记忆（定序）。
+    """组装稳定的系统提示词前缀：固定身份 → 用户记忆（定序）→ 历史总结（低频变化）。
 
     检索结果不进 system（每轮都变，放前缀会打穿供应商侧前缀缓存），
     改由 _retrieval_message 打包、_compose_llm_messages 插在最后一条
     用户消息之后——system 与对话历史跨轮字节级一致，命中 KV 前缀缓存。
     """
     parts = [_IDENTITY]
-    if state.get("conversation_summary"):
-        parts.append(f"[历史对话总结] {state['conversation_summary']}")
     if state.get("memory"):
         # sort_keys：键序不随 DB 返回顺序漂移（get_all 已 ORDER BY key，双保险）
         parts.append(f"[用户记忆] "
                      f"{json.dumps(state['memory'], ensure_ascii=False, sort_keys=True)}")
+    if state.get("conversation_summary"):
+        parts.append(f"[历史对话总结] {state['conversation_summary']}")
     return "\n\n".join(parts)
 
 
-def _retrieval_message(state: AgentState) -> SystemMessage | None:
-    """把本轮检索结果打包为一条临时消息（只进发送序列，不写 checkpoint）。"""
+def _retrieval_message(state: AgentState) -> HumanMessage | None:
+    """把本轮检索结果打包为一条临时消息（只进发送序列，不写 checkpoint）。
+
+    角色用 HumanMessage 而非 SystemMessage：消息序列中间的 system
+    是分布外排列，会触发 thinking 模型长思考/重复循环（A/B 实测思考
+    2988 字→100 字）；user 角色是标准 RAG 形态。原生路径翻译时相邻 user
+    会合并，最终仍以"资料附在问题末尾"的单条 user 发出。
+    """
     if not state.get("retrievals"):
         return None
     lines = ["【知识库检索结果】回答本问题时优先依据以下内容，引用标明来源。"]
@@ -485,11 +493,11 @@ def _retrieval_message(state: AgentState) -> SystemMessage | None:
                 f"含{r.get('hit_chunks')}个命中片段)] {r['text']}")
         else:
             lines.append(f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}")
-    return SystemMessage(content="\n".join(lines))
+    return HumanMessage(content="\n".join(lines))
 
 
 def _compose_llm_messages(state: AgentState, system: SystemMessage,
-                          retrieval: SystemMessage | None) -> list:
+                          retrieval: HumanMessage | None) -> list:
     """发送给 LLM 的消息序列：检索块插在最后一条用户消息之后。
 
     - 不拼进用户消息内容：上轮请求是本序列的严格前缀，供应商前缀缓存
@@ -504,6 +512,58 @@ def _compose_llm_messages(state: AgentState, system: SystemMessage,
     human_idx = [i for i, m in enumerate(msgs) if getattr(m, "type", "") == "human"]
     idx = human_idx[-1] if human_idx else len(msgs) - 1   # 无 human 时兜底置尾
     return [system] + msgs[:idx + 1] + [retrieval] + msgs[idx + 1:]
+
+
+async def _native_route_round(cfg, prompt, msgs_lc, temperature, sid,
+                              use_json=True):
+    """supervisor 路由的原生流式调用：思考过程实时以 routing_reasoning
+    事件透传——thinking 模型的路由可能耗时数十秒，让前端看到模型在工作
+    而不是静默卡住。返回模型输出文本（应为 JSON）。
+
+    与 generate 的区别：无"最终答案轮"概念，不需要 reasoning_end/discard；
+    use_json 时带 response_format=json_object（端点不支持由调用方回退重试）。
+    """
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(api_key=cfg.api_key, base_url=cfg.base_url,
+                         timeout=180.0, max_retries=0)
+    msgs = _to_openai_messages([SystemMessage(content=prompt)] + list(msgs_lc))
+    payload = {"model": cfg.model_id, "messages": msgs,
+               "temperature": temperature, "stream": True}
+    if use_json:
+        payload["response_format"] = {"type": "json_object"}
+    last_err = None
+    for attempt in range(2):          # 路由轻量：网络抖动最多补一次
+        try:
+            stream = await client.chat.completions.create(**payload)
+            parts: list[str] = []
+            async for chunk in stream:
+                if is_stopped(sid):    # 用户停止：返回残文走既有降级路径即可
+                    break
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta is None:
+                    continue
+                rc = (getattr(delta, "reasoning_content", None)
+                      or getattr(delta, "reasoning", None))
+                if isinstance(rc, list):   # 分片数组形态 → 拼接
+                    rc = "".join((p.get("text") or p.get("summary") or "")
+                                 for p in rc if isinstance(p, dict))
+                if isinstance(rc, str) and rc:
+                    emit("routing_reasoning", {"content": rc})
+                if delta.content:
+                    parts.append(delta.content)
+            try:
+                await stream.close()
+            except Exception:
+                pass
+            return "".join(parts)
+        except Exception as e:
+            last_err = e
+            if attempt >= 1 or not _is_retryable(e):
+                raise
+            await asyncio.sleep(0.5 * (2 ** attempt))
+    raise last_err or RuntimeError("unreachable")
 
 
 async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
@@ -525,10 +585,12 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
     catalog = [{"name": kb.name, "scope": kb.scope,
                 "description": kb.description or ""} for kb in kbs]
     selected: list = []
+    # 路由前置事件：thinking 模型的路由调用可能耗时数十秒且此前前端无任何
+    # 反馈（memory_load 与 supervisor 之间静默）——先告诉前端"正在判断意图"。
+    emit("routing", {})
+    route_cfg = _native_cfg(ctx, state["user_id"])   # 路由也走原生 SDK（思考可见）
+    msgs_route = state["messages"][-10:]
     try:
-        model = await asyncio.to_thread(
-            ctx.llm_service.get_chat_model,
-            state["user_id"], temperature=state.get("temperature"))
         prompt = ROUTE_PROMPT.format(catalog=json.dumps(catalog, ensure_ascii=False))
         # P3-24：路由输入只带最近 4 条消息，指代上文的追问（"接着刚才那个
         # 方案说"）会因看不到上文被误判为无需检索——把压缩总结（低频变化、
@@ -546,18 +608,42 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
         # 玩梗（"牛来！"）时模型接梗不输出 JSON → 解析失败走全库检索降级，
         # 无关话题也会带上检索。json_object 模式从源头压住；端点不支持时回退
         # 普通调用（老版本网关/部分自建端点没有 JSON 模式）。
-        try:
-            resp = await model.ainvoke(
-                [SystemMessage(content=prompt)] + state["messages"][-10:],
-                response_format={"type": "json_object"})
-        except Exception as e:
-            if ("response_format" not in str(e).lower()
-                    and "json_object" not in str(e).lower()):
-                raise
-            logger.warning("router json mode unsupported, fallback plain: %s", e)
-            resp = await model.ainvoke(
-                [SystemMessage(content=prompt)] + state["messages"][-10:])
-        route = _parse_route(str(resp.content or ""))
+        _t0 = time.perf_counter()
+        if route_cfg is not None:
+            # 原生流式：思考过程以 routing_reasoning 事件实时透传
+            try:
+                text = await _native_route_round(
+                    route_cfg, prompt, msgs_route,
+                    _native_temperature(state), state["session_id"],
+                    use_json=True)
+            except Exception as e:
+                if ("response_format" not in str(e).lower()
+                        and "json_object" not in str(e).lower()):
+                    raise
+                logger.warning("router json mode unsupported, fallback plain: %s", e)
+                text = await _native_route_round(
+                    route_cfg, prompt, msgs_route,
+                    _native_temperature(state), state["session_id"],
+                    use_json=False)
+        else:
+            # 测试假服务回退 langchain 路径（行为与旧版一致）
+            model = await asyncio.to_thread(
+                ctx.llm_service.get_chat_model,
+                state["user_id"], temperature=state.get("temperature"))
+            try:
+                resp = await model.ainvoke(
+                    [SystemMessage(content=prompt)] + msgs_route,
+                    response_format={"type": "json_object"})
+            except Exception as e:
+                if ("response_format" not in str(e).lower()
+                        and "json_object" not in str(e).lower()):
+                    raise
+                logger.warning("router json mode unsupported, fallback plain: %s", e)
+                resp = await model.ainvoke([SystemMessage(content=prompt)] + msgs_route)
+            text = str(resp.content or "")
+        logger.info("supervisor routed in %.1fs msgs=%d",
+                    time.perf_counter() - _t0, len(msgs_route))
+        route = _parse_route(text)
         if not route:                         # LLM 没按 JSON 输出 → 无法判断意图
             if _looks_like_chitchat(state):
                 needs, selected = False, []   # 明显闲聊：温和降级为不检索
@@ -797,14 +883,12 @@ def _native_temperature(state: AgentState) -> float:
 def _to_openai_messages(payload: list) -> list[dict]:
     """LangChain 消息序列 → 原生 openai SDK 的 Chat Completions 格式。
 
-    检索块（payload 里插在最后一条 human 之后的 SystemMessage）**折进最后
-    一条 user 消息**，而不是原样转发为消息序列中间的 system——A/B 实测
-    （真实检索块 1 万字符）：中间 system 触发 opencode 网关的 DeepSeek V4
-    长思考/重复循环（思考 2988 字、首答 12.7s），折进 user 后思考降到
-    100 字、首答 1.6s。system 仍在最前，前缀缓存不受影响。
+    相邻 user 消息合并为一条：检索块以 HumanMessage 插在问题之后，
+    合并后即"资料附在问题末尾"的**单条 user**——A/B 实测该形态思考最少
+    （中间 system 形态会触发 thinking 模型长思考/重复循环，2988 字→100 字）。
+    system 只保留队首一条，前缀缓存不受影响。
     """
     out: list[dict] = []
-    extra_system: list[str] = []   # 非开头的 system（检索块），稍后折进 user
     for m in payload:
         role = getattr(m, "type", None)
         content = m.content
@@ -812,12 +896,13 @@ def _to_openai_messages(payload: list) -> list[dict]:
             content = "".join(p.get("text", "") for p in content
                               if isinstance(p, dict))
         if role == "system":
-            if not out:                    # 首个 system 保留原位（前缀稳定）
-                out.append({"role": "system", "content": content or ""})
-            elif content:                  # 中间的 system（检索块）：折进 user
-                extra_system.append(content)
+            out.append({"role": "system", "content": content or ""})
         elif role == "human":
-            out.append({"role": "user", "content": content or ""})
+            if out and out[-1]["role"] == "user":   # 相邻 user → 并入上一条
+                out[-1]["content"] = (out[-1]["content"] + "\n\n"
+                                      + (content or ""))
+            else:
+                out.append({"role": "user", "content": content or ""})
         elif role == "ai":
             item: dict = {"role": "assistant", "content": content or ""}
             tcs = getattr(m, "tool_calls", None)
@@ -832,11 +917,6 @@ def _to_openai_messages(payload: list) -> list[dict]:
         elif role == "tool":
             out.append({"role": "tool", "content": content or "",
                         "tool_call_id": getattr(m, "tool_call_id", "")})
-    if extra_system and out:
-        target = next((it for it in reversed(out)
-                       if it["role"] == "user"), out[0])
-        target["content"] = (target["content"] + "\n\n"
-                             + "\n\n".join(extra_system))
     return out
 
 
@@ -926,9 +1006,10 @@ async def _native_round(cfg, payload, tools, temperature, sid):
     """
     from openai import AsyncOpenAI
     client = AsyncOpenAI(api_key=cfg.api_key, base_url=cfg.base_url,
-                         timeout=60.0, max_retries=0)
+                         timeout=180.0, max_retries=0)
     msgs = _to_openai_messages(payload)
     max_retries, base_delay = 10, 1.0
+    truncation_retried = False       # 截断自动重试只补一次，防无限循环
     for attempt in range(max_retries + 1):
         stopped = False
         try:
@@ -941,6 +1022,7 @@ async def _native_round(cfg, payload, tools, temperature, sid):
             tc_map: dict[int, dict] = {}    # index -> {"id","name","arguments"}
             last_usage = None
             had_reasoning = False           # 本轮是否见过推理内容（方言漂移观测）
+            seen_finish = None              # finish_reason：正常完成的标志
             async for chunk in stream:
                 if is_stopped(sid):
                     stopped = True
@@ -950,6 +1032,9 @@ async def _native_round(cfg, payload, tools, temperature, sid):
                     last_usage = cu
                 if not chunk.choices:
                     continue
+                fr = getattr(chunk.choices[0], "finish_reason", None)
+                if fr:
+                    seen_finish = fr
                 delta = chunk.choices[0].delta
                 if delta is None:
                     continue
@@ -990,6 +1075,23 @@ async def _native_round(cfg, payload, tools, temperature, sid):
                 except (json.JSONDecodeError, TypeError):
                     args = {}
                 tool_calls.append({"name": e["name"], "args": args, "id": e["id"]})
+            # 截断检测（P3-34 后续）：网关可能静默切断长生成——流正常结束但
+            # 既无 finish_reason 也无 usage（实测 ox-alpha-free 长回答在半句
+            # 处戛然而止、末块 usage 缺失）。首次遇此整轮重试一次；重试仍截断
+            # 则接受部分内容并记 warning（部分答复好于没有，但要可观测）。
+            if not stopped and seen_finish is None and last_usage is None:
+                partial = "".join(content_parts)
+                if not truncation_retried:
+                    truncation_retried = True
+                    logger.warning(
+                        "native stream truncated (no finish_reason/usage) "
+                        "model=%s partial_chars=%d -- retry once",
+                        cfg.model_id, len(partial))
+                    continue
+                logger.warning(
+                    "native stream truncated again after retry model=%s "
+                    "partial_chars=%d -- returning partial answer",
+                    cfg.model_id, len(partial))
             # 注意：本版本 langchain-core 的 AIMessage 不接受 tool_calls=None
             # （必须传 list，空列表 OK）——不传 None 以免触发 pydantic 校验错误
             if not had_reasoning and not stopped:

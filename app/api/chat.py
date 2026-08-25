@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/v1", tags=["chat"],
 
 
 class ChatRequest(BaseModel):
-    # 归属用户取自 Bearer token（P0-1 鉴权改造），请求体不再携带 user_id
+    # 归属用户取自 Bearer token，请求体不再携带 user_id
     session_id: str = "s1"
     message: str = Field(min_length=1)
     # 分支会话：新 thread 的初始历史（选中消息及之前），由前端随首次请求传入
@@ -127,7 +127,7 @@ def _conv_title(messages: list) -> str:
     return "新会话"
 
 
-# ---------- P1-8：记忆管线后台化 ----------
+# ---------- 记忆管线后台化 ----------
 # 强引用集合防后台任务被 GC（asyncio 只持弱引用，任务完成后自动移除）
 _BG_TASKS: set = set()
 
@@ -307,7 +307,7 @@ async def chat(req: ChatRequest, request: Request,
                                 req.title or _conv_title(result.get("messages", [])))
     except Exception as e:
         logger.warning("conversation register failed: %s", e)
-    # P1-8：记忆管线后台补跑（不阻塞响应返回）
+    # 记忆管线后台补跑（不阻塞响应返回）
     _spawn_memory_pipeline(request.app, uid, result,
                            temperature=req.temperature)
     return {
@@ -324,7 +324,7 @@ async def chat_stream(req: ChatRequest, request: Request,
     token（generate 节点逐字 emit）与图内事件（supervisor/retrieve/memory/trace）
     都经同一队列流出——不依赖 LangGraph messages 模式的 token 转发（节点未接
     config，该模式拿不到逐 token 回调），因此用事件总线更可靠。
-    身份取自 Bearer token（P0-1）；前端用 fetch+getReader 消费，可带 header。
+    身份取自 Bearer token；前端用 fetch+getReader 消费，可带 header。
     """
     uid = user.id
     graph = request.app.state.graph
@@ -363,7 +363,7 @@ async def chat_stream(req: ChatRequest, request: Request,
             except Exception as e:
                 logger.warning("context usage emit failed: %s", e)
             await sink.put({"type": "__done__"})
-            # P1-8：done 已推给前端，记忆抽取在独立后台任务补跑——
+            # done 已推给前端，记忆抽取在独立后台任务补跑——
             # 本任务随后被 event_gen 结束/取消也不影响它（独立 Task），
             # 其 emit 落入已无人消费的队列，无害。
             _spawn_memory_pipeline(request.app, uid, result,

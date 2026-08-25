@@ -1,8 +1,7 @@
 """调用追踪 API：查询 ToolCallLog。
 
-P0-1 鉴权改造：身份一律取自 Bearer token 并强制按当前用户过滤——
+身份一律取自 Bearer token 并强制按当前用户过滤——
 调用日志包含工具参数与输出明文，绝不允许跨用户读取
-（改造前接受任意 user_id 参数，任何登录用户可翻全库，属越权读取）。
 """
 
 from fastapi import APIRouter, Depends, Request

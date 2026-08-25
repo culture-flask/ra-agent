@@ -52,7 +52,7 @@ async def build_graph(ctx: WorkflowContext) -> StateGraph:
     builder.add_conditional_edges("supervisor", route_supervisor,
                                   {"retrieve": "retrieve", "generate": "generate"})
     builder.add_edge("retrieve", "generate")
-    # done 直达 END（P1-8）：记忆抽/存在图外后台补跑，SSE 提前结束
+    # done 直达 END：记忆抽/存在图外后台补跑，SSE 提前结束
     builder.add_conditional_edges("generate", route_after_generate,
                                   {"tool_executor": "tool_executor", "done": END})
     builder.add_edge("tool_executor", "generate") 

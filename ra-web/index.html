@@ -1304,6 +1304,18 @@ function thinkingHTML(m) {
   return `<details class="think"><summary>🧠 思考过程（${chars} 字）</summary><div class="think-body">${esc(m.reasoning)}</div></details>`;
 }
 
+/* 路由判断的思考条：supervisor 的 thinking 同样可能数十秒——可见即在工作。
+   独立于消息级 reasoning 面板（路由思考是瞬态，不持久化）。 */
+function routeThinkingHTML(m) {
+  if (typeof m.routeThinking !== "string") return "";
+  const chars = m.routeThinking.length;
+  const tail = chars > 600
+    ? "…（仅显示最新部分）\n\n" + m.routeThinking.slice(-600)
+    : m.routeThinking;
+  return `<details class="think" open><summary><span class="pulse-dot"></span>路由判断中…${chars ? `（已思考 ${chars} 字）` : ""}</summary>`
+       + (chars ? `<div class="think-body">${esc(tail)}</div>` : "") + `</details>`;
+}
+
 function citesHTML(retrievals) {
   if (!retrievals || !retrievals.length) return "";
   const items = retrievals.map((r, i) => {
@@ -1365,7 +1377,7 @@ function msgHTML(m, i, isLast) {
   }
   return `<div class="msg assistant"><div class="row">
     <div class="avatar">RA</div>
-    <div class="bubble-wrap">${thinkingHTML(m)}${stepsHTML(m.steps)}
+    <div class="bubble-wrap">${routeThinkingHTML(m)}${thinkingHTML(m)}${stepsHTML(m.steps)}
       <div class="bubble">${m._streaming ? md(m.content) + '<span class="cursor"></span>' : md(m.content)}</div>
       ${citesHTML(m.retrievals)}${actions}</div></div></div>`;
 }
@@ -1607,7 +1619,19 @@ function handleChatEvent(ev, asst, stepByTrace) {
     case "token":
       asst.content += ev.content || "";
       break;
+    case "routing":                     // 路由前置：thinking 模型路由可能数十秒
+      asst.routeThinking = "";          // 空串 = 活跃（显示"路由判断中"条）
+      asst.steps.push({ kind: "llm", status: "running", desc: "正在判断是否需要检索知识库…" });
+      break;
+    case "routing_reasoning":           // 路由思考过程流式透传（可见即在工作）
+      if (typeof asst.routeThinking === "string")
+        asst.routeThinking += ev.content || "";
+      break;
     case "supervisor": {
+      asst.routeThinking = null;               // 路由结束，思考条撤掉
+      const ri = asst.steps.findIndex(s => s.status === "running"
+        && typeof s.desc === "string" && s.desc.includes("正在判断"));
+      if (ri >= 0) asst.steps.splice(ri, 1);   // 真实路由结果到达，撤掉占位
       const chosen = (ev.selected || []).map(k =>
         `${k.scope === "private" ? "私人" : "公共"}·${esc(k.name)}`).join("、");
       asst.steps.push({ kind: "supervisor", status: "ok",

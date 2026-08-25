@@ -18,7 +18,7 @@ _CTX_WINDOW_MIN, _CTX_WINDOW_MAX = 1024, 10_000_000
 
 
 class LLMConfigRequest(BaseModel):
-    # 归属用户取自 Bearer token（P0-1），请求体不再携带 user_id
+    # 归属用户取自 Bearer token，请求体不再携带 user_id
     provider: str
     base_url: str
     model_id: str

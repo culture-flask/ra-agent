@@ -2,7 +2,7 @@
 
 前端 UI 默认值此前硬编码在 JS 里（3/5/3），改 yaml 无感知；
 现在由这里下发，前端未手动设置时跟随 yaml。
-P0-1：纳入全局鉴权（内容虽非敏感，业务面统一收口）。
+纳入全局鉴权（内容虽非敏感，业务面统一收口）。
 """
 
 from fastapi import APIRouter, Depends, Request

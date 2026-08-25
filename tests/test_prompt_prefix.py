@@ -64,7 +64,8 @@ def test_retrieval_message_formats():
         {"type": "chunk", "text": "小片段", "scope": "public", "kb_name": "公共库"},
     ]}
     msg = _retrieval_message(state)
-    assert isinstance(msg, SystemMessage)
+    # P3-34：检索块用 HumanMessage（消息序列中间的 system 触发 thinking 模型长思考）
+    assert isinstance(msg, HumanMessage)
     content = msg.content
     assert "【知识库检索结果】" in content
     assert "a.pdf 第2-3页" in content and "含2个命中片段" in content
@@ -84,7 +85,7 @@ def test_compose_passthrough_without_retrieval():
 def test_compose_inserts_after_last_human():
     """检索块插在最后一条 human 之后（不在 human 之前、不进 messages 尾部）。"""
     system = SystemMessage(content="S")
-    retrieval = SystemMessage(content="R")
+    retrieval = HumanMessage(content="R")
     msgs = [HumanMessage(content="u1"), AIMessage(content="a1"),
             HumanMessage(content="u2")]
     out = _compose_llm_messages({"messages": msgs}, system, retrieval)
@@ -95,7 +96,7 @@ def test_compose_tool_loop_round2_prefix_stable():
     """轮内工具循环：第二轮（尾部为 AI(tool_calls)+Tool）仍插在 human 后，
     且第二轮请求是第一轮的严格前缀扩展 → 前缀缓存全命中。"""
     system = SystemMessage(content="S")
-    retrieval = SystemMessage(content="R")
+    retrieval = HumanMessage(content="R")
     u1 = HumanMessage(content="u1")
     ai_tool = AIMessage(content="", tool_calls=[
         {"name": "web_search", "args": {"query": "q"}, "id": "call_1"}])
@@ -106,8 +107,8 @@ def test_compose_tool_loop_round2_prefix_stable():
                                    system, retrieval)
     # 第二轮前缀 = 第一轮完整序列
     assert _sig(round2)[:len(round1)] == _sig(round1)
-    # 检索块紧跟 human 之后（而非 tool 消息之后）
-    assert _sig(round2)[2] == ("system", "R")
+    # 检索块紧跟 human 之后（而非 tool 消息之后），且角色为 user
+    assert _sig(round2)[2] == ("human", "R")
 
 
 def test_compose_cross_turn_prefix_stable():
@@ -117,8 +118,8 @@ def test_compose_cross_turn_prefix_stable():
     u1 = HumanMessage(content="u1")
     a1 = AIMessage(content="a1")
     u2 = HumanMessage(content="u2")
-    r1 = SystemMessage(content="检索结果一")
-    r2 = SystemMessage(content="检索结果二")
+    r1 = HumanMessage(content="检索结果一")
+    r2 = HumanMessage(content="检索结果二")
 
     turn1 = _compose_llm_messages({"messages": [u1]}, system, r1)
     turn2 = _compose_llm_messages({"messages": [u1, a1, u2]}, system, r2)
@@ -137,7 +138,7 @@ def test_compose_cross_turn_prefix_stable():
 def test_compose_no_human_fallback_appends():
     """防御：没有 human 消息时检索块置尾（不会抛异常）。"""
     system = SystemMessage(content="S")
-    retrieval = SystemMessage(content="R")
+    retrieval = HumanMessage(content="R")
     msgs = [AIMessage(content="a")]
     out = _compose_llm_messages({"messages": msgs}, system, retrieval)
     assert _sig(out) == _sig([system, msgs[0], retrieval])
@@ -146,7 +147,7 @@ def test_compose_no_human_fallback_appends():
 def test_compose_does_not_mutate_state_messages():
     """组装是纯函数：state['messages'] 不被修改（检索块不进 checkpoint）。"""
     system = SystemMessage(content="S")
-    retrieval = SystemMessage(content="R")
+    retrieval = HumanMessage(content="R")
     msgs = [HumanMessage(content="u1")]
     state = {"messages": msgs}
     _compose_llm_messages(state, system, retrieval)

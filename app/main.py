@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
     Conversation.__table__.create(engine, checkfirst=True)
     # 记忆分层列（膨胀控制）：新建表含新列；旧表幂等补列 + 存量回填
     Memory.__table__.create(engine, checkfirst=True)
-    # 用户反馈（P3-19 反馈闭环）：评测集种子数据
+    # 用户反馈：评测集种子数据
     Feedback.__table__.create(engine, checkfirst=True)
     # Token 用量计量（P3-20）：成本报表与配额演进数据源
     LLMUsage.__table__.create(engine, checkfirst=True)
@@ -103,7 +103,7 @@ async def lifespan(app: FastAPI):
 
     memory_service = MemoryService()
     ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer, memory_service)
-    app.state.workflow_ctx = ctx                  # P1-8：API 层后台记忆管线复用同一编排上下文
+    app.state.workflow_ctx = ctx                  # API 层后台记忆管线复用同一编排上下文
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver
     app.state.kb_service = kb_service
     app.state.tracer = tracer
@@ -119,7 +119,7 @@ app = FastAPI(title="ra-agent", version="0.1.0", lifespan=lifespan)
 # 前端（浏览器跨域访问）需要 CORS；本地/私有化场景放开即可
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
-register_exception_handlers(app)           # 第 10 节实现
+register_exception_handlers(app)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(conversations_router)

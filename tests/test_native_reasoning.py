@@ -77,10 +77,13 @@ def _round_with_events(monkeypatch, chunks):
     """
     def _wrap(c):
         if getattr(c, "choices", None) is None:
-            return SimpleNamespace(choices=[SimpleNamespace(delta=c)], usage=None)
+            return SimpleNamespace(choices=[SimpleNamespace(delta=c, finish_reason=None)], usage=None)
         return c
 
     chunks = [_wrap(c) for c in chunks]
+    # 收尾 chunk：finish_reason=stop 表示正常完成（否则截断检测会整轮重试）
+    chunks.append(SimpleNamespace(choices=[SimpleNamespace(delta=None, finish_reason="stop")],
+                                  usage=None))
     q = asyncio.Queue()
     set_event_sink(q)
     try:
@@ -141,3 +144,72 @@ def test_neither_field_degrades_silently(monkeypatch):
     assert reasoning == []
     assert tokens == ["hi"]
     assert resp.content == "hi"
+
+# ---------- 截断检测（P3-34 后续）：无 finish_reason/usage = 网关静默断流 ----------
+
+def _install_multi_streams(monkeypatch, streams):
+    """create() 按序返回预置的多个流（用于验证截断重试次数）。"""
+    import openai
+
+    calls = {"n": 0}
+
+    class _Completions:
+        async def create(self, **kwargs):
+            i = min(calls["n"], len(streams) - 1)
+            calls["n"] += 1
+            return streams[i]
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _Client)
+    return calls
+
+
+def test_truncated_stream_retries_once_then_partial(monkeypatch):
+    """流静默断流（无 finish_reason/usage）→ 自动整轮重试一次；
+    重试仍截断 → 接受部分内容（不抛异常、不无限循环）。"""
+    def truncated_stream(text):
+        return _Stream([
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=_delta(content=text), finish_reason=None)], usage=None),
+        ])
+
+    s1 = truncated_stream("半截一")
+    s2 = truncated_stream("半截二")
+    calls = _install_multi_streams(monkeypatch, [s1, s2])
+
+    q = asyncio.Queue()
+    set_event_sink(q)
+    try:
+        resp, usage, stopped = _run(_native_round(CFG, [], None, 0.3, "s-trunc"))
+    finally:
+        clear_event_sink()
+
+    assert calls["n"] == 2                    # 恰好重试一次
+    assert resp.content == "半截二"           # 返回的是重试轮的部分内容
+    assert usage is None                      # 截断流没有末块 usage
+    assert stopped is False
+
+
+def test_normal_finish_no_retry(monkeypatch):
+    """有 finish_reason 的正常完成 → 不触发重试（create 仅一次）。"""
+    stream = _Stream([
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=_delta(content="完整"), finish_reason=None)], usage=None),
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=None, finish_reason="stop")], usage=None),
+    ])
+    calls = _install_multi_streams(monkeypatch, [stream])
+
+    q = asyncio.Queue()
+    set_event_sink(q)
+    try:
+        resp, _usage, stopped = _run(_native_round(CFG, [], None, 0.3, "s-ok"))
+    finally:
+        clear_event_sink()
+
+    assert calls["n"] == 1
+    assert resp.content == "完整"
+

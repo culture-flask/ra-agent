@@ -8,7 +8,7 @@ Agent 启动时 tools/list 即发现；新增工具 = 加一个 @mcp.tool() 函�
 - arxiv_search   预印本（物理/数学/计算机/密码学），最新研究
 - openalex_search 跨学科全库（2.5 亿+ 篇，含被引数），最稳定
 - s2_search      Semantic Scholar（含被引数；免费共享额度易 429，
-                 可选 S2_API_KEY 提额，见 .env）
+                 可选 S2_API_KEY 提额，）
 配套阅读工具：
 - read_webpage   读取网页正文（检索到链接后深入阅读），零依赖 HTML 提取
 """
@@ -179,12 +179,6 @@ def echo(message: str) -> str:
 
 
 @mcp.tool()
-def add(a: float, b: float) -> float:
-    """计算两个数字之和。"""
-    return a + b
-
-
-@mcp.tool()
 def web_search(query: str, top_k: int = 5) -> list[dict]:
     """联网搜索（SearXNG）：按关键词搜索互联网，返回标题/链接/摘要。
 
@@ -195,7 +189,7 @@ def web_search(query: str, top_k: int = 5) -> list[dict]:
     data = r.json()
     return [
         {"title": item.get("title", ""), "url": item.get("url", ""),
-         "content": (item.get("content") or "")[:200]}
+         "content": (item.get("content") or "")[:500]}
         for item in data.get("results", [])[:top_k]
     ]
 

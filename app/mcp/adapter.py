@@ -8,6 +8,7 @@ schemas_for_llm 的工具目录里，都经 call() 统一执行/追踪。
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 from langchain_core.utils.function_calling import convert_to_openai_function
 
@@ -19,14 +20,14 @@ from app.services.kb_service import join_document_text
 # 完整原文上限：与文件上传读取的截断上限一致（防超长文献撑爆 LLM 上下文）
 FULL_ARTICLE_MAX_CHARS = 100_000
 
-# 工具观测回灌上限（P3-32）：任何工具的单次输出超过该长度即截断，
+# 工具观测回灌上限：任何工具的单次输出超过该长度即截断，
 # 只保留头尾并附省略标记。背景：read_webpage 单次可注入 3 万字符，
 # 多工具轮次叠加后下一轮 generate 的 prompt 可能突破模型真实窗口——
 # 部分供应商对超限/上游失败的降级语义是返回**空完成**而非报错，
-# 表现为前端"没有输出就结束"（详见清单 P3-31/P3-32）。截断不影响
+# 表现为前端"没有输出就结束"。截断不影响
 # 追踪层（那里另有 4000 字符存储上限），也不影响需要全文的场景：
 # 模型可带更大 max_chars 分次调用，或改走 get_local_document 读知识库。
-TOOL_OUTPUT_MAX_CHARS = 6_000
+TOOL_OUTPUT_MAX_CHARS = 20_000
 _TOOL_TRUNCATED_NOTE = "\n…[输出过长已截断：原始 {total} 字符，保留头尾各 {keep}；" \
     "如需更多内容请分次调用或缩小范围]"
 
@@ -66,10 +67,9 @@ def _native_tool_specs() -> list[dict]:
         {
             "name": "get_local_document",
             "description": (
-                "取回知识库中某篇文件的完整原文（全部片段按原顺序拼接，"
-                "并自动去掉片段间的重叠重复）。"
+                "取回知识库中检索片段的完整原文。"
                 "当检索只返回了文章片段、不足以回答关于该文章的问题时，"
-                "应调用本工具取完整原文，而不是去网络搜索。"
+                "应调用本工具取完整原文。"
                 "file_name 必须是知识库中真实存在的文件名"
                 "（不确定时先调 list_kb_files 获取文件名与所属 kb_id）。"),
             "parameters": {
@@ -84,13 +84,22 @@ def _native_tool_specs() -> list[dict]:
             },
             "func": _get_local_document,
         },
+        {
+            "name": "get_utc_time",
+            "description": (
+                "获取当前的 UTC 时间（ISO 8601 格式，附星期与 Unix 时间戳）。"
+                "用于回答「现在几点/今天几号」这类问题，或需要给结论标注当前时间的场景。"
+                "无需参数。"),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+            "func": _get_utc_time,
+        },
     ]
 
 
 async def _list_kb_files(args: dict, user_id: str, kb_service) -> dict:
     """实现：可检索库 → 每库的源文件名列表（同步盘读放线程池）。
 
-    带显式 file_count——LLM 数 80+ 项长列表会数错，读数字不会。
+    带显式 file_count。
     """
     kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id)
     out = []
@@ -155,6 +164,16 @@ async def _get_local_document(args: dict, user_id: str, kb_service) -> dict:
     }
 
 
+async def _get_utc_time(args: dict, user_id: str, kb_service) -> dict:
+    """实现：当前 UTC 时间（ISO 8601 + 星期 + Unix 时间戳）。"""
+    now = datetime.now(timezone.utc)
+    return {
+        "utc_iso": now.isoformat(timespec="seconds"),
+        "weekday_en": now.strftime("%A"),
+        "unix_ts": int(now.timestamp()),
+    }
+
+
 class MCPToolAdapter:
     """把 MCP 工具包装为统一接口：schema 生成、执行、追踪、错误处理一次搞定。"""
 
@@ -198,7 +217,7 @@ class MCPToolAdapter:
                 result = await tool.ainvoke(args)
             output = json.dumps(result, ensure_ascii=False, default=str) \
                 if not isinstance(result, str) else result
-            output = cap_observation(output)       # P3-32：回灌前统一限长
+            output = cap_observation(output)       # 回灌前统一限长
             await asyncio.to_thread(self.tracer.success, log_id, output)
             return {"output": output}
         except Exception as e:

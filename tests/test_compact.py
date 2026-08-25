@@ -72,7 +72,7 @@ class _FakeModel:
                        if getattr(m, "type", "") == "system"), "")
         if "问答路由" in str(system):
             return AIMessage(content=self._route_json)
-        if "对话总结助手" in str(system):
+        if "检查点压缩" in str(system):        # COMPACT_PROMPT 的稳定锚点词
             return AIMessage(content=self._summary)
         return AIMessage(content=self._answer)
 
@@ -104,15 +104,15 @@ def _make_ctx_local(answer="压缩后回答", route_json='{"needs_retrieval": fa
 def test_compact_triggers_over_20_rounds():
     """轮数 >20 且占用 ≥ 窗口 10% 触发压缩：旧轮次删除，总结进系统提示词。
 
-    P3-25 后轮数路径有最小占用门槛，这里把窗口调小（500）：21 轮短消息
-    约 190 字符 ≈ 95 tokens，落在 50（10%×500）~400（80%×500）之间，
-    确保走的是轮数兜底触发而不是 token 主路径。
+    P3-25 后轮数路径有最小占用门槛（现 20%，P3-35 收紧）：这里把窗口
+    调小（400）：21 轮短消息约 190 字符 ≈ 95 tokens，落在 80（20%×400）
+    ~320（80%×400）之间，确保走的是轮数兜底触发而不是 token 主路径。
     """
     from app.graph.workflow import build_graph
 
     settings = Settings.load().model_copy(update={
         "chroma_persist_dir": Path(tempfile.mkdtemp()),
-        "llm_context_window": 500,
+        "llm_context_window": 400,
     })
     from app.graph.nodes import WorkflowContext
     from app.services.kb_service import KBService
@@ -261,7 +261,7 @@ def test_compact_failure_skips_gracefully():
         async def ainvoke(self, messages, **kwargs):
             system = next((m.content for m in messages
                            if getattr(m, "type", "") == "system"), "")
-            if "对话总结助手" in str(system):
+            if "检查点压缩" in str(system):    # COMPACT_PROMPT 的稳定锚点词
                 raise RuntimeError("summarizer down")
             return AIMessage(content="回答")
 

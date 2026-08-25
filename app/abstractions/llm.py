@@ -74,12 +74,12 @@ class RetryableChatModel:
 
     - 重试条件：429 限流 / 5xx / 网络超时与断连；其余异常直接抛
       （429 额度用尽 insufficient_quota 除外——重试无意义，直接抛）
-    - 退避：1s → 2s → 4s → 8s → 16s → 32s → 64s → 128s → 256s（共 9 次）
+    - 退避：1s → 2s → 4s → 8s → 16s（共 5 次）
     - astream：整轮重试——流中断后从开头重新完整生成
       （已推给前端的半截内容会短暂重复，属预期行为）
     """
 
-    def __init__(self, model, max_retries: int = 10, base_delay: float = 1.0,
+    def __init__(self, model, max_retries: int = 5, base_delay: float = 1.0,
                  label: str = ""):
         self._model = model
         self._max_retries = max_retries

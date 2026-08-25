@@ -64,25 +64,25 @@ def _make_ctx(responses: list[AIMessage]):
 
 
 def test_tool_call_loop():
-    """LLM 要调工具 → tool_executor 真实执行 MCP add → 结果回灌 → 最终回答。"""
+    """LLM 要调工具 → tool_executor 真实执行 MCP echo → 结果回灌 → 最终回答。"""
     tool_call_msg = AIMessage(content="", tool_calls=[
-        {"name": "add", "args": {"a": 1.5, "b": 2.7},
+        {"name": "echo", "args": {"message": "ping"},
          "id": "call_1", "type": "tool_call"}])
-    final_msg = AIMessage(content="结果是 4.2")
+    final_msg = AIMessage(content="已收到回声")
     ctx, tracer = _make_ctx([tool_call_msg, final_msg])
     graph = _run(build_graph(ctx))
 
     result = _run(graph.ainvoke(
-        {"user_id": "u1", "session_id": "t-tool-1", "query": "1.5+2.7",
-         "messages": [HumanMessage(content="1.5+2.7")]},
+        {"user_id": "u1", "session_id": "t-tool-1", "query": "测试回声",
+         "messages": [HumanMessage(content="测试回声")]},
         config={"configurable": {"thread_id": "t-tool-1"}}))
-    assert result["answer"] == "结果是 4.2"
+    assert result["answer"] == "已收到回声"
 
-    # 追踪：llm → tool(add) → llm
+    # 追踪：llm → tool(echo) → llm
     kinds = [x["kind"] for x in tracer.list(session_id="t-tool-1")]
     assert kinds[0] == "llm" and kinds[1] == "tool"
-    add_log = tracer.list(session_id="t-tool-1")[1]
-    assert "4.2" in add_log["output"]
+    echo_log = tracer.list(session_id="t-tool-1")[1]
+    assert "ping" in echo_log["output"]
 
 
 def test_no_tool_call_ends():
@@ -107,7 +107,7 @@ def test_native_tool_in_catalog():
     names = [s["function"]["name"] if "function" in s else s["name"]
              for s in schemas]
     assert "list_kb_files" in names
-    assert "add" in names                              # 外部 MCP 工具仍在
+    assert "echo" in names                             # 外部 MCP 工具仍在
 
 
 def test_native_list_kb_files_per_user():
