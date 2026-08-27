@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 import asyncio
 import json
@@ -6,14 +7,15 @@ import re
 import time
 import uuid
 
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 
 from app.core.cancel import clear_stop, is_stopped
 from app.core.events import emit
 from app.core.logging import get_logger
 from app.services.memory_service import MEMORY_MAX, MemoryService
 from app.graph.state import AgentState
-from app.abstractions.llm import DEFAULT_TEMPERATURE, _is_retryable
+from app.abstractions.llm import (DEFAULT_TEMPERATURE, LLMConfig,
+                                  RetryableChatModel, _is_retryable)
 
 logger = get_logger("graph_nodes")
 
@@ -516,10 +518,10 @@ def _compose_llm_messages(state: AgentState, system: SystemMessage,
 # 必须参数级关闭）。各端点只认自家的"关思考"方言键，按序探测：
 # 报参数不识别类错误就换下一个，全不认则裸调（行为同旧版）。
 _THINK_OFF_DIALECTS: tuple[dict, ...] = (
+    {"reasoning_effort": "low"},                           # OpenAI 系推理模型降档
     {"thinking": {"type": "disabled"}},                    # DeepSeek V4 / 智谱 GLM
     {"enable_thinking": False},                            # Qwen3（DashScope 兼容模式）
     {"chat_template_kwargs": {"enable_thinking": False}},  # Qwen3（vLLM/SGLang 自部署）
-    {"reasoning_effort": "low"},                           # OpenAI 系推理模型降档
 )
 # 探测结果按端点缓存（值 None 表示该端点不认任何方言、裸调即可），
 # 进程内每个端点最多完整探测一次，后续路由零探测开销。
@@ -541,10 +543,12 @@ def _is_param_rejected(e: Exception) -> bool:
     return any(m in msg for m in _PARAM_REJECT_MARKERS)
 
 
-async def _native_route_round(cfg, prompt, msgs_lc, temperature, sid,
-                              use_json=True):
+async def _native_route_round(cfg: LLMConfig, prompt: str,
+                              msgs_lc: Sequence[BaseMessage],
+                              temperature: float, sid: str,
+                              use_json: bool = True) -> str:
     """supervisor 路由的原生流式调用：自动携带"关闭思考"参数（按端点方言
-    探测并缓存），避免简单分类任务被 thinking 模型拖到数十秒；残余思考内容
+    探测并缓存），避免简单分类任务被 thinking 模型拖延；残余思考内容
     仍以 routing_reasoning 事件透传。返回模型输出文本（应为 JSON）。
 
     与 generate 的区别：无"最终答案轮"概念，不需要 reasoning_end/discard；
@@ -626,23 +630,23 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
     # 反馈（memory_load 与 supervisor 之间静默）——先告诉前端"正在判断意图"。
     emit("routing", {})
     route_cfg = _native_cfg(ctx, state["user_id"])   # 路由也走原生 SDK（思考可见）
-    msgs_route = state["messages"][-10:]
+    msgs_route = state["messages"][-4:]
     try:
         prompt = ROUTE_PROMPT.format(catalog=json.dumps(catalog, ensure_ascii=False))
-        # P3-24：路由输入只带最近 4 条消息，指代上文的追问（"接着刚才那个
+        # 路由输入只带最近 4 条消息，指代上文的追问（"接着刚才那个
         # 方案说"）会因看不到上文被误判为无需检索——把压缩总结（低频变化、
         # 已定序，不破坏前缀缓存）附在目录后，让路由 LLM 知道"刚才在聊什么"。
         summary = str(state.get("conversation_summary") or "").strip()
         if summary:
             prompt += "\n\n[历史对话总结]\n" + summary[:500]
-        # 第一优先（P3-33）：把上一轮的检索结果状态喂给路由——延续话题且上轮
+        # 第一优先：把上一轮的检索结果状态喂给路由——延续话题且上轮
         # 已命中可免重复检索。只拼进路由 prompt，绝不进 system/历史（保前缀缓存）。
         lrs = state.get("last_retrieval_state") or {}
         if lrs.get("hit_count"):
             prompt += ("\n\n[上一轮检索状态] 上一轮检索了知识库「%s」，共命中 %d 条。"
                        % ("、".join(lrs.get("kb_names") or ["?"]), lrs["hit_count"]))
-        # 强制 JSON 输出（P3-35）：带历史上下文时模型偶发"聊天式"输出——用户
-        # 玩梗（"牛来！"）时模型接梗不输出 JSON → 解析失败走全库检索降级，
+        # 强制 JSON 输出：带历史上下文时模型偶发"聊天式"输出——用户
+        # 玩梗时模型接梗不输出 JSON → 解析失败走全库检索降级，
         # 无关话题也会带上检索。json_object 模式从源头压住；端点不支持时回退
         # 普通调用（老版本网关/部分自建端点没有 JSON 模式）。
         _t0 = time.perf_counter()
@@ -720,7 +724,7 @@ def route_after_generate(state: AgentState) -> str:
 
 
 async def tool_executor_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """执行 LLM 请求的工具：经 MCPToolAdapter → MCP tools/call，结果回灌（§7.6）。"""
+    """执行 LLM 请求的工具：经 MCPToolAdapter → MCP tools/call，结果回灌。"""
     last = state["messages"][-1]
     results = []
     for call in last.tool_calls:
@@ -835,7 +839,7 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
     hits = []
     for kb in targets:
         # 检索链路全同步（查询嵌入 HTTP + Chroma + BM25 磁盘读），必须放线程池。
-        # P1-5 单库隔离：一个库坏掉（嵌入维度不匹配/端点不可达/磁盘缺文件）
+        # 单库隔离：一个库坏掉（嵌入维度不匹配/端点不可达/磁盘缺文件）
         # 不拖垮整轮对话——记日志、推 retrieve_error 事件供前端提示，
         # 继续其余健康库；全部失败时 hits 为空，generate 自然按自身知识兜底。
         try:
@@ -874,7 +878,7 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
          "text": str(h.get("text", ""))[:300]}
         for h in top]})
     return {"retrievals": top,
-            # 第一优先（P3-33）：落一份跨轮检索状态给下一轮的 supervisor 用。
+            # 第一优先：落一份跨轮检索状态给下一轮的 supervisor 用。
             # hit_count>0 表示"上一轮检索确有命中、回答大概率基于证据"——
             # 供"延续话题免重复检索"的规则判断。kb_names 只用于提示文案。
             "last_retrieval_state": {
@@ -895,7 +899,7 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
 # （测试假服务）才回退原 langchain 路径。工具调用轮的思考在轮末撤回，
 # 最终输出轮的思考定格。
 
-def _native_cfg(ctx: WorkflowContext, user_id: str):
+def _native_cfg(ctx: WorkflowContext, user_id: str) -> LLMConfig | None:
     """generate 的生效 LLM 配置（用户配置 > 系统默认）。不再按端点名筛选：
     所有端点统一走原生 SDK 以尝试捕获推理内容；拿不到配置（测试假服务）
     返回 None → 回退 langchain 路径，行为与旧版一致。"""
@@ -990,7 +994,9 @@ def _usage_from_native(usage) -> dict | None:
             "total_tokens": inp + outp, "cached_tokens": cached}
 
 
-async def _langchain_round(model, payload, sid):
+async def _langchain_round(model: RetryableChatModel,
+                           payload: Sequence[BaseMessage], sid: str
+                           ) -> tuple[AIMessage | None, dict | None, bool]:
     """langchain 路径的一轮流式（原 generate_node 的 astream 循环，逻辑原样）。"""
     resp = None
     last_usage = None
@@ -1045,7 +1051,7 @@ async def _native_round(cfg, payload, tools, temperature, sid):
     client = AsyncOpenAI(api_key=cfg.api_key, base_url=cfg.base_url,
                          timeout=180.0, max_retries=0)
     msgs = _to_openai_messages(payload)
-    max_retries, base_delay = 10, 1.0
+    max_retries, base_delay = 5, 1.0
     truncation_retried = False       # 截断自动重试只补一次，防无限循环
     for attempt in range(max_retries + 1):
         stopped = False
@@ -1112,10 +1118,8 @@ async def _native_round(cfg, payload, tools, temperature, sid):
                 except (json.JSONDecodeError, TypeError):
                     args = {}
                 tool_calls.append({"name": e["name"], "args": args, "id": e["id"]})
-            # 截断检测（P3-34 后续）：网关可能静默切断长生成——流正常结束但
-            # 既无 finish_reason 也无 usage（实测 ox-alpha-free 长回答在半句
-            # 处戛然而止、末块 usage 缺失）。首次遇此整轮重试一次；重试仍截断
-            # 则接受部分内容并记 warning（部分答复好于没有，但要可观测）。
+            # 截断检测：网关可能静默切断长生成——流正常结束但既无 finish_reason 也无 usage。
+            # 首次遇此整轮重试一次；重试仍截断则接受部分内容并记 warning（部分答复好于没有，但要可观测）。
             if not stopped and seen_finish is None and last_usage is None:
                 partial = "".join(content_parts)
                 if not truncation_retried:
@@ -1183,7 +1187,7 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     native_tools = _to_openai_tools(schemas) if native_cfg is not None else None
     native_temp = _native_temperature(state) if native_cfg is not None else None
 
-    # 空响应防御（P3-31）：部分供应商偶发返回"零内容、零工具调用"的空完成，
+    # 空响应防御：部分供应商偶发返回"零内容、零工具调用"的空完成，
     # 旧逻辑视作正常结束——前端表现为没有任何输出就静默收尾。现在对这种
     # 轮次做快速指数退避的整轮流式重试（与 llm_retry 的网络重试分层：那层管
     # 连接/限流，这层管"连上了但什么都没说"）；重试耗尽仍为空则显式抛错，
@@ -1237,7 +1241,7 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     # 真实用量：末块权威值优先，聚合值仅兜底（见 _usage_of 的警示）
     usage = last_chunk_usage or _usage_of(resp)
 
-    # P3-20 计量落库：每轮真实用量入 llm_usage 表，供 /usage/summary 报表
+    # 计量落库：每轮真实用量入 llm_usage 表，供 /usage/summary 报表
     # 与后续配额演进使用。best-effort：失败只记日志，绝不影响主对话。
     if usage and usage.get("total_tokens"):
         def _persist_usage() -> None:

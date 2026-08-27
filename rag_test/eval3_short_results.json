@@ -1,0 +1,413 @@
+{
+  "summary": {
+    "vector": {
+      "p@5": 0.125,
+      "r@5": 0.531,
+      "p@10": 0.087,
+      "r@10": 0.604,
+      "mrr": 0.497,
+      "n": 8
+    },
+    "hybrid": {
+      "p@5": 0.2,
+      "r@5": 0.823,
+      "p@10": 0.125,
+      "r@10": 0.896,
+      "mrr": 0.875,
+      "n": 8
+    }
+  },
+  "cases": [
+    {
+      "query": "HDND",
+      "note": "对应长查询: HDND 高阶差分神经区分器是什么",
+      "gold": [
+        "HDND.pdf"
+      ],
+      "vector": {
+        "p@5": 0.0,
+        "r@5": 0.0,
+        "p@10": 0.0,
+        "r@10": 0.0,
+        "mrr": 0.0,
+        "gold_hit": [],
+        "gold_miss": [
+          "HDND.pdf"
+        ],
+        "docs_ranked": [
+          "2024Chen-SPECK.pdf",
+          "2023Yu-Id.pdf",
+          "2025Chakraborty.pdf",
+          "2023Tcydenova.pdf",
+          "2019Gohr.pdf",
+          "2022Lu.pdf",
+          "2023Yue.pdf",
+          "2024Ebrahimi.pdf",
+          "2024Ebrahimi-cn.pdf"
+        ]
+      },
+      "hybrid": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 0.5,
+        "gold_hit": [
+          "HDND.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2024Chen-SPECK.pdf",
+          "HDND.pdf",
+          "2023Yu-Id.pdf",
+          "2025Chakraborty.pdf",
+          "2023Tcydenova.pdf"
+        ]
+      }
+    },
+    {
+      "query": "CPDI-ND",
+      "note": "对应长查询: CPDI-ND 自注意力跨对差分交互神经区分器",
+      "gold": [
+        "CPDI-ND.docx"
+      ],
+      "vector": {
+        "p@5": 0.0,
+        "r@5": 0.0,
+        "p@10": 0.0,
+        "r@10": 0.0,
+        "mrr": 0.0,
+        "gold_hit": [],
+        "gold_miss": [
+          "CPDI-ND.docx"
+        ],
+        "docs_ranked": [
+          "2024Chen-SPECK.pdf",
+          "2023Yu-Id.pdf",
+          "2025Chakraborty.pdf",
+          "2023Yue.pdf",
+          "2023Tcydenova.pdf",
+          "2023Bellini.pdf",
+          "2019Gohr.pdf",
+          "2022Lu.pdf",
+          "2024Ebrahimi.pdf"
+        ]
+      },
+      "hybrid": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 0.5,
+        "gold_hit": [
+          "CPDI-ND.docx"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2024Chen-SPECK.pdf",
+          "CPDI-ND.docx",
+          "2023Yu-Id.pdf",
+          "2025Chakraborty.pdf",
+          "2023Yue.pdf"
+        ]
+      }
+    },
+    {
+      "query": "SKNet",
+      "note": "对应长查询: SKNet 构建差分神经区分器 Speck Simon",
+      "gold": [
+        "2026Xu-SKNet.pdf"
+      ],
+      "vector": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2026Xu-SKNet.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2026Xu-SKNet.pdf",
+          "2024Chen-SPECK.pdf"
+        ]
+      },
+      "hybrid": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2026Xu-SKNet.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2026Xu-SKNet.pdf",
+          "2024Chen-SPECK.pdf"
+        ]
+      }
+    },
+    {
+      "query": "Fourier analysis neural distinguishers",
+      "note": "对应长查询: 神经区分器的傅里叶分析",
+      "gold": [
+        "2026ToSC.pdf"
+      ],
+      "vector": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 0.5,
+        "gold_hit": [
+          "2026ToSC.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2022Lu.pdf",
+          "2026ToSC.pdf",
+          "2023Yang-LBlock.pdf",
+          "2025Shen-MiF.pdf",
+          "2025Yuan-Rethink.pdf",
+          "2025Li-XDU.pdf",
+          "2025Sun.pdf",
+          "2025Wu.pdf"
+        ]
+      },
+      "hybrid": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2026ToSC.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2026ToSC.pdf",
+          "2022Lu.pdf",
+          "2023Yang-LBlock.pdf",
+          "2025Shen-MiF.pdf"
+        ]
+      }
+    },
+    {
+      "query": "partial decryption feature engineering",
+      "note": "对应长查询: 如何用部分解密作为特征工程改进神经区分器",
+      "gold": [
+        "2025Bellini-GPD.pdf"
+      ],
+      "vector": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2025Bellini-GPD.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2025Bellini-GPD.pdf",
+          "2023Yang-LBlock.pdf",
+          "2024Bellini-SALSA.pdf",
+          "2021Hou.pdf",
+          "2023Chen-LW.pdf",
+          "2026Ahmad.pdf",
+          "2024Yang-XDU.pdf",
+          "2023Yu-Id.pdf"
+        ]
+      },
+      "hybrid": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2025Bellini-GPD.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2025Bellini-GPD.pdf",
+          "2024Bellini-SALSA.pdf",
+          "2023Yang-LBlock.pdf",
+          "2025Bellini-SoK.pdf",
+          "2021Hou.pdf",
+          "2023Bellini.pdf",
+          "2023Chen-LW.pdf",
+          "2026Ahmad.pdf"
+        ]
+      }
+    },
+    {
+      "query": "truncated differential HIGHT key recovery",
+      "note": "对应长查询: HIGHT 上的截断差分神经密钥恢复攻击",
+      "gold": [
+        "2024Seo.pdf"
+      ],
+      "vector": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 0.333,
+        "gold_hit": [
+          "2024Seo.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2024Zhang-IACR.pdf",
+          "CPDI-ND.docx",
+          "2024Seo.pdf",
+          "2025Chakraborty.pdf",
+          "2022DiffAttacks.pdf",
+          "2023Chen-LargeState.pdf"
+        ]
+      },
+      "hybrid": {
+        "p@5": 0.2,
+        "r@5": 1.0,
+        "p@10": 0.1,
+        "r@10": 1.0,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2024Seo.pdf"
+        ],
+        "gold_miss": [],
+        "docs_ranked": [
+          "2024Seo.pdf",
+          "2024Zhang-IACR.pdf",
+          "CPDI-ND.docx",
+          "2025Chakraborty.pdf",
+          "2022DiffAttacks.pdf"
+        ]
+      }
+    },
+    {
+      "query": "Gimli differential distinguishers",
+      "note": "对应长查询: Gimli 轻量级密码的机器学习差分区分器",
+      "gold": [
+        "2020Baksi.pdf",
+        "2023Bellini.pdf",
+        "2024Bellini-SALSA.pdf"
+      ],
+      "vector": {
+        "p@5": 0.0,
+        "r@5": 0.0,
+        "p@10": 0.1,
+        "r@10": 0.333,
+        "mrr": 0.143,
+        "gold_hit": [
+          "2020Baksi.pdf"
+        ],
+        "gold_miss": [
+          "2023Bellini.pdf",
+          "2024Bellini-SALSA.pdf"
+        ],
+        "docs_ranked": [
+          "2022Lu.pdf",
+          "2024Chen-DL.pdf",
+          "2026Ahmad.pdf",
+          "2023Wang-LW.pdf",
+          "2025Bellini-SoK.pdf",
+          "2022DiffAttacks.pdf",
+          "2020Baksi.pdf"
+        ]
+      },
+      "hybrid": {
+        "p@5": 0.2,
+        "r@5": 0.333,
+        "p@10": 0.2,
+        "r@10": 0.667,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2020Baksi.pdf",
+          "2023Bellini.pdf"
+        ],
+        "gold_miss": [
+          "2024Bellini-SALSA.pdf"
+        ],
+        "docs_ranked": [
+          "2020Baksi.pdf",
+          "2022Lu.pdf",
+          "2025Bellini-SoK.pdf",
+          "2024Chen-DL.pdf",
+          "2023Tcydenova.pdf",
+          "2026Ahmad.pdf",
+          "2023Bellini.pdf",
+          "2023Wang-LW.pdf"
+        ]
+      }
+    },
+    {
+      "query": "SIMECK related-key neural distinguisher",
+      "note": "对应长查询: SIMECK 相关密钥神经区分器改进",
+      "gold": [
+        "2022Lu.pdf",
+        "2020Yuan.pdf",
+        "2025RelatedKey.pdf",
+        "2024Yuan-Simeck.pdf"
+      ],
+      "vector": {
+        "p@5": 0.2,
+        "r@5": 0.25,
+        "p@10": 0.2,
+        "r@10": 0.5,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2020Yuan.pdf",
+          "2022Lu.pdf"
+        ],
+        "gold_miss": [
+          "2024Yuan-Simeck.pdf",
+          "2025RelatedKey.pdf"
+        ],
+        "docs_ranked": [
+          "2022Lu.pdf",
+          "2026Ahmad.pdf",
+          "2025Li-XDU.pdf",
+          "2025Sun.pdf",
+          "2025Guo.pdf",
+          "2025Bellini-SoK.pdf",
+          "CPDI-ND.docx",
+          "2020Yuan.pdf"
+        ]
+      },
+      "hybrid": {
+        "p@5": 0.2,
+        "r@5": 0.25,
+        "p@10": 0.2,
+        "r@10": 0.5,
+        "mrr": 1.0,
+        "gold_hit": [
+          "2020Yuan.pdf",
+          "2022Lu.pdf"
+        ],
+        "gold_miss": [
+          "2024Yuan-Simeck.pdf",
+          "2025RelatedKey.pdf"
+        ],
+        "docs_ranked": [
+          "2022Lu.pdf",
+          "2024Ebrahimi-cn.pdf",
+          "2026Ahmad.pdf",
+          "2024Ebrahimi.pdf",
+          "2025Li-XDU.pdf",
+          "2020Yuan.pdf",
+          "2025Sun.pdf",
+          "2024Wang Related-Key.pdf",
+          "2025Guo.pdf"
+        ]
+      }
+    }
+  ],
+  "meta": {
+    "kb_id": "ad4a296fda7c",
+    "k": 10,
+    "date": "2026-08-16"
+  }
+}
