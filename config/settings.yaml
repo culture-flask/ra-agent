@@ -22,7 +22,7 @@ llm:
   system_default:
     provider: sensenova
     base_url: https://token.sensenova.cn/v1
-    model_id: deepseek-v4-flash
+    model_id: sensenova-6.8-flash-lite
   retry:             # 调用失败退避重试：限流/5xx/网络错误指数退避重试
     max_retries: 10
     base_delay: 1.0 # 首次重试等 1s，之后 2s / 4s（含随机抖动）
