@@ -296,7 +296,8 @@ async def list_sessions(user: User = Depends(get_current_user)):
     def _list():
         with SessionLocal() as db:
             rows = db.scalars(select(BrainstormSession).where(
-                BrainstormSession.user_id == uid)
+                BrainstormSession.user_id == uid,
+                BrainstormSession.team == "debate")     # 两队分家：不混入会讲
                 .order_by(BrainstormSession.updated_at.desc()).limit(200)).all()
             return [{"session_id": r.session_id, "topic": r.topic[:100],
                      "status": r.status, "stats": r.stats,

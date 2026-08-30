@@ -59,6 +59,19 @@ class Settings(BaseSettings):
         {"id": "practitioner", "name": "实践者", "temperature": 0.5},
     ])
 
+    # ---------- 格致会讲（学术研讨式多 agent） ----------
+    seminar_reading_tool_loop_max: int = 6
+    seminar_notes_max_chars: int = 600
+    seminar_insight_window: int = 20
+    seminar_cards_per_scholar: int = 2
+    seminar_token_budget: int = 20000000
+    seminar_roles: list = Field(default_factory=lambda: [
+        {"id": "historian", "name": "文献学家", "temperature": 0.3},
+        {"id": "theorist", "name": "理论家", "temperature": 0.6},
+        {"id": "experimentalist", "name": "实验家", "temperature": 0.4},
+        {"id": "visitor", "name": "访问学者", "temperature": 0.9},
+    ])
+
     @classmethod
     def load(cls) -> "Settings":
         """加载配置。优先级： 环境变量/.env > settings.ymal > 类默认值
@@ -106,6 +119,12 @@ class Settings(BaseSettings):
                 "brainstorm_position_max_chars": raw.get("brainstorm", {}).get("position_max_chars", 500),
                 "brainstorm_transcript_window": raw.get("brainstorm", {}).get("transcript_window", 6),
                 "brainstorm_roles": raw.get("brainstorm", {}).get("roles", []),
+                "seminar_reading_tool_loop_max": raw.get("seminar", {}).get("reading_tool_loop_max", 6),
+                "seminar_notes_max_chars": raw.get("seminar", {}).get("notes_max_chars", 600),
+                "seminar_insight_window": raw.get("seminar", {}).get("insight_window", 20),
+                "seminar_cards_per_scholar": raw.get("seminar", {}).get("cards_per_scholar", 2),
+                "seminar_token_budget": raw.get("seminar", {}).get("token_budget", 20000000),
+                "seminar_roles": raw.get("seminar", {}).get("roles", []),
             }
             for key, value in yaml_values.items():
                 if key not in merged.model_fields_set:

@@ -86,3 +86,16 @@ brainstorm:
     - {id: critic, name: 批评者, temperature: 0.4}
     - {id: methodologist, name: 方法论专家, temperature: 0.3}
     - {id: practitioner, name: 实践者, temperature: 0.5}
+
+# 格致会讲（学术研讨式多 agent）
+seminar:
+  reading_tool_loop_max: 6      # 研读阶段单学者工具子循环上限
+  notes_max_chars: 600         # 研读笔记长度上限
+  insight_window: 20           # 洞见池注入上下文的条数上限
+  cards_per_scholar: 2         # propose 阶段每人卡片数上限
+  token_budget: 20000000        # 单场总 token 预算默认值（硬熔断；执笔人不受预算阻断）
+  roles:
+    - {id: historian, name: 文献学家, temperature: 0.3}
+    - {id: theorist, name: 理论家, temperature: 0.6}
+    - {id: experimentalist, name: 实验家, temperature: 0.4}
+    - {id: visitor, name: 访问学者, temperature: 0.9}

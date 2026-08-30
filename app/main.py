@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.abstractions.llm import LLMService
 from app.api.auth import router as auth_router
 from app.api.brainstorm import router as brainstorm_router
+from app.api.seminar import router as seminar_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.feedbacks import router as feedbacks_router
@@ -25,6 +26,7 @@ from app.core.logging import get_logger, setup_logging
 from app.core.net import apply_proxy
 from app.core.tracing import Tracer
 from app.graph.brainstorm import build_brainstorm_graph
+from app.graph.seminar import build_seminar_graph
 from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter
@@ -101,6 +103,16 @@ async def lifespan(app: FastAPI):
                                    "WHERE status = 'running'"))
         if res_bs.rowcount:
             logger.warning("启动复位 %d 个中断的头脑风暴会话", res_bs.rowcount)
+        # 两支多 agent 团队分家：旧库补 team 列（幂等，新库由 create 带出）
+        has_team = conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'brainstorm_sessions' "
+            "AND column_name = 'team'")).scalar()
+        if not has_team:
+            conn.execute(text("ALTER TABLE brainstorm_sessions "
+                              "ADD COLUMN team VARCHAR(16) "
+                              "NOT NULL DEFAULT 'debate'"))
+            logger.warning("已为 brainstorm_sessions 补 team 列（存量行=debate）")
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)
@@ -121,7 +133,8 @@ async def lifespan(app: FastAPI):
     ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer, memory_service)
     app.state.workflow_ctx = ctx                  # API 层后台记忆管线复用同一编排上下文
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver
-    app.state.brainstorm_graph = await build_brainstorm_graph(ctx)   # 头脑风暴子图（独立 checkpointer）
+    app.state.brainstorm_graph = await build_brainstorm_graph(ctx)   # 争鸣社子图（独立 checkpointer）
+    app.state.seminar_graph = await build_seminar_graph(ctx)   # 会讲子图
     app.state.kb_service = kb_service
     app.state.tracer = tracer
     app.state.memory_service = memory_service
@@ -140,6 +153,7 @@ register_exception_handlers(app)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(brainstorm_router)
+app.include_router(seminar_router)
 app.include_router(conversations_router)
 app.include_router(kbs_router)
 app.include_router(traces_router)

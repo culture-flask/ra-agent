@@ -573,6 +573,32 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
 .bs-plan-body{font-size:13.5px;max-height:520px;overflow-y:auto;border-top:1px solid var(--line);padding-top:10px}
 .bs-plan-body h1,.bs-plan-body .b{font-weight:650}
 .bs-plan-body p{margin:6px 0}
+/* 团队切换 */
+.bs-team-switch{display:flex;gap:8px;margin-bottom:14px}
+.bs-team-btn{flex:1;border:1px solid var(--line-strong);border-radius:12px;
+  background:var(--surface);padding:10px 14px;cursor:pointer;font-size:13.5px;
+  font-weight:650;text-align:left;line-height:1.6;transition:.15s;color:var(--ink)}
+.bs-team-btn span{display:block;font-size:11px;color:var(--muted);font-weight:400}
+.bs-team-btn:hover{transform:translateY(-1px)}
+.bs-team-btn.active{border-color:var(--accent);box-shadow:var(--ring)}
+/* 团队介绍面板 */
+.bs-team-intro{max-width:760px}
+.bs-team-intro .tname{font-weight:700;font-size:14px;margin-bottom:6px}
+.bs-team-intro p{margin:6px 0;font-size:13px}
+.bs-team-intro .flow{font-size:12px;color:var(--muted);background:var(--panel);
+  border-radius:8px;padding:6px 10px;margin-top:8px}
+/* 会讲：洞见池与构想卡 */
+.bs-insight{border:1px solid var(--line);border-radius:10px;background:var(--surface);
+  padding:7px 10px;font-size:11.5px;margin-bottom:6px;cursor:pointer}
+.bs-insight:hover{border-color:var(--line-strong)}
+.kind-tag{font-size:10px;padding:1px 7px;border-radius:999px;color:#fff;margin-right:6px}
+.bs-card{border:1px solid var(--line);border-radius:10px;background:var(--surface);
+  padding:8px 10px;font-size:12px;margin-bottom:6px;cursor:pointer}
+.bs-card:hover{border-color:var(--line-strong)}
+.bs-card .cid{font-weight:700;margin-right:6px}
+.bs-card .lineage{color:var(--muted);font-size:10.5px}
+.bs-card .score-badge{float:right;font-size:11px;font-weight:700;color:var(--accent2)}
+.bs-card .div-badge{float:right;font-size:10px;color:var(--warn);margin-right:6px}
 /* 追问区 */
 .bs-qa-q{font-size:13px;background:var(--panel);border:1px solid var(--line);
   border-radius:10px;padding:7px 12px;margin-bottom:8px}
@@ -780,19 +806,32 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
     <section class="view" id="view-brainstorm">
       <div class="bs-layout">
         <div class="bs-main" id="bs-main">
+          <!-- 团队切换 -->
+          <div class="bs-team-switch" id="bs-team-switch">
+            <button class="bs-team-btn" data-bs-team="debate">争鸣社 · 辩论式多 Agent
+              <span>百家争鸣：四辩手立场碰撞、质疑辩护，主持人调度收敛出科研方案。<br>适合有争议、需要正反碰撞决断的议题</span></button>
+            <button class="bs-team-btn" data-bs-team="seminar">格致会讲 · 研讨式多 Agent
+              <span>格物致知 + 书院会讲：四学者研读文献、承接式问答、构想工作坊与独立评审，产出研究构想组合。<br>适合进入新领域、寻找研究方向的开放探索</span></button>
+          </div>
+          <!-- 团队详细介绍（点选后显示） / 未选择提示 -->
+          <div class="card bs-team-intro" id="bs-team-intro" hidden></div>
+          <div class="card" id="bs-team-hint" style="max-width:760px">
+            <div class="muted" style="font-size:13px;padding:4px 2px">
+              点击上方选择一支团队开始。两支团队互补：<b>格致会讲</b>做前期探索（读领域、出构想），<b>争鸣社</b>做后期对抗验证（把首选构想拿去辩论锤打）。</div>
+          </div>
           <!-- 启动面板 -->
-          <div class="card bs-setup" id="bs-setup" style="max-width:760px">
-            <div class="section-t" style="margin-top:0">发起一场头脑风暴</div>
+          <div class="card bs-setup" id="bs-setup" style="max-width:760px" hidden>
+            <div class="section-t" style="margin-top:0" id="bs-setup-title">发起一场头脑风暴</div>
             <div class="field">
               <label>科研议题</label>
               <textarea class="input" id="bs-topic" rows="3"
                 placeholder="例：多模态RAG在科研文献综述中的可靠性提升"></textarea>
             </div>
             <div class="field">
-              <label>参赛角色（点卡片可关闭，至少保留 2 个）</label>
+              <label id="bs-roles-label">参赛角色（点卡片可关闭，至少保留 2 个）</label>
               <div id="bs-roles" class="bs-roles"></div>
             </div>
-            <div class="field" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div class="field" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap" id="bs-rounds-row">
               <label style="margin:0">辩论轮数上限</label>
               <input class="input mono" id="bs-rounds" type="number" min="1" max="6" value="3" style="width:76px">
               <span class="hint" style="font-size:12px;color:var(--muted)">× 角色数 = 发言次数上限；主持人判定收敛可提前结束</span>
@@ -845,6 +884,14 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
           </div>
           <div class="bs-sec-t">工具调用记录 <span class="mono" id="bs-tool-count"></span></div>
           <div class="bs-evidence" id="bs-toollog"><div class="muted" style="font-size:12px;padding:6px 2px">尚未调用工具。</div></div>
+          <div class="bs-sec-t sem-only" hidden>洞见池（只增不减） <span class="mono" id="bs-insight-count"></span></div>
+          <div class="bs-evidence sem-only" id="bs-insights" hidden>
+            <div class="muted" style="font-size:12px;padding:6px 2px">尚无洞见。每场汇报+问答后由主席采集领域级洞见。</div>
+          </div>
+          <div class="bs-sec-t sem-only" hidden>构想卡墙 <span class="mono" id="bs-card-count"></span></div>
+          <div class="bs-evidence sem-only" id="bs-cards" hidden>
+            <div class="muted" style="font-size:12px;padding:6px 2px">尚无构想卡。构想工作坊阶段各学者提案并改进彼此。</div>
+          </div>
         </aside>
       </div>
       <div class="bs-bottombar">
@@ -3175,8 +3222,61 @@ const BS_META = {
   writer:    { name: "撰稿人", color: "#2b5fd9" },
   moderator: { name: "主持人", color: "#6f6f76" },
 };
-const bsAgentMeta = id => BS_META[id] ||
-  BS_ROLES.find(r => r.id === id) || { name: id, color: "#6f6f76" };
+const SEM_ROLES = [
+  { id: "historian", name: "文献学家", temperature: 0.3, color: "#8a6d3b",
+    desc: "梳理：演化脉络、学派谱系、被低估的历史线索" },
+  { id: "theorist", name: "理论家", temperature: 0.6, color: "#2b5fd9",
+    desc: "抽象：框架边界、形式化难点、值得抽象的共性结构" },
+  { id: "experimentalist", name: "实验家", temperature: 0.4, color: "#1f7a4e",
+    desc: "实证：基准清单（含缺陷）、方法学、数据空白" },
+  { id: "visitor", name: "访问学者", temperature: 0.9, color: "#c04bd0",
+    desc: "跨界：邻近领域方法的结构性迁移（主席开题选定源领域）" },
+];
+const SEM_META = { chair: { name: "主席", color: "#6f6f76" },
+                   rapporteur: { name: "执笔人", color: "#2b5fd9" } };
+const bsAgentMeta = id => {
+  const sem = state.bs?.team === "seminar";
+  return (sem ? SEM_META : BS_META)[id]
+    || (sem ? SEM_ROLES : BS_ROLES).find(r => r.id === id)
+    || { name: id, color: "#6f6f76" };
+};
+const BS_TEAM_INTRO = {
+  debate: {
+    name: "争鸣社 · 辩论式多 Agent（百家争鸣）",
+    body: "模拟一场辩论赛：四位辩手（创新者/批评者/方法论专家/实践者）先各自独立调研并写立场书，"
+        + "随后由主持人调度多轮辩论——发言必须用 @[角色] 回应他人，质疑与辩护交替；"
+        + "收敛出共识与分歧后，撰稿人产出结构化科研方案（含观点分歧附录）。",
+    fit: "适合：已有明确分歧、需要正反碰撞决断的议题。",
+    flow: "流程：开题解析 → 四路并行调研 → 最多 3 轮辩论（12 次发言）→ 撰稿成稿",
+  },
+  seminar: {
+    name: "格致会讲 · 研讨式多 Agent（格物致知 + 书院会讲）",
+    body: "模拟一场学术研讨会 + 基金评审会：文献学家/理论家/实验家/访问学者各自研读文献后依次汇报，"
+        + "其余学者以承接式提问（只许澄清/延伸/关联，禁止攻击）逐题追问；随后进入构想工作坊——"
+        + "每人提案并必须改进至少一张他人的构想（谱系留痕）；最后全员独立打分评审，"
+        + "执笔人汇总成「首选构想 + 备选 + 评审意见 + 开放问题」的研究构想组合。",
+    fit: "适合：进入新领域、寻找研究方向的开放探索。访问学者的跨领域迁移是本场灵魂——"
+        + "开题时由主席按议题选定源领域。",
+    flow: "流程：开题（选定邻近领域）→ 四路并行研读 → 4 场汇报+问答 → 构想工作坊 → 独立评审 → 成稿",
+  },
+};
+
+function bsShowTeamIntro(t) {
+  const info = BS_TEAM_INTRO[t];
+  const el = $("#bs-team-intro");
+  if (!info) { el.hidden = true; return; }
+  el.innerHTML = `<div class="tname">${esc(info.name)}</div>
+    <p>${esc(info.body)}</p>
+    <p style="color:var(--accent2)">${esc(info.fit)}</p>
+    <div class="flow">${esc(info.flow)}</div>`;
+  el.hidden = false;
+}
+
+const BS_INSIGHT_KIND = {
+  gap: ["缺口", "#dc2626"], contradiction: ["矛盾", "#b45309"],
+  connection: ["关联", "#2b5fd9"], opportunity: ["机会", "#1f7a4e"],
+  anomaly: ["异常", "#7c5cf0"],
+};
 
 state.bs = {
   running: false, sid: null, abort: null,   // abort：本页刷新/切流时中断 SSE 读取
@@ -3186,7 +3286,14 @@ state.bs = {
 
 /* ---------- 启动面板 ---------- */
 function bsRenderRoles() {
-  $("#bs-roles").innerHTML = BS_ROLES.map(r => `
+  const isSem = state.bs.team === "seminar";
+  const ROLES = isSem ? SEM_ROLES : BS_ROLES;
+  $("#bs-setup-title").textContent = isSem ? "发起一场格致会讲" : "发起一场头脑风暴";
+  $("#bs-roles-label").textContent = isSem
+    ? "与会学者（点卡片可关闭，至少保留 2 个）"
+    : "参赛角色（点卡片可关闭，至少保留 2 个）";
+  $("#bs-rounds-row").hidden = isSem;   // 会讲议程由学者数确定，无轮数概念
+  $("#bs-roles").innerHTML = ROLES.map(r => `
     <div class="bs-role" id="bs-role-${r.id}" data-role-card="${r.id}">
       <input type="checkbox" checked data-bs-role="${r.id}">
       <span class="avatar" style="background:${r.color}">${esc(r.name[0])}</span>
@@ -3208,7 +3315,7 @@ function bsRenderRoles() {
       </span>
     </div>`).join("");
   const toggle = (cb, on) => {
-    // 至少 2 个角色才叫"辩论"
+    // 至少 2 个角色才有对话质量（辩论与研讨同理）
     if (!on && $$("#bs-roles input[data-bs-role]:checked").length < 2) {
       cb.checked = true; return toast("至少保留 2 个角色", "err");
     }
@@ -3235,8 +3342,9 @@ async function bsStart() {
   if (state.bs.running) return;
   const topic = $("#bs-topic").value.trim();
   if (!topic) return toast("请先输入科研议题", "err");
+  const ROLES = state.bs.team === "seminar" ? SEM_ROLES : BS_ROLES;
   const roles = $$("#bs-roles input[data-bs-role]:checked").map(cb => {
-    const id = cb.dataset.bsRole, meta = BS_ROLES.find(r => r.id === id);
+    const id = cb.dataset.bsRole, meta = ROLES.find(r => r.id === id);
     const t = parseFloat($(`input[data-bs-temp="${id}"]`).value);
     const role = { id, name: meta.name,
                    temperature: Number.isFinite(t) ? t : meta.temperature };
@@ -3255,7 +3363,8 @@ async function bsStart() {
   bsPinned = true;
   state.bs = { running: true, sid, abort: new AbortController(),
                evidence: [], tools: [], plan: null, replayed: false,
-               liveTools: {}, live: {}, qa: [] };
+               liveTools: {}, live: {}, qa: [], team: state.bs.team,
+               insights: [], openQs: [], cards: [], ranking: [] };
   $("#bs-qa-wrap").hidden = false;
   $("#bs-qa-list").innerHTML = "";
   $("#bs-setup").hidden = true;
@@ -3270,9 +3379,12 @@ async function bsStart() {
   $("#bs-stop").style.display = "";
   bsStatus("主持人解析议题中…");
 
+  const isSem = state.bs.team === "seminar";
+  const body = { session_id: sid, topic, token_budget: tokenBudget, roles };
+  if (!isSem) body.max_rounds = maxRounds;    // 会讲议程由学者数确定
+  const endpoint = isSem ? "/api/v1/seminar/stream" : "/api/v1/brainstorm/stream";
   try {
-    await bsStream(sid, { session_id: sid, topic, max_rounds: maxRounds,
-                          token_budget: tokenBudget, roles });
+    await bsStream(sid, endpoint, body);
   } finally { bsResetButtons(); }
 }
 
@@ -3285,10 +3397,10 @@ function bsResetButtons() {
 }
 
 /* ---------- SSE 读取（与 chat 流同一解析骨架） ---------- */
-async function bsStream(sid, body) {
+async function bsStream(sid, endpoint, body) {
   const headers = { "Content-Type": "application/json" };
   if (store.token) headers["Authorization"] = "Bearer " + store.token;
-  const res = await fetch(store.base + "/api/v1/brainstorm/stream", {
+  const res = await fetch(store.base + endpoint, {
     method: "POST", headers, body: JSON.stringify(body),
     signal: state.bs.abort?.signal });
   if (!res.ok) throw new Error("HTTP " + res.status + "：" + await res.text());
@@ -3306,13 +3418,17 @@ async function bsStream(sid, body) {
         if (!line.startsWith("data: ")) continue;
         let ev;
         try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-        if (ev.type === "done") { bsStatus("本场头脑风暴已结束", "ok"); continue; }
+        if (ev.type === "done") {
+          bsStatus(state.bs.team === "seminar" ? "本场会讲已结束"
+                   : "本场头脑风暴已结束", "ok");
+          continue;
+        }
         if (ev.type === "error") {
           bsStatus("出错了：" + (ev.error || "未知错误"), "bad");
           toast(ev.error || "头脑风暴运行失败", "err");
           continue;
         }
-        if (String(ev.type).startsWith("bs_")) bsHandleEvent(ev);
+        if (/^(bs_|sem_)/.test(String(ev.type))) bsHandleEvent(ev);
       }
     }
   }
@@ -3322,18 +3438,27 @@ async function bsStream(sid, body) {
 /* 事件落点按 agent 分桶（state.bs.live[agent]），不能用单一"当前指针"：
    并行调研阶段四路 bs_agent_start 会互相覆盖指针，只有最后启动的角色
    收得到 token/工具事件，其余气泡永远停在占位文案（真实事故）。 */
-const bsPhaseLabel = { research: "独立调研", debate: "辩论发言", synthesis: "成稿" };
+const bsPhaseLabel = { research: "独立调研", debate: "辩论发言", synthesis: "成稿",
+  read: "独立研读", present: "汇报", qa: "承接问答", ideate: "构想提案",
+  improve: "改进构想", review: "独立评审" };
 const bsLiveOf = agent => (state.bs.live || {})[agent];
 
 function bsHandleEvent(ev) {
-  switch (ev.type) {
-    case "bs_prepare":
+  const suffix = ev.type.replace(/^(bs_|sem_)/, "");   // bs_/sem_ 双前缀统一分发
+  switch (suffix) {
+    case "prepare":
       if (ev.topic_restatement !== undefined) {
         bsStatus(`议题已解析（${ev.directive_count || 0} 份差异化调研指令），角色并行调研中…`);
       }
       break;
 
-    case "bs_agent_start": {
+    case "curate":
+      if (ev.field_positioning !== undefined) {
+        bsStatus(`开题完成${ev.adjacent_field ? "（访问学者源领域：" + ev.adjacent_field + "）" : ""}，四路并行研读中…`);
+      }
+      break;
+
+    case "agent_start": {
       const meta = bsAgentMeta(ev.agent);
       const ph = bsPhaseLabel[ev.phase] || ev.phase;
       const item = { agent: ev.agent, phase: ev.phase, content: "",
@@ -3362,17 +3487,27 @@ function bsHandleEvent(ev) {
       item.reasonWrap = $(".bs-reason", el);
       item.toolsEl = $(".bs-tools", el);
       $("#bs-stream").appendChild(el);
-      item.bodyEl.innerHTML = ev.phase === "research"
+      item.bodyEl.innerHTML = (ev.phase === "research" || ev.phase === "read")
         ? '<span style="color:var(--muted)">正在检索知识库与调用工具…</span>' : "";
       state.bs.live[ev.agent] = item;
       if (ev.phase === "debate")
         bsStatus(`${bsAgentMeta(ev.agent).name} 正在发言（第 ${ev.turn} 轮）…`);
-      else if (ev.phase === "synthesis") bsStatus("撰稿人正在汇总成稿…");
+      else if (ev.phase === "present")
+        bsStatus(`汇报进行中（第 ${(ev.index || 0) + 1}/${(state.bs.roles || []).length} 场）· ${bsAgentMeta(ev.agent).name}`);
+      else if (ev.phase === "qa")
+        bsStatus(`承接问答 · ${bsAgentMeta(ev.agent).name} 就 ${bsAgentMeta(ev.target).name} 的汇报提问`);
+      else if (ev.phase === "ideate")
+        bsStatus(`构想工作坊 · ${bsAgentMeta(ev.agent).name} 提案中`);
+      else if (ev.phase === "improve")
+        bsStatus(`建构轮 · ${bsAgentMeta(ev.agent).name} 改进他人构想`);
+      else if (ev.phase === "review")
+        bsStatus(`评议会 · ${bsAgentMeta(ev.agent).name} 独立打分`);
+      else if (ev.phase === "synthesis") bsStatus("执笔人正在汇总成稿…");
       bsScroll(true);
       break;
     }
 
-    case "bs_token": {
+    case "token": {
       const item = bsLiveOf(ev.agent);
       if (item && item.streaming) {
         item.content += ev.content;
@@ -3381,7 +3516,7 @@ function bsHandleEvent(ev) {
       break;
     }
 
-    case "bs_reasoning": {
+    case "reasoning": {
       const item = bsLiveOf(ev.agent);
       if (item && item.streaming) {
         item.reasoning += ev.content;
@@ -3391,7 +3526,7 @@ function bsHandleEvent(ev) {
       break;
     }
 
-    case "bs_tool_start": {
+    case "tool_start": {
       state.bs.tools.push(ev);
       $("#bs-tool-count").textContent = "· " + state.bs.tools.length + " 次";
       const meta = bsAgentMeta(ev.agent);
@@ -3421,7 +3556,7 @@ function bsHandleEvent(ev) {
       break;
     }
 
-    case "bs_tool_end": {
+    case "tool_end": {
       const live = (state.bs.liveTools || {})[ev.agent + "|" + ev.name];
       if (live) {
         live.classList.remove("run");
@@ -3435,7 +3570,8 @@ function bsHandleEvent(ev) {
       break;
     }
 
-    case "bs_agent_end": {
+    case "agent_end":
+    case "present_end": {                       // 会讲汇报收尾（present 无独立 agent_end）
       const item = bsLiveOf(ev.agent);
       if (item && item.streaming) {
         item.streaming = false;
@@ -3443,6 +3579,9 @@ function bsHandleEvent(ev) {
         if (ev.phase === "research" && ev.failed)
           item.bodyEl.innerHTML = '<span style="color:var(--danger)">（调研失败'
             + (ev.reason ? "：" + esc(ev.reason) : "，本角色缺席") + '）</span>';
+        else if (ev.phase === "read" && ev.failed)
+          item.bodyEl.innerHTML = '<span style="color:var(--danger)">（研读失败'
+            + (ev.reason ? "：" + esc(ev.reason) : "，本学者缺席") + '）</span>';
         else if (ev.aborted)
           item.bodyEl.innerHTML = '<span style="color:var(--muted)">（已停止，本角色调研中止）</span>';
         delete state.bs.live[ev.agent];
@@ -3450,7 +3589,59 @@ function bsHandleEvent(ev) {
       break;
     }
 
-    case "bs_retrievals": {
+    case "insight": {                         // 会讲：主席采集洞见 → 洞见池
+      (ev.insights || []).forEach(i => state.bs.insights.push(i));
+      (ev.open_questions || []).forEach(q => state.bs.openQs.push(q));
+      $("#bs-insight-count").textContent =
+        state.bs.insights.length ? "· " + state.bs.insights.length + " 条" : "";
+      const ibox = $("#bs-insights");
+      if (state.bs.insights.length === (ev.insights || []).length)
+        ibox.innerHTML = "";
+      (ev.insights || []).forEach(i => {
+        const [klabel, kcolor] = BS_INSIGHT_KIND[i.kind] || [i.kind, "#6f6f76"];
+        const el = document.createElement("div");
+        el.className = "bs-insight";
+        el.innerHTML = `<span class="kind-tag" style="background:${kcolor}">${esc(klabel)}</span>${esc(i.statement || "")}
+          <div style="color:var(--muted);font-size:10.5px;margin-top:2px">${esc(i.origin || "")}</div>`;
+        el.onclick = () => openModal(`<div class="section-t">洞见 · ${esc(klabel)}</div>
+          <div style="font-size:13px">${esc(i.statement || "")}</div>
+          <div class="hint" style="margin-top:8px;font-size:11.5px;color:var(--muted)">来源：${esc(i.origin || "")}</div>`);
+        ibox.prepend(el);
+      });
+      bsScroll();
+      break;
+    }
+
+    case "idea_card": {                       // 会讲：构想卡（含谱系）
+      const card = ev.card || {};
+      if (!card.card_id) break;
+      state.bs.cards = (state.bs.cards || []).filter(c => c.card_id !== card.card_id);
+      state.bs.cards.push(card);
+      $("#bs-card-count").textContent = "· " + state.bs.cards.length + " 张";
+      bsRenderCards();
+      bsScroll();
+      break;
+    }
+
+    case "review": {                          // 会讲：某学者的独立评分并入卡片角标
+      (ev.scores || []).forEach(sc => {
+        const c = (state.bs.cards || []).find(x => x.card_id === sc.card_id);
+        if (c) {
+          c._reviews = c._reviews || [];
+          c._reviews.push({ agent: ev.agent, ...sc });
+        }
+      });
+      bsRenderCards();
+      break;
+    }
+
+    case "ranking": {                         // 会讲：聚合排序 → 卡片墙重排
+      state.bs.ranking = ev.ranking || [];
+      bsRenderCards();
+      break;
+    }
+
+    case "retrievals": {
       (ev.results || []).forEach(r => state.bs.evidence.push({ agent: ev.agent, ...r }));
       const cnt = $("#bs-ev-count");
       cnt.textContent = state.bs.evidence.length ? "· " + state.bs.evidence.length + " 条" : "";
@@ -3471,7 +3662,7 @@ function bsHandleEvent(ev) {
       break;
     }
 
-    case "bs_moderator": {
+    case "moderator": {
       if (ev.reason && ev.next_speaker === undefined) {
         const why = { max_rounds: "已达轮数上限", budget_exhausted: "token 预算熔断",
                       converged: "主持人判定达成收敛" }[ev.reason] || ev.reason;
@@ -3494,7 +3685,7 @@ function bsHandleEvent(ev) {
       break;
     }
 
-    case "bs_plan": {
+    case "plan": {
       const plan = ev.content || "";
       $("#bs-plan-wrap").hidden = false;
       $("#bs-plan-body").innerHTML = md(plan);
@@ -3543,9 +3734,11 @@ function bsScroll(force) {
 async function bsStop() {
   const btn = $("#bs-stop");
   btn.disabled = true; btn.textContent = "停止中…";
+  const isSem = state.bs.team === "seminar";
   try {
-    await api("/api/v1/brainstorm/stop", { method: "POST",
-      body: JSON.stringify({ session_id: state.bs.sid }) });
+    await api(isSem ? "/api/v1/seminar/stop" : "/api/v1/brainstorm/stop",
+              { method: "POST",
+                body: JSON.stringify({ session_id: state.bs.sid }) });
   } catch (e) { toast(e.message, "err"); }
 }
 
@@ -3553,9 +3746,11 @@ async function bsStop() {
 async function bsLoadHistory() {
   const sel = $("#bs-history");
   const cur = sel.value;
+  const isSem = state.bs.team === "seminar";
   let rows = [];
   try {
-    const r = await api("/api/v1/brainstorm/sessions");
+    const r = await api(isSem ? "/api/v1/seminar/sessions"
+                              : "/api/v1/brainstorm/sessions");
     rows = r.sessions || [];
   } catch { /* 后端不可达时保留现状 */ }
   const st = { running: "进行中", done: "已完成", stopped: "已停止", failed: "失败" };
@@ -3566,13 +3761,17 @@ async function bsLoadHistory() {
 
 async function bsReplay(sid) {
   if (state.bs.running) return toast("当前正在运行一场头脑风暴", "err");
+  const isSem = state.bs.team === "seminar";
   let d;
-  try { d = await api("/api/v1/brainstorm/" + encodeURIComponent(sid)); }
+  try { d = await api((isSem ? "/api/v1/seminar/" : "/api/v1/brainstorm/")
+                      + encodeURIComponent(sid)); }
   catch (e) { return toast(e.message, "err"); }
   bsPinned = true;
   state.bs = { running: false, sid, abort: null, evidence: [], tools: [],
-               plan: null, replayed: true, liveTools: {}, live: {}, qa: [] };
-  $("#bs-qa-wrap").hidden = false;
+               plan: null, replayed: true, liveTools: {}, live: {}, qa: [],
+               team: state.bs.team, insights: [], openQs: [], cards: [],
+               ranking: [] };
+  $("#bs-qa-wrap").hidden = isSem;              // 追问目前仅争鸣社
   $("#bs-qa-list").innerHTML = "";
   $("#bs-setup").hidden = true;
   $("#bs-plan-wrap").hidden = true;
@@ -3611,9 +3810,29 @@ async function bsReplay(sid) {
       results: d.evidence_pool.map(e => ({ kb_name: e.kb, source: e.source,
                                            text: e.digest, by: e.found_by })) });
   }
+  // 会讲专属：研读笔记与问答 → 气泡回放（争鸣社的立场书/辩论回放走上方原有路径）
+  if (isSem) {
+    (d.reading_notes || []).forEach(n =>
+      put(n.agent_id, "read", undefined, n.content, n.failed, n.model));
+    (d.qa_transcript || []).forEach(t =>
+      put(t.agent_id, t.kind === "present" ? "present" : "qa",
+          undefined, t.content, false, t.model));
+  }
+  // 会讲专属：洞见池 + 构想卡墙（回放）
+  if (isSem) {
+    if ((d.insight_board || []).length) {
+      d.insight_board.forEach(i => state.bs.insights.push(i));
+      bsHandleEvent({ type: "insight", insights: d.insight_board,
+                      open_questions: d.open_questions || [] });
+    }
+    (d.card_registry || []).forEach(c =>
+      bsHandleEvent({ type: "idea_card", card: c }));
+    if ((d.idea_ranking || []).length)
+      bsHandleEvent({ type: "ranking", ranking: d.idea_ranking });
+  }
   // 成稿
   const proposal = d.final_proposal;
-  if (proposal) bsHandleEvent({ type: "bs_plan", content: proposal });
+  if (proposal) bsHandleEvent({ type: "plan", content: proposal });
   else $("#bs-plan-wrap").hidden = true;
 }
 
@@ -3665,12 +3884,63 @@ async function bsProbeModels(roleId, configId) {
   }
 }
 
-function bsEnter() {
-  if ($("#bs-roles").innerHTML === "") bsRenderRoles();
+function bsSetTeam(t) {
+  if (state.bs.running) return toast("场次运行中，结束后再切换团队", "err");
+  state.bs.team = t;
+  $$("#bs-team-switch .bs-team-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.bsTeam === t));
+  bsShowTeamIntro(t);                              // 团队详细介绍
+  bsRenderRoles();
   bsLoadModelOptions();
   bsLoadHistory();
-  if (!state.bs.running) $("#bs-setup").hidden = false;
+  // 明确点选团队后才展开发起卡片；重置视图为该团队的新场次
+  bsPinned = true;
+  state.bs = { running: false, sid: null, abort: null, evidence: [], tools: [],
+               plan: null, replayed: false, liveTools: {}, live: {}, qa: [],
+               team: t, insights: [], openQs: [], cards: [], ranking: [] };
+  $("#bs-setup").hidden = false;
+  $("#bs-team-hint").hidden = true;
+  $("#bs-team-intro").hidden = false;
+  $("#bs-stream-wrap").hidden = true;
+  $("#bs-plan-wrap").hidden = true;
+  $("#bs-stream").innerHTML = "";
+  $("#bs-evidence").innerHTML =
+    '<div class="muted" style="font-size:12px;padding:6px 2px">尚无证据。研读/调研阶段各角色的知识库命中会汇集到这里。</div>';
+  $("#bs-toollog").innerHTML =
+    '<div class="muted" style="font-size:12px;padding:6px 2px">尚未调用工具。</div>';
+  if (t === "debate") {                              // 洞见池/构想卡墙仅会讲有
+    $("#bs-insights").innerHTML =
+      '<div class="muted" style="font-size:12px;padding:6px 2px">尚无洞见。每场汇报+问答后由主席采集领域级洞见。</div>';
+    $("#bs-cards").innerHTML =
+      '<div class="muted" style="font-size:12px;padding:6px 2px">尚无构想卡。构想工作坊阶段各学者提案并改进彼此。</div>';
+    $("#bs-insight-count").textContent = "";
+    $("#bs-card-count").textContent = "";
+  }
+  $("#bs-sid").textContent = "";
+  $("#bs-stop").style.display = "none";
+  $("#bs-topic").focus();
 }
+
+function bsEnter() {
+  $$("#bs-team-switch .bs-team-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.bsTeam === state.bs.team));
+  bsRenderRoles();
+  bsLoadModelOptions();
+  bsLoadHistory();
+  // 刚打开板块：只显示团队切换器与介绍提示，不展开发起卡片
+  if (!state.bs.running && !state.bs.sid) {
+    $("#bs-setup").hidden = true;
+    $("#bs-team-hint").hidden = false;
+    $("#bs-team-intro").hidden = true;
+    $("#bs-stream-wrap").hidden = true;
+    $("#bs-plan-wrap").hidden = true;
+    $("#bs-qa-wrap").hidden = true;
+  }
+}
+
+/* 团队按钮：点击才展开发起面板（bsSetTeam 内含介绍/重置逻辑） */
+$$("#bs-team-switch .bs-team-btn").forEach(b =>
+  b.onclick = () => bsSetTeam(b.dataset.bsTeam));
 
 function bsDownload(name, text) {
   const a = document.createElement("a");
@@ -3678,6 +3948,49 @@ function bsDownload(name, text) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/* ---------- 会讲：构想卡墙（谱系 + 评分角标 + 排序） ---------- */
+function bsRenderCards() {
+  const box = $("#bs-cards");
+  if (!box) return;
+  let cards = state.bs.cards || [];
+  const ranking = state.bs.ranking || [];
+  if (ranking.length) {                         // 聚合完成：按排序渲染
+    const order = new Map(ranking.map(r => [r.card_id, r]));
+    cards = [...cards].sort((a, b) =>
+      (order.get(a.card_id)?.total ?? -1) - (order.get(b.card_id)?.total ?? -1));
+  }
+  if (!cards.length) {
+    box.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 2px">尚无构想卡。</div>';
+    return;
+  }
+  box.innerHTML = "";
+  cards.forEach(c => {
+    const r = ranking.find(x => x.card_id === c.card_id);
+    const meta = bsAgentMeta(c.author);
+    const lin = c.builds_on
+      ? ` <span class="lineage">↳ 改进自 ${esc(c.builds_on)}（${esc(bsAgentMeta(
+          (state.bs.cards.find(x => x.card_id === c.builds_on) || {}).author
+          || "?").name)}）</span>` : "";
+    const score = r ? `<span class="score-badge">${r.total} 分</span>` : "";
+    const div = r && r.divergence ? `<span class="div-badge">分歧 ${r.divergence}</span>` : "";
+    const el = document.createElement("div");
+    el.className = "bs-card";
+    el.innerHTML = `<span class="cid">${esc(c.card_id || "?")}</span>
+      <span style="color:${meta.color}">${esc(meta.name)}</span>${lin}${score}${div}
+      <div style="margin-top:3px;font-weight:600">${esc(c.title || "")}</div>
+      ${c.hypothesis ? `<div class="muted" style="font-size:11.5px;margin-top:2px">假设：${esc(String(c.hypothesis))}</div>` : ""}
+      ${r?.comments?.length ? `<div class="muted" style="font-size:11px;margin-top:2px">评语：${esc(r.comments[0])}</div>` : ""}`;
+    el.onclick = () => openModal(`<div class="section-t">${esc(c.card_id || "?")} · ${esc(c.title || "")}</div>
+      <div class="hint" style="font-size:11.5px;color:var(--muted)">提出者：${esc(meta.name)}${c.builds_on ? " · 改进自 " + esc(c.builds_on) : ""}</div>
+      ${c.inspiration ? `<div style="margin-top:6px;font-size:12.5px"><b>承接：</b>${esc(c.inspiration)}</div>` : ""}
+      ${c.hypothesis ? `<div style="margin-top:6px;font-size:12.5px"><b>假设：</b>${esc(c.hypothesis)}</div>` : ""}
+      ${c.validation_sketch ? `<div style="margin-top:6px;font-size:12.5px"><b>验证：</b>${esc(c.validation_sketch)}</div>` : ""}
+      ${c.risk ? `<div style="margin-top:6px;font-size:12.5px"><b>风险：</b>${esc(c.risk)}</div>` : ""}
+      ${c.improvement ? `<div style="margin-top:6px;font-size:12.5px"><b>改进点：</b>${esc(c.improvement)}</div>` : ""}`);
+    box.prepend(el);                            // 新卡在上方（排序后再重排）
+  });
 }
 
 /* ---------- 追问：点名角色作答，未点名由主持人 ---------- */
@@ -3781,8 +4094,10 @@ async function bsOpenHistory(sid) {
     // 回放会重绘群聊区，不能与进行中的流混写：询问是否停止当前场次
     if (!confirm("当前场次仍在运行。停止它并回放选中的历史场次？")) return;
     try {
-      await api("/api/v1/brainstorm/stop", { method: "POST",
-        body: JSON.stringify({ session_id: state.bs.sid }) });
+      await api(state.bs.team === "seminar"
+                ? "/api/v1/seminar/stop" : "/api/v1/brainstorm/stop",
+        { method: "POST",
+          body: JSON.stringify({ session_id: state.bs.sid }) });
     } catch { /* 停止标记失败也无妨：下面仍等待流自然结束 */ }
     for (let i = 0; i < 40 && state.bs.running; i++)
       await new Promise(r => setTimeout(r, 500));   // 最多等 20s 收尾
@@ -3798,7 +4113,9 @@ $("#bs-history").onchange = () => bsOpenHistory($("#bs-history").value);
 /* 回到发起面板：清空流视图与运行状态，随时可开新场次 */
 function bsShowSetup() {
   state.bs = { running: false, sid: null, abort: null, evidence: [], tools: [],
-               plan: null, replayed: false, liveTools: {}, live: {}, qa: [] };
+               plan: null, replayed: false, liveTools: {}, live: {}, qa: [],
+               team: state.bs.team || "debate", insights: [], openQs: [],
+               cards: [], ranking: [] };
   $("#bs-qa-wrap").hidden = true;
   $("#bs-qa-list").innerHTML = "";
   $("#bs-setup").hidden = false;
@@ -3820,8 +4137,10 @@ $("#bs-new").onclick = async () => {
   if (state.bs.running) {
     if (!confirm("当前场次仍在运行。停止它并开新场次？")) return;
     try {
-      await api("/api/v1/brainstorm/stop", { method: "POST",
-        body: JSON.stringify({ session_id: state.bs.sid }) });
+      await api(state.bs.team === "seminar"
+                ? "/api/v1/seminar/stop" : "/api/v1/brainstorm/stop",
+        { method: "POST",
+          body: JSON.stringify({ session_id: state.bs.sid }) });
     } catch { }
     for (let i = 0; i < 40 && state.bs.running; i++)
       await new Promise(r => setTimeout(r, 500));

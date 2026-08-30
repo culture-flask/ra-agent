@@ -179,6 +179,7 @@ class BrainstormSession(Base):
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     topic: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="running")
+    team: Mapped[str] = mapped_column(String(16), default="debate")   # debate=争鸣社 | seminar=会讲
     roles: Mapped[list] = mapped_column(JSON, default=list)   # 本场角色快照
     stats: Mapped[dict] = mapped_column(JSON, default=dict)    # turns/tokens 等
     final_proposal: Mapped[str] = mapped_column(Text, default="")

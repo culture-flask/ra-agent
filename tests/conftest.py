@@ -94,6 +94,10 @@ with engine.begin() as conn:
                       "ALTER COLUMN session_id TYPE VARCHAR(64)"))
     conn.execute(text("ALTER TABLE llm_usage "
                       "ALTER COLUMN session_id TYPE VARCHAR(64)"))
+    # 两支多 agent 团队分家：存量测试库补 team 列（新库由 create 带出）
+    conn.execute(text("ALTER TABLE brainstorm_sessions "
+                      "ADD COLUMN IF NOT EXISTS team VARCHAR(16) "
+                      "NOT NULL DEFAULT 'debate'"))
 
 
 @pytest.fixture(autouse=True)
