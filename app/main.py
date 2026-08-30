@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.abstractions.llm import LLMService
 from app.api.auth import router as auth_router
+from app.api.brainstorm import router as brainstorm_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.feedbacks import router as feedbacks_router
@@ -23,11 +24,12 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import get_logger, setup_logging
 from app.core.net import apply_proxy
 from app.core.tracing import Tracer
+from app.graph.brainstorm import build_brainstorm_graph
 from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter
 from app.mcp.host import MCPHost
-from app.models import Conversation, Feedback, LLMUsage, Memory
+from app.models import BrainstormSession, Conversation, Feedback, LLMUsage, Memory
 from app.services.kb_service import KBService
 from app.services.memory_service import MemoryService
 from app.api.memories import router as memories_router
@@ -55,6 +57,8 @@ async def lifespan(app: FastAPI):
     Feedback.__table__.create(engine, checkfirst=True)
     # Token 用量计量（P3-20）：成本报表与配额演进数据源
     LLMUsage.__table__.create(engine, checkfirst=True)
+    # 头脑风暴会话登记表
+    BrainstormSession.__table__.create(engine, checkfirst=True)
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
                           "tier VARCHAR(8) NOT NULL DEFAULT 'core'"))
@@ -73,6 +77,12 @@ async def lifespan(app: FastAPI):
         # 用量计量表补列（P3-20）：存量开发库补 cached_tokens
         conn.execute(text("ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS "
                           "cached_tokens INTEGER NOT NULL DEFAULT 0"))
+        # 会话 id 加宽（幂等）：头脑风暴会话 id = "bs-" + uuid（39 字符），
+        # 36 列会让每条工具追踪/用量写入报 StringDataRightTruncation
+        conn.execute(text("ALTER TABLE tool_call_log "
+                          "ALTER COLUMN session_id TYPE VARCHAR(64)"))
+        conn.execute(text("ALTER TABLE llm_usage "
+                          "ALTER COLUMN session_id TYPE VARCHAR(64)"))
 
         # ---- P1-6 孤儿状态自愈 ----
         # 入库/重建/复制是 BackgroundTasks，随进程消亡且进度只存内存字典；
@@ -85,6 +95,12 @@ async def lifespan(app: FastAPI):
         if res.rowcount:
             logger.warning("启动复位 %d 个非终态知识库（上次进程中断残留）",
                            res.rowcount)
+        # 头脑风暴：进程中断残留 running → 复位 failed（同 kbs 自愈模式）
+        res_bs = conn.execute(text("UPDATE brainstorm_sessions "
+                                   "SET status = 'failed' "
+                                   "WHERE status = 'running'"))
+        if res_bs.rowcount:
+            logger.warning("启动复位 %d 个中断的头脑风暴会话", res_bs.rowcount)
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)
@@ -105,6 +121,7 @@ async def lifespan(app: FastAPI):
     ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer, memory_service)
     app.state.workflow_ctx = ctx                  # API 层后台记忆管线复用同一编排上下文
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver
+    app.state.brainstorm_graph = await build_brainstorm_graph(ctx)   # 头脑风暴子图（独立 checkpointer）
     app.state.kb_service = kb_service
     app.state.tracer = tracer
     app.state.memory_service = memory_service
@@ -122,6 +139,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
 register_exception_handlers(app)
 app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(brainstorm_router)
 app.include_router(conversations_router)
 app.include_router(kbs_router)
 app.include_router(traces_router)

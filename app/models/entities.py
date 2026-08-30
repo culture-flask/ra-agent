@@ -92,7 +92,9 @@ class ToolCallLog(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     kind: Mapped[str] = mapped_column(String(16))       # llm | tool | retrieve | kb
     name: Mapped[str] = mapped_column(String(64))
-    session_id: Mapped[str] = mapped_column(String(36), index=True)
+    # 64：头脑风暴会话 id 是 "bs-" + uuid（39 字符），36 会截断报
+    # StringDataRightTruncation——所有工具调用因此在写追踪时全军覆没
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     args: Mapped[dict] = mapped_column(JSON, default=dict)
     output: Mapped[str] = mapped_column(Text, default="")
@@ -111,7 +113,8 @@ class LLMUsage(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(36), index=True)
-    session_id: Mapped[str] = mapped_column(String(36), index=True)
+    # 64：与 tool_call_log.session_id 同步放宽（头脑风暴会话 id 39 字符）
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
     model: Mapped[str] = mapped_column(String(128), default="")
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
@@ -158,5 +161,27 @@ class Memory(Base):
     tier: Mapped[str] = mapped_column(String(8), default="core")     # core | short
     topic: Mapped[str] = mapped_column(String(64), default="")       # 主题（压缩分组用）
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)
+
+
+class BrainstormSession(Base):
+    """头脑风暴会话登记：列表页元数据 + 成稿。
+
+    过程数据（立场书/辩论记录/证据池）不在此表——都在 LangGraph checkpoint
+    （与主链路"conversations 表 + checkpoint 存消息"同构）。
+    status 状态机：running | done | stopped | failed；启动自愈同 kbs 模式
+    （进程中断残留 running → 启动时复位 failed）。
+    """
+    __tablename__ = "brainstorm_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    topic: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    roles: Mapped[list] = mapped_column(JSON, default=list)   # 本场角色快照
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)    # turns/tokens 等
+    final_proposal: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                  onupdate=utcnow)

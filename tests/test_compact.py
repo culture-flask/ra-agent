@@ -218,11 +218,16 @@ def test_context_usage_after_graph_run():
 
 def test_chat_context_endpoint(monkeypatch, auth_factory):
     """GET /chat/context：打开会话时前端拉取上下文占用（不依赖 SSE 事件）。"""
+    # 假 /models 响应里的模型 id 用当前系统默认（yaml 可改），否则探测必然 miss
+    from app.settings import Settings
+    default_model = (Settings.load().llm_system_default.get("model_id")
+                     or "deepseek-v4-flash")
+
     class FakeResp:
         status_code = 200
 
         def json(self):
-            return {"data": [{"id": "deepseek-v4-flash", "context_length": 32768}]}
+            return {"data": [{"id": default_model, "context_length": 32768}]}
 
         def raise_for_status(self):
             pass

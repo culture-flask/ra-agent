@@ -45,6 +45,20 @@ class Settings(BaseSettings):
     memory_max: int = 50                      # 每用户长期记忆条数上限（超限触发压缩/LRU）
     memory_short_ttl_days: int = 14           # short 层记忆过期天数（未更新自动清除）
 
+    # ---------- 头脑风暴（多 agent 辩论） ----------
+    brainstorm_max_rounds: int = 3
+    brainstorm_research_tool_loop_max: int = 10
+    brainstorm_debate_tool_rounds: int = 1
+    brainstorm_token_budget: int = 20000000   # 前端发起时按场可调
+    brainstorm_position_max_chars: int = 500
+    brainstorm_transcript_window: int = 6
+    brainstorm_roles: list = Field(default_factory=lambda: [
+        {"id": "innovator", "name": "创新者", "temperature": 0.9},
+        {"id": "critic", "name": "批评者", "temperature": 0.4},
+        {"id": "methodologist", "name": "方法论专家", "temperature": 0.3},
+        {"id": "practitioner", "name": "实践者", "temperature": 0.5},
+    ])
+
     @classmethod
     def load(cls) -> "Settings":
         """加载配置。优先级： 环境变量/.env > settings.ymal > 类默认值
@@ -85,6 +99,13 @@ class Settings(BaseSettings):
                 "llm_providers": raw.get("llm", {}).get("providers", {}),   # 容错:缺段用空目录
                 "memory_max": raw.get("memory", {}).get("max", 50),
                 "memory_short_ttl_days": raw.get("memory", {}).get("short_ttl_days", 14),
+                "brainstorm_max_rounds": raw.get("brainstorm", {}).get("max_rounds", 3),
+                "brainstorm_research_tool_loop_max": raw.get("brainstorm", {}).get("research_tool_loop_max", 6),
+                "brainstorm_debate_tool_rounds": raw.get("brainstorm", {}).get("debate_tool_rounds", 1),
+                "brainstorm_token_budget": raw.get("brainstorm", {}).get("token_budget", 800000),
+                "brainstorm_position_max_chars": raw.get("brainstorm", {}).get("position_max_chars", 500),
+                "brainstorm_transcript_window": raw.get("brainstorm", {}).get("transcript_window", 6),
+                "brainstorm_roles": raw.get("brainstorm", {}).get("roles", []),
             }
             for key, value in yaml_values.items():
                 if key not in merged.model_fields_set:

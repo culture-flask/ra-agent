@@ -65,7 +65,7 @@ from sqlalchemy import text
 from app.core.db import SessionLocal, engine
 from app.core.jwt_utils import create_access_token
 from app.core.security import hash_password
-from app.models import Conversation, Feedback, LLMUsage, Memory, User
+from app.models import BrainstormSession, Conversation, Feedback, LLMUsage, Memory, User
 
 # 测试库 schema 迁移（与 app.main lifespan 相同的幂等 DDL）：
 # service 级测试不走 lifespan，先在这里补表/补列，否则查询新列直接报错
@@ -73,6 +73,7 @@ Conversation.__table__.create(engine, checkfirst=True)
 Feedback.__table__.create(engine, checkfirst=True)   # P3-19 反馈闭环
 LLMUsage.__table__.create(engine, checkfirst=True)   # P3-20 用量计量
 Memory.__table__.create(engine, checkfirst=True)
+BrainstormSession.__table__.create(engine, checkfirst=True)   # 头脑风暴会话登记
 with engine.begin() as conn:
     conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
                       "tier VARCHAR(8) NOT NULL DEFAULT 'core'"))
@@ -87,6 +88,12 @@ with engine.begin() as conn:
     # 用户自定义上下文窗口（与 app.main lifespan 相同的幂等补列）
     conn.execute(text("ALTER TABLE user_llm_config ADD COLUMN IF NOT EXISTS "
                       "context_window INTEGER"))
+    # 会话 id 加宽（与 app.main lifespan 相同的幂等 DDL）：存量测试库的
+    # 36 列会让头脑风暴 39 字符会话 id 的追踪写入报 StringDataRightTruncation
+    conn.execute(text("ALTER TABLE tool_call_log "
+                      "ALTER COLUMN session_id TYPE VARCHAR(64)"))
+    conn.execute(text("ALTER TABLE llm_usage "
+                      "ALTER COLUMN session_id TYPE VARCHAR(64)"))
 
 
 @pytest.fixture(autouse=True)
@@ -99,6 +106,7 @@ def clean_db():
     with engine.begin() as conn:          # 事务：DELETE 执行后自动提交
         conn.execute(text("DELETE FROM llm_usage"))
         conn.execute(text("DELETE FROM feedbacks"))
+        conn.execute(text("DELETE FROM brainstorm_sessions"))
         conn.execute(text("DELETE FROM user_llm_config"))
         conn.execute(text("DELETE FROM memories"))  # 子表链按外键方向删
         conn.execute(text("DELETE FROM kbs"))       # 再删子表(有外键指向 users)

@@ -20,9 +20,9 @@ tracing:
 
 llm:
   system_default:
-    provider: sensenova
-    base_url: https://token.sensenova.cn/v1
-    model_id: sensenova-6.8-flash-lite
+    provider: opencodego
+    base_url: https://opencode.ai/zen/go/v1
+    model_id: deepseek-v4-flash
   retry:             # 调用失败退避重试：限流/5xx/网络错误指数退避重试
     max_retries: 10
     base_delay: 1.0 # 首次重试等 1s，之后 2s / 4s（含随机抖动）
@@ -72,3 +72,17 @@ mcp_servers:
     transport: stdio
     command: python
     args: ["servers/research_server.py"]
+
+# 头脑风暴（多 agent 辩论）
+brainstorm:
+  max_rounds: 3                 # 辩论轮数上限（× 角色数 = 发言次数上限）
+  research_tool_loop_max: 10    # 调研阶段单 agent 工具子循环上限
+  debate_tool_rounds: 1         # 辩论阶段前几轮还允许调工具（防无限调研不辩论）
+  token_budget: 20000000        # 单场总 token 预算默认值（硬熔断；前端发起时按场可调）
+  position_max_chars: 500       # 立场书长度上限
+  transcript_window: 6          # 辩论上下文携带的最近发言条数
+  roles:                        # 角色目录（id 固定四选一，name/temperature 可调）
+    - {id: innovator, name: 创新者, temperature: 0.9}
+    - {id: critic, name: 批评者, temperature: 0.4}
+    - {id: methodologist, name: 方法论专家, temperature: 0.3}
+    - {id: practitioner, name: 实践者, temperature: 0.5}

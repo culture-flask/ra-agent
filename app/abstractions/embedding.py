@@ -113,10 +113,14 @@ class CloudEmbeddingModel(EmbeddingModel):
                 if attempt == self.MAX_CONN_RETRIES - 1:
                     raise
                 time.sleep(0.5 * (2 ** attempt))    # 连接抖动：0.5s → 1s → 2s → 4s
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError):
+                # 响应损坏：同连接抖动退避重试。ValueError 覆盖 openai SDK 的
+                # base64+numpy 解析路径——响应流被链路截断时 np.frombuffer 报
+                # "buffer size must be a multiple of element size"（SSH 隧道
+                # 等不稳定链路高负载下的实测形态），与 JSON 截断同类瞬时故障
                 if attempt == self.MAX_CONN_RETRIES - 1:
                     raise
-                time.sleep(0.5 * (2 ** attempt))    # 响应损坏：同连接抖动退避重试
+                time.sleep(0.5 * (2 ** attempt))
             except BadRequestError:
                 if len(batch) == 1:
                     raise                # 单条也 400：输入问题，重试无意义

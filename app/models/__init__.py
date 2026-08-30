@@ -1,7 +1,8 @@
 from app.models.base import Base, utcnow
-from app.models.entities import (Conversation, Feedback, KnowledgeBase, LLMUsage,
-                                 Memory, ToolCallLog, User, UserLLMConfig,
-                                 UserSession)
+from app.models.entities import (BrainstormSession, Conversation, Feedback,
+                                 KnowledgeBase, LLMUsage, Memory, ToolCallLog,
+                                 User, UserLLMConfig, UserSession)
 
 __all__ = ["Base", "User", "UserSession", "Conversation", "KnowledgeBase",
-           "UserLLMConfig", "ToolCallLog", "Memory", "Feedback", "LLMUsage"]
+           "UserLLMConfig", "ToolCallLog", "Memory", "Feedback", "LLMUsage",
+           "BrainstormSession"]

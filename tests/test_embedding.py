@@ -100,3 +100,22 @@ def test_single_item_400_raises():
     m._client = SimpleNamespace(embeddings=SimpleNamespace(create=create))
     with pytest.raises(BadRequestError):
         m.embed_texts(["bad input"])
+
+def test_numpy_truncated_buffer_retried(monkeypatch):
+    """链路截断经 openai SDK base64+numpy 解析变成 ValueError
+    ("buffer size must be a multiple of element size")——与 JSON 截断
+    同类瞬时故障（SSH 隧道高负载实测形态）→ 退避重试后成功。"""
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    m = _cloud_model()
+    calls = {"n": 0}
+
+    def create(model, input):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("buffer size must be a multiple of element size")
+        return _resp([[0.3] * 4 for _ in input])
+
+    m._client = SimpleNamespace(embeddings=SimpleNamespace(create=create))
+    out = m.embed_texts(["a", "b"])
+    assert len(out) == 2 and len(out[0]) == 4
+    assert calls["n"] == 2

@@ -501,6 +501,95 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
 /* 环境粒子画布：彩色渐变舞台上的白色微尘（Atlas 式克制），指针轻微扰动 */
 #particle-canvas{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;opacity:.6}
 
+/* ---------- 头脑风暴 ---------- */
+#view-brainstorm{display:none;flex-direction:column;padding:0;overflow:hidden}
+#view-brainstorm.active{display:flex}
+.bs-layout{flex:1;display:flex;min-height:0}
+.bs-main{flex:1;min-width:0;overflow-y:auto;padding:22px 26px 16px;display:flex;flex-direction:column;gap:16px}
+.bs-side{width:308px;flex-shrink:0;border-left:1px solid var(--line);background:var(--panel);
+  overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.bs-bottombar{border-top:1px solid var(--line);background:var(--bg);padding:10px 26px;
+  display:flex;gap:10px;align-items:center}
+.bs-roles{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.bs-role{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;gap:10px;
+  align-items:flex-start;cursor:pointer;transition:.15s;background:var(--surface)}
+.bs-role:hover{border-color:var(--line-strong)}
+.bs-role.off{opacity:.45}
+.bs-role input[type=checkbox]{margin-top:3px;width:15px;height:15px;flex-shrink:0}
+.bs-role .avatar{margin-top:2px}
+.bs-role .rn{font-weight:600;font-size:13px}
+.bs-role .rd{font-size:11.5px;color:var(--muted);margin-top:1px}
+.bs-role .rt{display:block;margin-top:7px;font-size:11.5px;color:var(--muted)}
+.bs-role .rt input{width:64px;padding:2px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px}
+.bs-role .rt select{width:100%;margin-top:3px;padding:3px 6px;border:1px solid var(--line);
+  border-radius:6px;font-size:12px;background:var(--surface);color:var(--ink)}
+.bs-status{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);
+  padding:8px 14px;border:1px dashed var(--line-strong);border-radius:999px;background:var(--surface);
+  position:sticky;top:0;z-index:2;width:fit-content;max-width:100%}
+.bs-status .dot{width:8px;height:8px;border-radius:50%;background:var(--warn);flex-shrink:0}
+.bs-status .dot.ok{background:var(--accent2)}
+.bs-status .dot.bad{background:var(--danger)}
+.bs-status .dot.spin{animation:bs-pulse 1.1s ease-in-out infinite}
+@keyframes bs-pulse{0%,100%{opacity:.35}50%{opacity:1}}
+/* 群聊流条目 */
+.bs-item{margin:0 0 14px}
+.bs-turn-label{font-size:11px;color:var(--muted);letter-spacing:.06em;margin:0 0 6px 46px;text-transform:uppercase}
+.bs-msg{display:flex;gap:10px;align-items:flex-start}
+.bs-msg .avatar{width:36px;height:36px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;color:#fff;font-size:13px;font-weight:700;letter-spacing:.02em}
+.bs-msg .bs-bubble{flex:1;min-width:0;border:1px solid var(--line);border-radius:14px;
+  background:var(--surface);padding:10px 14px;box-shadow:var(--shadow-xs)}
+.bs-msg .who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:2px}
+.bs-msg .who .nm{font-weight:650;font-size:13px}
+.bs-msg .who .ph{font-size:10.5px;padding:1px 8px;border-radius:999px;background:var(--chip);color:var(--muted)}
+.bs-msg .who .fc{font-size:11.5px;color:var(--muted)}
+.bs-msg .who .bs-model{font-size:10.5px;padding:1px 7px;border-radius:999px;
+  background:var(--chip);color:var(--muted);font-family:var(--mono-font,monospace)}
+.bs-msg .body{font-size:13.5px;overflow-wrap:break-word}
+.bs-msg .body p{margin:4px 0}
+.bs-msg .bs-cursor:after{content:"▍";animation:bs-pulse 1s infinite;color:var(--muted)}
+.bs-tools{margin:6px 0 2px;display:flex;flex-wrap:wrap;gap:6px}
+.bs-tool{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:1px 9px;color:var(--tool);
+  background:var(--surface);cursor:pointer}
+.bs-tool.run{border-style:dashed;animation:bs-pulse 1.2s infinite}
+.bs-tool.fail{color:var(--danger);border-color:var(--danger);background:transparent}
+.bs-tool.fail:after{content:" ✕"}
+.bs-reason{margin:4px 0 2px;font-size:11.5px;color:var(--muted)}
+.bs-reason summary{cursor:pointer;user-select:none}
+.bs-reason .rv{white-space:pre-wrap;max-height:180px;overflow-y:auto;margin-top:6px;
+  border-left:2px solid var(--line-strong);padding:4px 10px;background:var(--code-bg);border-radius:0 8px 8px 0}
+/* 主持人卡片 */
+.bs-mod{margin:0 0 14px 46px;border:1px solid var(--line-strong);border-radius:14px;background:var(--panel);
+  padding:10px 14px}
+.bs-mod .mh{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:650;margin-bottom:6px}
+.bs-mod .consensus-bar{flex:1;height:6px;border-radius:3px;background:var(--chip);min-width:90px;overflow:hidden}
+.bs-mod .consensus-bar i{display:block;height:100%;border-radius:3px;background:var(--accent2);transition:width .4s}
+.bs-mod .ml{font-variant-numeric:tabular-nums;font-size:11.5px;color:var(--muted)}
+.bs-mod ul{margin:4px 0 0;padding-left:16px;font-size:12.5px}
+.bs-mod .sec{font-size:11px;color:var(--muted);margin-top:6px;letter-spacing:.05em}
+.bs-mod .next{margin-top:6px;font-size:12px}
+/* 成稿 */
+.bs-plan .bs-plan-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.bs-plan-body{font-size:13.5px;max-height:520px;overflow-y:auto;border-top:1px solid var(--line);padding-top:10px}
+.bs-plan-body h1,.bs-plan-body .b{font-weight:650}
+.bs-plan-body p{margin:6px 0}
+/* 追问区 */
+.bs-qa-q{font-size:13px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:7px 12px;margin-bottom:8px}
+.bs-qa-item{margin-bottom:14px}
+.bs-qa-meta{font-size:11px;color:var(--muted);margin:2px 0 4px}
+/* 证据池侧栏 */
+.bs-side-head{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;font-weight:650}
+.bs-evidence{display:flex;flex-direction:column;gap:6px}
+.bs-ev{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:7px 10px;
+  font-size:11.5px;cursor:pointer;transition:.15s}
+.bs-ev:hover{border-color:var(--line-strong)}
+.bs-ev .src{color:var(--tool);font-weight:600;margin-right:6px}
+.bs-ev .by{color:var(--muted);font-size:10.5px;float:right}
+.bs-ev .tx{color:var(--muted);margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.bs-sec-t{font-size:11px;color:var(--muted);letter-spacing:.06em;margin-top:6px}
+@media(max-width:1080px){.bs-side{display:none}}
+
 /* ---------- 移动端 ---------- */
 @media(max-width:780px){#app{margin:8px;height:calc(100vh - 16px);width:calc(100vw - 16px);border-radius:14px}main>header{padding:12px 16px}aside{width:72px;min-width:72px}.brand{justify-content:center;padding:16px 8px}.brand>div,nav .nav-item span,#session-zone,.side-foot .user-row{display:none}.nav-item{justify-content:center;padding:12px 8px}.side-foot{padding:10px}.api-status{justify-content:center}.view{padding:18px 16px}.theme-toggle{font-size:0;padding:8px 10px}.theme-toggle .theme-icon{font-size:17px}.msg{max-width:100%}#messages{padding:18px 16px 10px}#chat-toolbar{padding:6px 16px;flex-wrap:wrap}.ctx-meter{order:10;flex-basis:100%}#composer{padding:12px 16px}.composer-inner{gap:6px}.rk-input{font-size:10px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
@@ -686,6 +775,85 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
         <span class="muted" style="font-size:12.5px">LLM / 工具 / 检索调用全链路日志（ToolCallLog）</span>
       </div>
       <div id="trace-list"></div>
+    </section>
+    <!-- 头脑风暴 -->
+    <section class="view" id="view-brainstorm">
+      <div class="bs-layout">
+        <div class="bs-main" id="bs-main">
+          <!-- 启动面板 -->
+          <div class="card bs-setup" id="bs-setup" style="max-width:760px">
+            <div class="section-t" style="margin-top:0">发起一场头脑风暴</div>
+            <div class="field">
+              <label>科研议题</label>
+              <textarea class="input" id="bs-topic" rows="3"
+                placeholder="例：多模态RAG在科研文献综述中的可靠性提升"></textarea>
+            </div>
+            <div class="field">
+              <label>参赛角色（点卡片可关闭，至少保留 2 个）</label>
+              <div id="bs-roles" class="bs-roles"></div>
+            </div>
+            <div class="field" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <label style="margin:0">辩论轮数上限</label>
+              <input class="input mono" id="bs-rounds" type="number" min="1" max="6" value="3" style="width:76px">
+              <span class="hint" style="font-size:12px;color:var(--muted)">× 角色数 = 发言次数上限；主持人判定收敛可提前结束</span>
+            </div>
+            <div class="field" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <label style="margin:0">token 预算（硬熔断）</label>
+              <input class="input mono" id="bs-budget" type="number" min="10000" step="100000" value="20000000" style="width:120px">
+              <span class="hint" style="font-size:12px;color:var(--muted)">全场累计超限即熔断：跳过剩余辩论、以已有材料汇编成稿（工具轮多/模型思考多就调大）</span>
+            </div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <button class="btn primary" id="bs-start">开始头脑风暴</button>
+              <span class="hint" style="font-size:12px;color:var(--muted)">并行独立调研 → 主持人调度多轮辩论 → 撰稿成稿（预计 3~8 分钟）</span>
+            </div>
+          </div>
+          <!-- 群聊流 -->
+          <div id="bs-stream-wrap" hidden>
+            <div class="bs-status" id="bs-status"><span class="dot spin"></span><span id="bs-status-text">准备中…</span></div>
+            <div id="bs-stream" style="margin-top:12px"></div>
+          </div>
+          <!-- 成稿 -->
+          <!-- 追问区 -->
+          <div class="card bs-qa" id="bs-qa-wrap" hidden>
+            <div class="section-t" style="margin:0">追问</div>
+            <div class="hint" style="font-size:11.5px;color:var(--muted);margin:2px 0 8px">
+              点名角色（如「创新者」「批评者」「方法论专家」「实践者」「撰稿人」）由该角色作答；未点名由主持人回答</div>
+            <div id="bs-qa-list"></div>
+            <div style="display:flex;gap:8px;margin-top:8px;align-items:flex-end">
+              <textarea class="input" id="bs-qa-input" rows="2" style="flex:1"
+                placeholder="向本场角色追问…（Enter 发送，Shift+Enter 换行）"></textarea>
+              <button class="btn primary sm" id="bs-qa-send">发送</button>
+            </div>
+          </div>
+          <div class="card bs-plan" id="bs-plan-wrap" hidden>
+            <div class="bs-plan-head">
+              <div class="section-t" style="margin:0">最终科研方案</div>
+              <div style="display:flex;gap:8px">
+                <button class="btn sm" id="bs-plan-copy">复制</button>
+                <button class="btn sm" id="bs-plan-export" title="下载为 Markdown 文件">导出 .md</button>
+              </div>
+            </div>
+            <div class="bs-plan-body" id="bs-plan-body"></div>
+          </div>
+        </div>
+        <!-- 右侧：共享证据池 + 工具调用 -->
+        <aside class="bs-side">
+          <div class="bs-side-head"><span>共享证据池 <span class="muted mono" id="bs-ev-count"></span></span>
+            <span class="muted" style="font-size:10.5px">点击查看全文</span></div>
+          <div class="bs-evidence" id="bs-evidence">
+            <div class="muted" style="font-size:12px;padding:6px 2px">尚无证据。调研阶段各角色的知识库命中会汇集到这里，辩论时可互相引用。</div>
+          </div>
+          <div class="bs-sec-t">工具调用记录 <span class="mono" id="bs-tool-count"></span></div>
+          <div class="bs-evidence" id="bs-toollog"><div class="muted" style="font-size:12px;padding:6px 2px">尚未调用工具。</div></div>
+        </aside>
+      </div>
+      <div class="bs-bottombar">
+        <button class="btn sm" id="bs-new" title="回到发起面板，开一场新的头脑风暴">+ 新场次</button>
+        <select class="input" id="bs-history" style="width:340px"><option value="">历史场次（选择即回放）…</option></select>
+        <div class="spacer"></div>
+        <span class="muted mono" id="bs-sid" style="font-size:11px"></span>
+        <button class="btn danger" id="bs-stop" style="display:none">停止</button>
+      </div>
     </section>
   </main>
 </div>
@@ -1031,6 +1199,8 @@ function logout() {
 const VIEWS = [
   { id: "chat", name: "对话", sub: "流式对话 · 两级知识库检索 · MCP 工具调用 · 长记忆",
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a8 8 0 01-8 8H5l-2 2V12a8 8 0 018-8h2a8 8 0 018 8z"/></svg>' },
+  { id: "brainstorm", name: "头脑风暴", sub: "多 Agent 群聊辩论 · 并行独立调研 · 主持人调度收敛 · 科研方案成稿",
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 21h4M12 3a6 6 0 00-4 10.5c.7.6 1 1.4 1 2.5h6c0-1.1.3-1.9 1-2.5A6 6 0 0012 3z"/></svg>' },
   { id: "kb", name: "知识库", sub: "建库 / 上传文档 / 检索测试 / 换嵌入模型重建",
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>' },
   { id: "llm", name: "模型配置", sub: "用户自定义 LLM · provider 分类 · 一键获取模型列表",
@@ -1059,6 +1229,7 @@ function switchView(id) {
   if (id === "memory") loadMemories();
   if (id === "trace") loadTraces();
   if (id === "chat") { renderSessions(); renderMessages(); }
+  if (id === "brainstorm") bsEnter();
 }
 
 /* ================= 健康检查 ================= */
@@ -2978,6 +3149,685 @@ $("#trace-query").onclick = loadTraces;
 $("#trace-current").onclick = () => {
   $("#trace-session").value = state.active;      // 一键填入当前聊天会话
   loadTraces();
+};
+
+/* ============================================================
+ * 头脑风暴（多 Agent 辩论）· 对接 /api/v1/brainstorm/*
+ * 事件流（bs_* 前缀，与主链路事件同一条 SSE 队列）：
+ *   bs_prepare → bs_agent_start(research ×N 并行) → bs_retrievals /
+ *   bs_tool_start|end / bs_token / bs_reasoning → bs_moderator（调度 +
+ *   共识度卡片）→ bs_agent_start(debate) ×轮 → bs_agent_start(writer,
+ *   synthesis) → bs_plan → done。
+ * 渲染采用增量 DOM：每个事件建/取一个条目节点，token 走 rAF 节流的
+ * md() 重渲——与 chat 的 patchLastMsg 同思路，避免整列表重排。
+ * ============================================================ */
+const BS_ROLES = [
+  { id: "innovator",     name: "创新者",     temperature: 0.9, color: "#7c5cf0",
+    desc: "发散：新颖研究点、跨领域联想、找突破口" },
+  { id: "critic",        name: "批评者",     temperature: 0.4, color: "#be185d",
+    desc: "收敛：质疑创新性 / 可行性 / 有效性" },
+  { id: "methodologist", name: "方法论专家", temperature: 0.3, color: "#0f7b4d",
+    desc: "严谨：技术路线、实验设计、统计功效" },
+  { id: "practitioner",  name: "实践者",     temperature: 0.5, color: "#b45309",
+    desc: "务实：数据可得性、工程复杂度、风险备选" },
+];
+const BS_META = {
+  writer:    { name: "撰稿人", color: "#2b5fd9" },
+  moderator: { name: "主持人", color: "#6f6f76" },
+};
+const bsAgentMeta = id => BS_META[id] ||
+  BS_ROLES.find(r => r.id === id) || { name: id, color: "#6f6f76" };
+
+state.bs = {
+  running: false, sid: null, abort: null,   // abort：本页刷新/切流时中断 SSE 读取
+  evidence: [], tools: [],
+  replayed: false,                          // 当前流内容来自历史回放（只读）
+};
+
+/* ---------- 启动面板 ---------- */
+function bsRenderRoles() {
+  $("#bs-roles").innerHTML = BS_ROLES.map(r => `
+    <div class="bs-role" id="bs-role-${r.id}" data-role-card="${r.id}">
+      <input type="checkbox" checked data-bs-role="${r.id}">
+      <span class="avatar" style="background:${r.color}">${esc(r.name[0])}</span>
+      <span style="flex:1;min-width:0">
+        <span class="rn">${esc(r.name)}</span>
+        <div class="rd">${esc(r.desc)}</div>
+        <div class="rt">温度 <input type="number" min="0" max="2" step="0.1"
+          value="${r.temperature}" data-bs-temp="${r.id}">（观点发散度）</div>
+        <div class="rt">模型配置（凭证）
+          <select data-bs-model="${r.id}">
+            <option value="">默认（用户生效配置）</option>
+          </select>
+        </div>
+        <div class="rt">模型（选择配置后自动探测可选列表）
+          <select data-bs-model-id="${r.id}">
+            <option value="">所选配置的原模型</option>
+          </select>
+        </div>
+      </span>
+    </div>`).join("");
+  const toggle = (cb, on) => {
+    // 至少 2 个角色才叫"辩论"
+    if (!on && $$("#bs-roles input[data-bs-role]:checked").length < 2) {
+      cb.checked = true; return toast("至少保留 2 个角色", "err");
+    }
+    $("#bs-role-" + cb.dataset.bsRole).classList.toggle("off", !cb.checked);
+  };
+  $$("#bs-roles input[data-bs-role]").forEach(cb => {
+    cb.onchange = () => toggle(cb, cb.checked);
+    const card = $("#bs-role-" + cb.dataset.bsRole);
+    card.onclick = e => {
+      if (e.target.closest("input")) return;   // 复选框/温度输入自身处理
+      cb.checked = !cb.checked;
+      toggle(cb, cb.checked);
+    };
+  });
+}
+
+function bsStatus(text, kind) {
+  const dot = $("#bs-status .dot");
+  dot.className = "dot " + (kind === "ok" ? "ok" : kind === "bad" ? "bad" : "spin");
+  $("#bs-status-text").textContent = text;
+}
+
+async function bsStart() {
+  if (state.bs.running) return;
+  const topic = $("#bs-topic").value.trim();
+  if (!topic) return toast("请先输入科研议题", "err");
+  const roles = $$("#bs-roles input[data-bs-role]:checked").map(cb => {
+    const id = cb.dataset.bsRole, meta = BS_ROLES.find(r => r.id === id);
+    const t = parseFloat($(`input[data-bs-temp="${id}"]`).value);
+    const role = { id, name: meta.name,
+                   temperature: Number.isFinite(t) ? t : meta.temperature };
+    const cid = $(`select[data-bs-model="${id}"]`)?.value;
+    if (cid) role.config_id = cid;              // 凭证来源（可空=用户生效配置）
+    const mid = $(`select[data-bs-model-id="${id}"]`)?.value;
+    if (mid) role.model_id = mid;               // 探测列表中选定的模型
+    return role;
+  });
+  if (roles.length < 2) return toast("至少保留 2 个角色", "err");
+  const maxRounds = Math.max(1, Math.min(6, parseInt($("#bs-rounds").value) || 3));
+  const budget = parseInt($("#bs-budget").value);
+  const tokenBudget = Number.isFinite(budget) ? Math.max(10000, budget) : null;
+
+  const sid = "bs-" + uuid();
+  bsPinned = true;
+  state.bs = { running: true, sid, abort: new AbortController(),
+               evidence: [], tools: [], plan: null, replayed: false,
+               liveTools: {}, live: {}, qa: [] };
+  $("#bs-qa-wrap").hidden = false;
+  $("#bs-qa-list").innerHTML = "";
+  $("#bs-setup").hidden = true;
+  $("#bs-plan-wrap").hidden = true;
+  $("#bs-stream-wrap").hidden = false;
+  $("#bs-stream").innerHTML = "";
+  $("#bs-evidence").innerHTML = "";
+  $("#bs-toollog").innerHTML = "";
+  $("#bs-ev-count").textContent = "";
+  $("#bs-tool-count").textContent = "";
+  $("#bs-sid").textContent = sid;
+  $("#bs-stop").style.display = "";
+  bsStatus("主持人解析议题中…");
+
+  try {
+    await bsStream(sid, { session_id: sid, topic, max_rounds: maxRounds,
+                          token_budget: tokenBudget, roles });
+  } finally { bsResetButtons(); }
+}
+
+function bsResetButtons() {
+  state.bs.running = false;
+  $("#bs-stop").style.display = "none";
+  $("#bs-stop").disabled = false; $("#bs-stop").textContent = "停止";
+  $("#bs-setup").hidden = false;                 // 本场结束：启动面板回来，便于连续开场
+  bsLoadHistory();                              // 刷新历史场次下拉
+}
+
+/* ---------- SSE 读取（与 chat 流同一解析骨架） ---------- */
+async function bsStream(sid, body) {
+  const headers = { "Content-Type": "application/json" };
+  if (store.token) headers["Authorization"] = "Bearer " + store.token;
+  const res = await fetch(store.base + "/api/v1/brainstorm/stream", {
+    method: "POST", headers, body: JSON.stringify(body),
+    signal: state.bs.abort?.signal });
+  if (!res.ok) throw new Error("HTTP " + res.status + "：" + await res.text());
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+      for (const line of chunk.split("\n")) {
+        if (!line.startsWith("data: ")) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+        if (ev.type === "done") { bsStatus("本场头脑风暴已结束", "ok"); continue; }
+        if (ev.type === "error") {
+          bsStatus("出错了：" + (ev.error || "未知错误"), "bad");
+          toast(ev.error || "头脑风暴运行失败", "err");
+          continue;
+        }
+        if (String(ev.type).startsWith("bs_")) bsHandleEvent(ev);
+      }
+    }
+  }
+}
+
+/* ---------- 事件 → 群聊流 ---------- */
+/* 事件落点按 agent 分桶（state.bs.live[agent]），不能用单一"当前指针"：
+   并行调研阶段四路 bs_agent_start 会互相覆盖指针，只有最后启动的角色
+   收得到 token/工具事件，其余气泡永远停在占位文案（真实事故）。 */
+const bsPhaseLabel = { research: "独立调研", debate: "辩论发言", synthesis: "成稿" };
+const bsLiveOf = agent => (state.bs.live || {})[agent];
+
+function bsHandleEvent(ev) {
+  switch (ev.type) {
+    case "bs_prepare":
+      if (ev.topic_restatement !== undefined) {
+        bsStatus(`议题已解析（${ev.directive_count || 0} 份差异化调研指令），角色并行调研中…`);
+      }
+      break;
+
+    case "bs_agent_start": {
+      const meta = bsAgentMeta(ev.agent);
+      const ph = bsPhaseLabel[ev.phase] || ev.phase;
+      const item = { agent: ev.agent, phase: ev.phase, content: "",
+                     reasoning: "", tools: [], streaming: true };
+      const el = document.createElement("div");
+      el.className = "bs-item";
+      el.innerHTML = `
+        ${ev.phase === "debate" ? `<div class="bs-turn-label">第 ${ev.turn} 轮发言</div>` : ""}
+        <div class="bs-msg">
+          <span class="avatar" style="background:${meta.color}">${esc(meta.name[0])}</span>
+          <div class="bs-bubble">
+            <div class="who">
+              <span class="nm">${esc(meta.name)}</span>
+              <span class="ph">${esc(ph)}</span>
+              ${ev.model ? `<span class="bs-model">${esc(ev.model)}</span>` : ""}
+              ${ev.focus ? `<span class="fc">主持人指引：${esc(ev.focus)}</span>` : ""}
+            </div>
+            <details class="bs-reason" hidden><summary>思考过程</summary><div class="rv"></div></details>
+            <div class="bs-tools"></div>
+            <div class="body${ev.phase !== "synthesis" ? " bs-cursor" : ""}"></div>
+          </div>
+        </div>`;
+      item.el = el;
+      item.bodyEl = $(".body", el);
+      item.reasonEl = $(".bs-reason .rv", el);
+      item.reasonWrap = $(".bs-reason", el);
+      item.toolsEl = $(".bs-tools", el);
+      $("#bs-stream").appendChild(el);
+      item.bodyEl.innerHTML = ev.phase === "research"
+        ? '<span style="color:var(--muted)">正在检索知识库与调用工具…</span>' : "";
+      state.bs.live[ev.agent] = item;
+      if (ev.phase === "debate")
+        bsStatus(`${bsAgentMeta(ev.agent).name} 正在发言（第 ${ev.turn} 轮）…`);
+      else if (ev.phase === "synthesis") bsStatus("撰稿人正在汇总成稿…");
+      bsScroll(true);
+      break;
+    }
+
+    case "bs_token": {
+      const item = bsLiveOf(ev.agent);
+      if (item && item.streaming) {
+        item.content += ev.content;
+        bsScheduleFlush(item);
+      }
+      break;
+    }
+
+    case "bs_reasoning": {
+      const item = bsLiveOf(ev.agent);
+      if (item && item.streaming) {
+        item.reasoning += ev.content;
+        item.reasonWrap.hidden = false;
+        bsScheduleFlush(item);
+      }
+      break;
+    }
+
+    case "bs_tool_start": {
+      state.bs.tools.push(ev);
+      $("#bs-tool-count").textContent = "· " + state.bs.tools.length + " 次";
+      const meta = bsAgentMeta(ev.agent);
+      const showArgs = () => openModal(
+        `<div class="section-t">工具调用 · ${esc(ev.name)}</div>
+         <pre class="mono" style="white-space:pre-wrap;font-size:12px">${esc(JSON.stringify(ev.args, null, 2))}</pre>`);
+      // 气泡内的活动工具行（若该 agent 正在发言）：带 spinner，结束时摘除
+      const speaker = bsLiveOf(ev.agent);
+      if (speaker && speaker.streaming) {
+        const row = document.createElement("span");
+        row.className = "bs-tool run";
+        row.textContent = `${meta.name} · ${ev.name}`;
+        row.onclick = showArgs;
+        speaker.toolsEl.appendChild(row);
+        state.bs.liveTools = state.bs.liveTools || {};
+        state.bs.liveTools[ev.agent + "|" + ev.name] = row;
+      }
+      // 右侧工具日志（只读，最新在前）
+      const log = document.createElement("div");
+      log.className = "bs-tool";
+      log.style.cursor = "default";
+      log.textContent = `${meta.name} · ${ev.name}`;
+      log.onclick = showArgs;
+      $("#bs-toollog").prepend(log);
+      bsStatus(`调研中 · ${meta.name} 调用 ${ev.name} · 工具共 ${state.bs.tools.length} 次`);
+      bsScroll();
+      break;
+    }
+
+    case "bs_tool_end": {
+      const live = (state.bs.liveTools || {})[ev.agent + "|" + ev.name];
+      if (live) {
+        live.classList.remove("run");
+        if (ev.error) live.classList.add("fail");   // 失败工具：红 chip + ✕
+        delete state.bs.liveTools[ev.agent + "|" + ev.name];
+      }
+      if (ev.error && !state.bs._toolFailToasted) {   // 只提示首次，防失败风暴刷屏
+        state.bs._toolFailToasted = true;
+        toast(`工具 ${ev.name} 失败（后续失败以红色 ✕ 标注）：${ev.error}`, "err");
+      }
+      break;
+    }
+
+    case "bs_agent_end": {
+      const item = bsLiveOf(ev.agent);
+      if (item && item.streaming) {
+        item.streaming = false;
+        item.bodyEl.classList.remove("bs-cursor");
+        if (ev.phase === "research" && ev.failed)
+          item.bodyEl.innerHTML = '<span style="color:var(--danger)">（调研失败'
+            + (ev.reason ? "：" + esc(ev.reason) : "，本角色缺席") + '）</span>';
+        else if (ev.aborted)
+          item.bodyEl.innerHTML = '<span style="color:var(--muted)">（已停止，本角色调研中止）</span>';
+        delete state.bs.live[ev.agent];
+      }
+      break;
+    }
+
+    case "bs_retrievals": {
+      (ev.results || []).forEach(r => state.bs.evidence.push({ agent: ev.agent, ...r }));
+      const cnt = $("#bs-ev-count");
+      cnt.textContent = state.bs.evidence.length ? "· " + state.bs.evidence.length + " 条" : "";
+      const box = $("#bs-evidence");
+      if (state.bs.evidence.length === (ev.results || []).length)
+        box.innerHTML = "";                      // 首批证据到达，清掉占位文案
+      (ev.results || []).forEach(r => {
+        const el = document.createElement("div");
+        el.className = "bs-ev";
+        el.innerHTML = `<span class="by">${esc(bsAgentMeta(r.by || ev.agent).name)}发现</span>
+          <span class="src">${esc(r.kb_name || "知识库")}</span>${esc(r.source || "")}
+          <div class="tx">${esc(r.text || "")}</div>`;
+        el.onclick = () => openModal(`<div class="section-t">${esc(r.kb_name || "知识库")} / ${esc(r.source || "")}</div>
+          <div style="white-space:pre-wrap;font-size:13px">${esc(r.text || "")}</div>
+          <div class="hint" style="margin-top:8px;font-size:11.5px;color:var(--muted)">由 ${esc(bsAgentMeta(r.by || ev.agent).name)} 调研发现，已进入共享证据池</div>`);
+        box.prepend(el);
+      });
+      break;
+    }
+
+    case "bs_moderator": {
+      if (ev.reason && ev.next_speaker === undefined) {
+        const why = { max_rounds: "已达轮数上限", budget_exhausted: "token 预算熔断",
+                      converged: "主持人判定达成收敛" }[ev.reason] || ev.reason;
+        bsStatus(`辩论结束：${why}`);
+        break;
+      }
+      const level = Math.max(0, Math.min(10, +ev.consensus_level || 0));
+      const el = document.createElement("div");
+      el.className = "bs-mod";
+      const li = a => (a || []).map(x => `<li>${esc(x)}</li>`).join("") || "<li>—</li>";
+      el.innerHTML = `
+        <div class="mh"><span>⚖️ 主持人判定</span>
+          <span class="consensus-bar"><i style="width:${level * 10}%"></i></span>
+          <span class="ml">共识度 ${level}/10</span></div>
+        ${ev.focus ? `<div class="next">下一步 → ${esc(bsAgentMeta(ev.next_speaker).name)}：${esc(ev.focus)}</div>` : ""}
+        <div class="sec">已达成共识</div><ul>${li(ev.consensus)}</ul>
+        <div class="sec">仍有分歧</div><ul>${li(ev.divergence)}</ul>`;
+      $("#bs-stream").appendChild(el);
+      bsScroll(true);
+      break;
+    }
+
+    case "bs_plan": {
+      const plan = ev.content || "";
+      $("#bs-plan-wrap").hidden = false;
+      $("#bs-plan-body").innerHTML = md(plan);
+      state.bs.plan = plan;
+      if (ev.fallback)
+        toast(ev.reason === "stopped" ? "已停止：以各方立场汇编成稿" :
+              ev.reason === "budget_exhausted" ? "token 预算熔断：以各方立场汇编成稿" :
+              "撰稿失败：以各方立场汇编成稿", "err");
+      bsStatus("成稿完成", "ok");
+      bsScroll(true);
+      break;
+    }
+  }
+}
+
+/* 自动滚动采用"钉住/解除钉住"模型：仅当用户位于页底（40px 内）时跟随
+   新内容；滚轮上滑即解除钉住，安心回看历史——滚回页底才恢复跟随。
+   旧实现（固定 160px 容差 + 每次事件强制吸底）在流式期间用户根本
+   无法上滑：每次滚轮上移都会在下一个 rAF 被拽回页底（真实反馈）。 */
+let bsPinned = true;
+$("#bs-main").addEventListener("scroll", () => {
+  const box = $("#bs-main");
+  bsPinned = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+});
+
+/* token 渲染节流：一帧最多一次 md() 重渲（与 chat 的 patchLastMsg 同思路） */
+function bsScheduleFlush(item) {
+  if (item._raf) return;
+  item._raf = requestAnimationFrame(() => {
+    item._raf = 0;
+    if (item.content) item.bodyEl.innerHTML = md(item.content);
+    if (item.reasoning) {
+      item.reasonEl.textContent = item.reasoning;
+      item.reasonEl.scrollTop = item.reasonEl.scrollHeight;
+    }
+    bsScroll();
+  });
+}
+function bsScroll(force) {
+  const box = $("#bs-main");
+  if (!box || (!bsPinned && !force)) return;   // 用户上滑阅读时不再拽回底部
+  box.scrollTop = box.scrollHeight;
+}
+
+/* ---------- 停止 ---------- */
+async function bsStop() {
+  const btn = $("#bs-stop");
+  btn.disabled = true; btn.textContent = "停止中…";
+  try {
+    await api("/api/v1/brainstorm/stop", { method: "POST",
+      body: JSON.stringify({ session_id: state.bs.sid }) });
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ---------- 历史场次：列表 + 只读回放 ---------- */
+async function bsLoadHistory() {
+  const sel = $("#bs-history");
+  const cur = sel.value;
+  let rows = [];
+  try {
+    const r = await api("/api/v1/brainstorm/sessions");
+    rows = r.sessions || [];
+  } catch { /* 后端不可达时保留现状 */ }
+  const st = { running: "进行中", done: "已完成", stopped: "已停止", failed: "失败" };
+  sel.innerHTML = '<option value="">历史场次…</option>' + rows.map(s =>
+    `<option value="${esc(s.session_id)}">${esc(s.topic || s.session_id)} · ${st[s.status] || s.status} · ${fmtTime(s.updated_at)}</option>`).join("");
+  if (cur) sel.value = cur;
+}
+
+async function bsReplay(sid) {
+  if (state.bs.running) return toast("当前正在运行一场头脑风暴", "err");
+  let d;
+  try { d = await api("/api/v1/brainstorm/" + encodeURIComponent(sid)); }
+  catch (e) { return toast(e.message, "err"); }
+  bsPinned = true;
+  state.bs = { running: false, sid, abort: null, evidence: [], tools: [],
+               plan: null, replayed: true, liveTools: {}, live: {}, qa: [] };
+  $("#bs-qa-wrap").hidden = false;
+  $("#bs-qa-list").innerHTML = "";
+  $("#bs-setup").hidden = true;
+  $("#bs-plan-wrap").hidden = true;
+  $("#bs-stream-wrap").hidden = false;
+  $("#bs-stream").innerHTML = "";
+  $("#bs-evidence").innerHTML = "";
+  $("#bs-toollog").innerHTML = "";
+  $("#bs-ev-count").textContent = "";
+  $("#bs-tool-count").textContent = "";
+  $("#bs-sid").textContent = sid + (d.status === "running" ? " · 进行中（刷新可见最新）" : "");
+  $("#bs-stop").style.display = d.status === "running" ? "" : "none";
+  bsStatus(`历史回放 · ${d.status === "running" ? "该场次仍在进行，以下为当前进度" :
+            { done: "已完成", stopped: "用户中途停止（汇编稿）", failed: "异常结束" }[d.status] || d.status}`,
+            d.status === "running" ? "" : "ok");
+
+  // 立场书 → 调研气泡（回放态，不再流式）
+  const put = (agent, phase, turn, text, failed, model) => {
+    bsHandleEvent({ type: "bs_agent_start", agent, phase, turn,
+                    model: model || "" });
+    const item = bsLiveOf(agent);
+    item.streaming = false;
+    item.bodyEl.classList.remove("bs-cursor");
+    item.bodyEl.innerHTML = md(text || "");
+    if (failed) item.bodyEl.innerHTML =
+      '<span style="color:var(--danger)">（调研失败，本角色缺席）</span>';
+    delete state.bs.live[agent];
+  };
+  (d.positions || []).forEach(p =>
+    put(p.agent_id, "research", undefined, p.content, p.failed, p.model));
+  // 辩论记录 → 辩论气泡
+  (d.transcript || []).forEach(t =>
+    put(t.agent_id, "debate", t.turn, t.content, false, t.model));
+  // 证据池（found_by 标注发现者，回放到对应角色名）
+  if ((d.evidence_pool || []).length) {
+    bsHandleEvent({ type: "bs_retrievals", agent: "moderator",
+      results: d.evidence_pool.map(e => ({ kb_name: e.kb, source: e.source,
+                                           text: e.digest, by: e.found_by })) });
+  }
+  // 成稿
+  const proposal = d.final_proposal;
+  if (proposal) bsHandleEvent({ type: "bs_plan", content: proposal });
+  else $("#bs-plan-wrap").hidden = true;
+}
+
+/* ---------- 视图进入 / 导出 ---------- */
+async function bsLoadModelOptions() {
+  let rows = [];
+  try { rows = await api("/api/v1/llm/configs"); } catch { return; }
+  state.bsConfigs = rows;
+  const opts = ['<option value="">默认（用户生效配置）</option>']
+    + rows.map(c => `<option value="${esc(c.id)}">${esc(c.provider)} / ${esc(c.model_id)}${c.is_default ? " ★" : ""}</option>`).join("");
+  $$("#bs-roles select[data-bs-model]").forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = opts;
+    sel.value = cur;
+    if (sel.value !== cur) sel.value = "";      // 所选配置已被删除 → 回默认
+    sel.onchange = () => bsProbeModels(sel.dataset.bsModel, sel.value);
+  });
+}
+
+/* 按所选配置探测可选模型（GET /configs/{id}/models，密钥不出服务端）。
+   结果按 config_id 缓存（多角色共用同一配置不重复探测）；
+   /models 不可用时降级为该配置原模型单选项。 */
+async function bsProbeModels(roleId, configId) {
+  const sel = $(`select[data-bs-model-id="${roleId}"]`);
+  if (!sel) return;
+  const keep = sel.value;
+  const reset = (label, models) => {
+    sel.innerHTML = '<option value="">' + esc(label) + "</option>"
+      + (models || []).map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    sel.value = keep;
+    if (sel.value !== keep) sel.value = "";     // 新列表里没有原选择 → 回原模型
+  };
+  if (!configId) {
+    reset("默认模型（用户生效配置）", []);
+    return;
+  }
+  const cfg = (state.bsConfigs || []).find(c => c.id === configId);
+  const cache = (state.bsModelCache = state.bsModelCache || {});
+  if (cache[configId]?.models) { reset("所选配置的原模型（" + (cfg?.model_id || "") + "）", cache[configId].models); return; }
+  sel.innerHTML = '<option>探测中…</option>';
+  try {
+    const models = (await api(`/api/v1/llm/configs/${encodeURIComponent(configId)}/models`))
+      .map(m => m.id).filter(Boolean);
+    cache[configId] = { models };
+    reset("所选配置的原模型（" + (cfg?.model_id || "") + "）", models);
+  } catch {
+    cache[configId] = { models: [] };
+    reset("所选配置的原模型（" + (cfg?.model_id || "") + "；/models 不可用）", []);
+  }
+}
+
+function bsEnter() {
+  if ($("#bs-roles").innerHTML === "") bsRenderRoles();
+  bsLoadModelOptions();
+  bsLoadHistory();
+  if (!state.bs.running) $("#bs-setup").hidden = false;
+}
+
+function bsDownload(name, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ---------- 追问：点名角色作答，未点名由主持人 ---------- */
+function bsRenderQA() {
+  const box = $("#bs-qa-list");
+  box.innerHTML = state.bs.qa.map(x => {
+    const meta = bsAgentMeta(x.agent || "moderator");
+    return `<div class="bs-qa-item">
+      <div class="bs-qa-q">${esc(x.q)}</div>
+      <div class="bs-msg">
+        <span class="avatar" style="background:${meta.color}">${esc(meta.name[0])}</span>
+        <div class="bs-bubble">
+          <div class="who">
+            <span class="nm">${esc(meta.name)}</span>
+            ${x.model ? `<span class="bs-model">${esc(x.model)}</span>` : ""}
+          </div>
+          <div class="body${x.streaming ? " bs-cursor" : ""}">${
+            x.a ? md(x.a) : '<span style="color:var(--muted)">思考中…</span>'}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function bsFlushQA(x) {
+  if (x._raf) return;
+  x._raf = requestAnimationFrame(() => {
+    x._raf = 0;
+    bsRenderQA();                    // 追问列表很短，整表重渲足够快
+    bsScroll();                      // 尊重钉住状态：上滑阅读时不拽底
+  });
+}
+
+async function bsAsk() {
+  if (state.bs.running) return toast("场次进行中，结束后再追问", "err");
+  const q = $("#bs-qa-input").value.trim();
+  if (!q || !state.bs.sid) return;
+  $("#bs-qa-input").value = "";
+  const turn = { q, a: "", agent: "", model: "", streaming: true, _raf: 0 };
+  state.bs.qa.push(turn);
+  $("#bs-qa-wrap").hidden = false;
+  bsRenderQA();
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = "Bearer " + store.token;
+    const res = await fetch(store.base +
+      `/api/v1/brainstorm/${encodeURIComponent(state.bs.sid)}/ask`, {
+      method: "POST", headers, body: JSON.stringify({ question: q }) });
+    if (!res.ok) throw new Error("HTTP " + res.status + "：" + await res.text());
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          let ev;
+          try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+          if (ev.type === "ask_start") {
+            turn.agent = ev.agent; turn.model = ev.model || "";
+            bsRenderQA();
+          } else if (ev.type === "token") {
+            turn.a += ev.content;
+            bsFlushQA(turn);
+          } else if (ev.type === "error") {
+            turn.a = "出错了：" + ev.error;
+            bsFlushQA(turn);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    turn.a = turn.a || ("出错了：" + e.message);
+    toast(e.message, "err");
+  } finally {
+    turn.streaming = false;
+    if (turn._raf) cancelAnimationFrame(turn._raf);
+    bsRenderQA();
+  }
+}
+$("#bs-qa-send").onclick = () => bsAsk();
+$("#bs-qa-input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); bsAsk(); }
+});
+
+$("#bs-start").onclick = () => bsStart().catch(e => {
+  bsStatus("连接失败：" + e.message, "bad"); toast(e.message, "err");
+});
+$("#bs-stop").onclick = bsStop;
+$("#bs-plan-copy").onclick = () => copyText(state.bs.plan || "", "方案已复制");
+$("#bs-plan-export").onclick = () => bsDownload(
+  "brainstorm-" + (state.bs.sid || "proposal") + ".md", state.bs.plan || "");
+async function bsOpenHistory(sid) {
+  if (!sid) return;
+  if (state.bs.running) {
+    // 回放会重绘群聊区，不能与进行中的流混写：询问是否停止当前场次
+    if (!confirm("当前场次仍在运行。停止它并回放选中的历史场次？")) return;
+    try {
+      await api("/api/v1/brainstorm/stop", { method: "POST",
+        body: JSON.stringify({ session_id: state.bs.sid }) });
+    } catch { /* 停止标记失败也无妨：下面仍等待流自然结束 */ }
+    for (let i = 0; i < 40 && state.bs.running; i++)
+      await new Promise(r => setTimeout(r, 500));   // 最多等 20s 收尾
+    if (state.bs.running) {
+      toast("当前场次仍在收尾，稍后再试回放", "err");
+      return;
+    }
+  }
+  await bsReplay(sid);
+}
+$("#bs-history").onchange = () => bsOpenHistory($("#bs-history").value);
+
+/* 回到发起面板：清空流视图与运行状态，随时可开新场次 */
+function bsShowSetup() {
+  state.bs = { running: false, sid: null, abort: null, evidence: [], tools: [],
+               plan: null, replayed: false, liveTools: {}, live: {}, qa: [] };
+  $("#bs-qa-wrap").hidden = true;
+  $("#bs-qa-list").innerHTML = "";
+  $("#bs-setup").hidden = false;
+  $("#bs-stream-wrap").hidden = true;
+  $("#bs-plan-wrap").hidden = true;
+  $("#bs-stream").innerHTML = "";
+  $("#bs-evidence").innerHTML =
+    '<div class="muted" style="font-size:12px;padding:6px 2px">尚无证据。调研阶段各角色的知识库命中会汇集到这里，辩论时可互相引用。</div>';
+  $("#bs-toollog").innerHTML =
+    '<div class="muted" style="font-size:12px;padding:6px 2px">尚未调用工具。</div>';
+  $("#bs-ev-count").textContent = "";
+  $("#bs-tool-count").textContent = "";
+  $("#bs-sid").textContent = "";
+  $("#bs-stop").style.display = "none";
+  $("#bs-topic").focus();
+  bsLoadHistory();
+}
+$("#bs-new").onclick = async () => {
+  if (state.bs.running) {
+    if (!confirm("当前场次仍在运行。停止它并开新场次？")) return;
+    try {
+      await api("/api/v1/brainstorm/stop", { method: "POST",
+        body: JSON.stringify({ session_id: state.bs.sid }) });
+    } catch { }
+    for (let i = 0; i < 40 && state.bs.running; i++)
+      await new Promise(r => setTimeout(r, 500));
+    if (state.bs.running) return toast("当前场次仍在收尾，稍后再试", "err");
+  }
+  bsShowSetup();
 };
 
 /* ================= 启动 ================= */

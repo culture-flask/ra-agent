@@ -8,7 +8,9 @@ schemas_for_llm 的工具目录里，都经 call() 统一执行/追踪。
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from langchain_core.utils.function_calling import convert_to_openai_function
 
@@ -93,6 +95,66 @@ def _native_tool_specs() -> list[dict]:
             "parameters": {"type": "object", "properties": {}, "required": []},
             "func": _get_utc_time,
         },
+        {
+            "name": "search_knowledge_base",
+            "description": (
+                "在当前用户的知识库中按任意检索词做混合检索（向量+BM25）。"
+                "与被动等系统注入的检索结果不同，本工具让你主动用自己关心的角度"
+                "查证知识库内容——头脑风暴调研/辩论时应优先用它查知识库，"
+                "知识库没有的再用联网/学术检索工具。"
+                "可选 kb_name 限定单个知识库；缺省搜索全部可见库。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",
+                              "description": "检索词（中英文均可）"},
+                    "kb_name": {"type": "string",
+                                "description": "可选：限定知识库名称"},
+                    "k": {"type": "integer",
+                          "description": "每个库返回的条数上限，默认 3，最大 10"},
+                },
+                "required": ["query"],
+            },
+            "func": _search_knowledge_base,
+        },
+        {
+            "name": "save_document",
+            "description": (
+                "把一段 Markdown 内容保存为用户文件区的文档文件。"
+                "适用于头脑风暴撰稿人保存：最终科研方案、分节草稿、"
+                "辩论纪要、参考文献清单。文件名必须以 .md 结尾。"
+                "同名文件会被覆盖——重写前请确认。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string",
+                                 "description": "文件名，如 research-proposal.md"},
+                    "content": {"type": "string",
+                                "description": "Markdown 全文"},
+                },
+                "required": ["filename", "content"],
+            },
+            "func": _save_document,
+        },
+        {
+            "name": "export_bibtex",
+            "description": (
+                "把参考文献列表导出为 BibTeX 文件（保存到用户文件区）。"
+                "entries 每条含 title/authors/year/venue 字段；"
+                "撰稿人成稿后应为本方案引用的所有工作导出引文。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string",
+                                 "description": "输出文件名，如 refs.bib"},
+                    "entries": {"type": "array", "items": {"type": "object"},
+                                "description": "引文列表，每条含 "
+                                "title/authors(list)/year/venue"},
+                },
+                "required": ["filename", "entries"],
+            },
+            "func": _export_bibtex,
+        },
     ]
 
 
@@ -121,8 +183,9 @@ async def _get_local_document(args: dict, user_id: str, kb_service) -> dict:
     超长文献截断到 FULL_ARTICLE_MAX_CHARS（带 truncated 标记），
     避免 100+ chunk 的 PDF 一次性撑爆上下文。
     """
-    kb_id = (args.get("kb_id") or "").strip()
-    file_name = (args.get("file_name") or "").strip()
+    # LLM 偶发把 id/文件名传成数字：强制转 str（否则 .strip 直接 AttributeError）
+    kb_id = str(args.get("kb_id") or "").strip()
+    file_name = str(args.get("file_name") or "").strip()
     if not kb_id or not file_name:
         return {"error": "缺少必要参数 kb_id / file_name"
                         "（不确定文件名时先调 list_kb_files）"}
@@ -172,6 +235,131 @@ async def _get_utc_time(args: dict, user_id: str, kb_service) -> dict:
         "weekday_en": now.strftime("%A"),
         "unix_ts": int(now.timestamp()),
     }
+
+
+async def _search_knowledge_base(args: dict, user_id: str, kb_service) -> dict:
+    """实现：LLM 主动检索知识库——头脑风暴角色差异化调研的关键工具。
+
+    与 research 节点的预取（用议题当 query）互补：这里 query 由 LLM 按
+    自己的调研角度提出。逐库检索，单库失败跳过（单库隔离纪律）。
+    """
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "query 不能为空"}
+    try:
+        k = max(1, min(int(args.get("k") or 3), 10))
+    except (TypeError, ValueError):
+        k = 3
+    kb_name = (args.get("kb_name") or "").strip()
+
+    kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id)
+    if kb_name:                              # 限定单库：精确匹配 → 大小写容错
+        kbs = [kb for kb in kbs if kb.name == kb_name] \
+            or [kb for kb in kbs if kb.name.lower() == kb_name.lower()]
+        if not kbs:
+            return {"error": f"知识库「{kb_name}」不存在或当前用户不可检索"}
+
+    results, skipped = [], []
+    for kb in kbs:
+        try:
+            hits = await asyncio.to_thread(
+                kb_service.search, kb.kb_id, query, k=k,
+                user_id=user_id, mode="hybrid")
+        except Exception:                    # 单库隔离：坏库跳过
+            skipped.append(kb.name)
+            continue
+        for h in hits:
+            # source 与主链路同款回退：Chroma 命中的 source 在 metadata 里
+            meta = h.get("metadata") or {}
+            src = h.get("source") or meta.get("source") or "未知来源"
+            if meta.get("page"):
+                src += f" 第{meta['page']}页"
+            results.append({
+                "kb_name": kb.name,
+                "source": src,
+                "text": str(h.get("text", ""))[:600],   # 限长，防撑爆上下文
+            })
+    out: dict = {"query": query, "kb_count": len(kbs),
+                 "hit_count": len(results), "results": results}
+    if skipped:
+        out["skipped_kbs"] = skipped         # 提示但不阻断（结构化降级）
+    return out
+
+
+_BS_DOCS_SUBDIR = "brainstorm"      # settings.data_dir 下的子目录
+
+
+async def _save_document(args: dict, user_id: str, kb_service) -> dict:
+    """实现：把 Markdown 内容写入 <data_dir>/brainstorm/<user_id>/<filename>。
+
+    防路径穿越（文件名白名单字符集）；user_id 隔离目录——
+    各用户只能写自己的目录，天然防越权。
+    """
+    filename = str(args.get("filename") or "").strip()
+    content = args.get("content") or ""
+    if not filename:
+        return {"error": "filename 不能为空"}
+    if not filename.endswith(".md"):
+        filename += ".md"
+    # 文件名白名单：字母数字-_中点；防 ../ 与系统保留名
+    if not re.fullmatch(r"[\w\-\u4e00-\u9fff.]+", filename) or ".." in filename:
+        return {"error": "文件名只能包含中英文/数字/下划线/连字符/点"}
+
+    from app.settings import Settings
+    data_dir = Path(Settings.load().data_dir) / _BS_DOCS_SUBDIR / user_id
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / filename
+    await asyncio.to_thread(path.write_text, content, encoding="utf-8")
+    return {"saved": True, "filename": filename,
+            "path": str(path), "chars": len(content)}
+
+
+def _bibtex_key(title: str, year) -> str:
+    """生成 BibTeX 引用键：标题首词+年份（同键加序号消歧）。"""
+    word = next((w for w in re.split(r"\W+", title or "cite") if w), "cite")
+    return f"{word.lower()}{year or ''}"
+
+
+def _render_bibtex(entries: list[dict]) -> str:
+    """entries → BibTeX 字符串。字段缺失容错（authors/year/venue 可选）。"""
+    seen: dict[str, int] = {}
+    out = []
+    for e in entries:
+        title = str(e.get("title") or "untitled").strip()
+        year = e.get("year") or "n.d."
+        key = _bibtex_key(title, year)
+        if key in seen:                      # 同键消歧：key-2 / key-3
+            seen[key] += 1
+            key = f"{key}-{seen[key]}"
+        else:
+            seen[key] = 0
+        authors = " and ".join(e.get("authors") or ["unknown"]) \
+            if isinstance(e.get("authors"), list) else str(e.get("authors") or "unknown")
+        lines = [f"@article{{{key},",
+                 f"  title = {{{title}}},",
+                 f"  author = {{{authors}}},",
+                 f"  year = {{{year}}},"]
+        if e.get("venue"):
+            lines.append(f"  journal = {{{e['venue']}}},")
+        if e.get("url"):
+            lines.append(f"  url = {{{e['url']}}},")
+        lines.append("}")
+        out.append("\n".join(lines))
+    return "\n\n".join(out)
+
+
+async def _export_bibtex(args: dict, user_id: str, kb_service) -> dict:
+    """实现：entries → BibTeX → 写入用户文件区。"""
+    filename = str(args.get("filename") or "").strip() or "references.bib"
+    if not filename.endswith(".bib"):
+        filename += ".bib"
+    entries = args.get("entries") or []
+    if not isinstance(entries, list) or not entries:
+        return {"error": "entries 不能为空"}
+    bib = _render_bibtex(entries[:100])       # 上限 100 条：防超长输出
+    result = await _save_document({"filename": filename, "content": bib},
+                                  user_id, kb_service)
+    return {**result, "entry_count": len(entries[:100])}
 
 
 class MCPToolAdapter:

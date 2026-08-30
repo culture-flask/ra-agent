@@ -27,6 +27,8 @@ SEARXNG_URL = "http://127.0.0.1:8190/search"
 ARXIV_API = "https://export.arxiv.org/api/query"
 OPENALEX_API = "https://api.openalex.org/works"
 S2_API = "https://api.semanticscholar.org/graph/v1/paper/search"
+GITHUB_API = "https://api.github.com/search/repositories"
+HF_DATASETS_API = "https://huggingface.co/api/datasets"
 
 _TIMEOUT = 20
 
@@ -287,6 +289,115 @@ def openalex_search(query: str, top_k: int = 5) -> list[dict]:
 #             "source": "semantic_scholar",
 #         })
 #     return out
+
+
+@mcp.tool()
+def find_citations(paper_title: str, top_k: int = 5) -> list[dict]:
+    """查找引用了某篇论文的后续工作（正向引用检索，OpenAlex）。
+
+    两大用途：判断「这个想法是否真的没人做过」（引用了源头工作的人做了什么）、
+    追踪某论文的后续发展脉络。paper_title 用英文标题检索效果最佳；
+    返回标题/作者/年份/被引次数/链接，按被引次数倒序。
+    """
+    title = paper_title.strip()
+    if not title:
+        raise ValueError("paper_title 不能为空")
+    k = _clamp_k(top_k)
+    # 第一步：标题 → OpenAlex work id（取最匹配的一条）
+    r = httpx.get(OPENALEX_API, params={"search": title, "per_page": 1},
+                  timeout=_TIMEOUT)
+    r.raise_for_status()
+    results = r.json().get("results", [])
+    if not results:
+        raise ValueError(f"未找到论文：{paper_title}")
+    work = results[0]
+    wid = str(work.get("id", "")).rsplit("/", 1)[-1]     # Wxxxxxxxx 形式
+    # 第二步：filter=cites:<id> 拿正向引用，按被引数倒序（重要工作优先）
+    r2 = httpx.get(OPENALEX_API, params={
+        "filter": f"cites:{wid}", "per_page": k,
+        "sort": "cited_by_count:desc"}, timeout=_TIMEOUT)
+    r2.raise_for_status()
+    out = []
+    for w in r2.json().get("results", [])[:k]:
+        authors = [a["author"]["display_name"]
+                   for a in (w.get("authorships") or [])
+                   if isinstance(a, dict) and isinstance(a.get("author"), dict)]
+        out.append({
+            "title": w.get("display_name") or "",
+            "authors": authors[:8],
+            "year": w.get("publication_year"),
+            "abstract": _reconstruct_abstract(w.get("abstract_inverted_index"))[:300],
+            "cited_by_count": w.get("cited_by_count") or 0,
+            "url": ((w.get("primary_location") or {}).get("landing_page_url")
+                    or w.get("doi") or w.get("id") or ""),
+            "cites": work.get("display_name") or paper_title,   # 溯源：引的是哪篇
+            "source": "openalex_citations",
+        })
+    return out
+
+
+@mcp.tool()
+def github_search(query: str, top_k: int = 5) -> list[dict]:
+    """搜索 GitHub 开源仓库：评估「是否已有现成实现、工程复杂度、社区活跃度」。
+
+    返回仓库名/星数/语言/license/最近更新时间/简介，按星数倒序。
+    适合：调研某方法的实现现状、找 baseline 代码、评估复现成本。
+    匿名调用限流较严（10 次/分钟），设置 GITHUB_TOKEN 环境变量可提升到
+    30 次/分钟（可选）。
+    """
+    q = query.strip()
+    if not q:
+        raise ValueError("query 不能为空")
+    k = _clamp_k(top_k)
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    r = httpx.get(GITHUB_API, params={"q": q, "sort": "stars",
+                                      "order": "desc", "per_page": k},
+                  headers=headers, timeout=_TIMEOUT)
+    r.raise_for_status()
+    out = []
+    for it in r.json().get("items", [])[:k]:
+        out.append({
+            "repo": it.get("full_name", ""),
+            "stars": it.get("stargazers_count", 0),
+            "language": it.get("language"),
+            "license": (it.get("license") or {}).get("spdx_id"),
+            "pushed_at": it.get("pushed_at"),       # 活跃度信号
+            "description": (it.get("description") or "")[:300],
+            "url": it.get("html_url", ""),
+            "source": "github",
+        })
+    return out
+
+
+@mcp.tool()
+def search_datasets(query: str, top_k: int = 5) -> list[dict]:
+    """在 HuggingFace 检索公开数据集（免费无密钥）。
+
+    适合：评估「该研究需要的数据是否现成可得」、找标准评测集（benchmark）。
+    返回数据集名/下载量/点赞数/最近更新/简介（英文检索效果最佳）。
+    """
+    q = query.strip()
+    if not q:
+        raise ValueError("query 不能为空")
+    k = _clamp_k(top_k)
+    r = httpx.get(HF_DATASETS_API, params={"search": q, "limit": k},
+                  timeout=_TIMEOUT)
+    r.raise_for_status()
+    out = []
+    for d in r.json()[:k]:
+        out.append({
+            "dataset": d.get("id", ""),
+            "downloads": d.get("downloads") or 0,
+            "likes": d.get("likes") or 0,
+            "last_modified": d.get("lastModified"),
+            "description": (d.get("description") or "")[:300],
+            "url": f"https://huggingface.co/datasets/{d.get('id', '')}",
+            "source": "huggingface",
+        })
+    return out
 
 
 @mcp.tool()

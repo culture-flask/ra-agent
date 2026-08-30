@@ -6,9 +6,11 @@ from app.core.crypto import SecretCrypto
 from app.settings import Settings
 
 
-def _make_service():
+def _make_service(system_default: dict | None = None):
+    """构造被测服务。system_default 可显式传入：涉及系统默认模型身份/
+    窗口探测的测试用固定值，避免随 config/settings.yaml 漂移而失效。"""
     s = Settings.load()
-    return LLMService(system_default=s.llm_system_default,
+    return LLMService(system_default=system_default or s.llm_system_default,
                       system_api_key=s.llm_api_key,
                       crypto=SecretCrypto(s.jwt_secret))
 
@@ -24,8 +26,10 @@ def _ensure_user(user_id: str):
 
 
 def test_system_default_fallback():
-    """未配置用户 → 回退系统默认。"""
-    svc = _make_service()
+    """未配置用户 → 回退系统默认（显式传默认配置，不随 yaml 漂移）。"""
+    svc = _make_service(system_default={
+        "provider": "openai", "base_url": "https://api.openai.com/v1",
+        "model_id": "deepseek-v4-flash"})
     m = svc.get_chat_model("nobody-user")
     assert m.model_name == "deepseek-v4-flash"
 
@@ -126,7 +130,9 @@ def test_extract_context_window_fields():
 def test_context_window_probe_from_models_response(monkeypatch):
     """从 /models 响应探测窗口：命中返回真实窗口，未命中回退默认值。"""
     from app.abstractions.llm import LLMService
-    svc = _make_service()
+    svc = _make_service(system_default={
+        "provider": "openai", "base_url": "https://api.openai.com/v1",
+        "model_id": "deepseek-v4-flash"})
 
     calls = {"n": 0}
 
