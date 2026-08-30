@@ -113,6 +113,23 @@ async def lifespan(app: FastAPI):
                               "ADD COLUMN team VARCHAR(16) "
                               "NOT NULL DEFAULT 'debate'"))
             logger.warning("已为 brainstorm_sessions 补 team 列（存量行=debate）")
+        # 知识库 kind 列：区分普通库与多 agent 自动沉淀库（幂等，新库由 create 带出）
+        has_kind = conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'kbs' AND column_name = 'kind'")).scalar()
+        if not has_kind:
+            conn.execute(text("ALTER TABLE kbs ADD COLUMN kind VARCHAR(16) "
+                              "NOT NULL DEFAULT 'user'"))
+            logger.warning("已为 kbs 补 kind 列（存量行=user）")
+        # 存量沉淀库改名（头脑风暴成果→辩论式agent纪要 / 会讲纪要→研讨式agent纪要）
+        # 并标注 archive（幂等：旧名不存在时均为 no-op）
+        conn.execute(text("UPDATE kbs SET name = '辩论式agent纪要' "
+                          "WHERE name = '头脑风暴成果'"))
+        conn.execute(text("UPDATE kbs SET name = '研讨式agent纪要' "
+                          "WHERE name = '会讲纪要'"))
+        conn.execute(text("UPDATE kbs SET kind = 'archive' "
+                          "WHERE name IN ('辩论式agent纪要', '研讨式agent纪要') "
+                          "AND kind = 'user'"))
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)

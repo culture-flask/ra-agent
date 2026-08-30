@@ -21,6 +21,7 @@ from app.core.db import SessionLocal
 from app.core.deps import get_current_user
 from app.core.events import clear_event_sink, set_event_sink
 from app.core.logging import get_logger
+from app.graph.workflow import aget_state_retry
 from app.graph.brainstorm import (DEBATER_IDS, ROLE_ORIENTATION,
                                   _evidence_digest, _positions_digest,
                                   _recent_transcript, _role_cfg,
@@ -165,12 +166,12 @@ def _fail_session(user_id: str, session_id: str, error: str) -> None:
 
 # ---------- 会话知识闭环（API 层机制，非 LLM 工具） ----------
 
-BS_OUTPUT_KB_NAME = "头脑风暴成果"       # 用户专属沉淀库（自动创建）
+BS_OUTPUT_KB_NAME = "辩论式agent纪要"       # 用户专属沉淀库（自动创建；不会被普通对话检索）
 
 
 def _archive_proposal_to_kb(user_id: str, session_id: str,
                              topic: str, proposal: str) -> None:
-    """成稿入库：检索→（无则建）「头脑风暴成果」库 → add_documents。
+    """成稿入库：检索→（无则建）「辩论式agent纪要」库 → add_documents。
 
     best-effort：失败只记日志（飞轮断一环不影响本次会话交付）。
     private scope：成果只对本人可见。入库是分块+嵌入的慢操作，故只在
@@ -188,10 +189,17 @@ def _archive_proposal_to_kb(user_id: str, session_id: str,
             if kb is None:
                 kb = kb_service.create_kb(
                     BS_OUTPUT_KB_NAME, "private", user_id,
-                    description="头脑风暴自动沉淀：历场科研方案成稿")
+                    description="辩论式多 agent 自动沉淀：历场科研方案成稿"
+                                 "（专用于辩论团队，不会被普通对话检索）",
+                    kind="archive")
             kb_id = kb.kb_id
-        kb_service.add_documents(
-            kb_id, [f"# {topic}\n\n{proposal}"])   # 标题入文，便于检索命中
+        from datetime import datetime, timezone
+        date = datetime.now(timezone.utc).strftime("%Y%m%d")
+        filename = f"{date}-争鸣社-{session_id[:12]}.md"   # 日期前缀：文件名字典序即时间序
+        text = (f"# [{date}] 争鸣社方案（会话 {session_id[:12]}）\n"
+                f"议题：{topic}\n\n{proposal}")
+        kb_service.add_documents(kb_id, [text], filenames=[filename])
+        _cap_archive_docs(kb_service, kb_id)
     except Exception as e:
         logger.warning("brainstorm archive to kb failed %s: %s", session_id, e)
 
@@ -318,7 +326,7 @@ async def session_detail(session_id: str, request: Request,
         raise HTTPException(status_code=403, detail="not brainstorm owner")
 
     graph = request.app.state.brainstorm_graph
-    snap = await graph.aget_state({"configurable": {"thread_id": session_id}})
+    snap = await aget_state_retry(graph, {"configurable": {"thread_id": session_id}})
     values = (snap.values or {}) if snap else {}
     return {
         "session_id": session_id, "topic": row.topic, "status": row.status,
@@ -378,7 +386,7 @@ async def brainstorm_ask(session_id: str, req: BrainstormAskRequest,
 
     graph = request.app.state.brainstorm_graph
     ctx = request.app.state.workflow_ctx
-    snap = await graph.aget_state({"configurable": {"thread_id": session_id}})
+    snap = await aget_state_retry(graph, {"configurable": {"thread_id": session_id}})
     values = dict((snap.values or {}) if snap else {})
     values.setdefault("user_id", user.id)   # _role_cfg 解析角色配置需要
     topic = values.get("topic") or row.topic

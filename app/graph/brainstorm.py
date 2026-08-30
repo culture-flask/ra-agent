@@ -377,6 +377,16 @@ def make_agent_node(ctx: WorkflowContext, role_id: str):
 
 # ---------- 上下文摘要（控窗口占用的三把刀） ----------
 
+def _positions_full(state: BrainstormState) -> str:
+    """立场书全文（撰稿人专用：立场书本就 ≤500 字/份，全文注入成本可忽略，
+    却能让撰稿人拿到完整论证而非 300 字摘要）。"""
+    parts = []
+    for p in state.get("positions") or []:
+        flag = "（调研失败）" if p.get("failed") else ""
+        parts.append(f"### {p.get('agent_name')} {flag}\n{p.get('content', '')}")
+    return "\n\n".join(parts) or "（无）"
+
+
 def _positions_digest(state: BrainstormState) -> str:
     """立场书摘要：每份截断 300 字（完整版只在 writer 成稿时用）。"""
     parts = []
@@ -455,7 +465,7 @@ async def synthesis_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
         for t in (state.get("transcript") or [])[-20:]) or "（无辩论记录）"
     system = WRITER_PROMPT.format(
         topic=state["topic"],
-        positions=_positions_digest(state),
+        positions=_positions_full(state),
         transcript=transcript,
         consensus=json.dumps(notes.get("consensus", []), ensure_ascii=False),
         divergence=json.dumps(notes.get("divergence", []), ensure_ascii=False),
@@ -474,8 +484,9 @@ async def synthesis_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
     try:
         content, used, _ = await _agent_speak(
             ctx, state, "writer", system,
-            "请按固定骨架撰写最终科研方案；完成后如需保存草稿或导出引文"
-            "可调用文档工具。", 0.4, tools=doc_tools, tool_loop_max=3, cfg=wcfg)
+            "请把全场讨论收敛为一份唯一、明确、可执行的研究方案（不是观点综述）；"
+            "完成后如需保存草稿或导出引文可调用文档工具。", 0.4, tools=doc_tools,
+            tool_loop_max=3, cfg=wcfg)
         if not content.strip():
             raise RuntimeError("empty proposal")
     except Exception as e:

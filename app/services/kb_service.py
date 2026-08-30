@@ -185,7 +185,8 @@ class KBService:
                   dim: int | None = None,
                   api_key: str | None = None,
                   base_url: str | None = None,
-                  description: str = "") -> KnowledgeBase:
+                  description: str = "",
+                  kind: str = "user") -> KnowledgeBase:
         """建库：写 Postgres（固化嵌入模型标注），有文本则同步入库。
 
         可显式指定嵌入模型（provider/model_id/dim）与专用 base_url/api_key，
@@ -205,6 +206,7 @@ class KBService:
                 embedding_api_key=self._crypto.encrypt(api_key) if api_key else None,
                 status="ready",                     # 空库即 ready；有文本走入库后也是 ready
                 source_doc_ids=[],
+                kind=kind,
             )
             db.add(kb)
             db.commit()
@@ -254,10 +256,18 @@ class KBService:
         return (kb.retrieval_enabled
                 and user_id not in (kb.retrieval_disabled_users or []))
 
-    def list_queryable_kbs(self, user_id: str | None) -> list[KnowledgeBase]:
-        """对话可检索的库：可见性基础上排除该用户自己禁用的（per-user）。"""
-        return [kb for kb in self.list_kbs(user_id)
-                if self.kb_queryable(kb, user_id)]
+    def list_queryable_kbs(self, user_id: str | None,
+                           include_archives: bool = True) -> list[KnowledgeBase]:
+        """对话可检索的库：可见性基础上排除该用户自己禁用的（per-user）。
+
+        include_archives=False 额外排除多 agent 自动沉淀库（kind='archive'，
+        如辩论式agent纪要/研讨式agent纪要）——普通对话的检索目录不应主动翻旧方案，
+        沉淀库只服务多 agent 团队的研读/调研与知识库检索工具（知识飞轮）。"""
+        kbs = [kb for kb in self.list_kbs(user_id)
+               if self.kb_queryable(kb, user_id)]
+        if not include_archives:
+            kbs = [kb for kb in kbs if kb.kind != "archive"]
+        return kbs
 
     def set_retrieval(self, kb_id: str, user_id: str,
                       enabled: bool) -> KnowledgeBase:
@@ -397,9 +407,16 @@ class KBService:
             logger.warning("save source file failed kb=%s doc=%s: %s",
                            kb_id, doc_id, e)
 
-    def add_documents(self, kb_id: str, texts: list[str]) -> int:
-        """文本入库：分块 → 存 chunk → 向量化 → ready。"""
-        return self._ingest(kb_id, [("text.txt", t.encode("utf-8")) for t in texts])
+    def add_documents(self, kb_id: str, texts: list[str],
+                      filenames: list[str] | None = None) -> int:
+        """文本入库：分块 → 存 chunk → 向量化 → ready。
+
+        filenames 可选：每份文本的来源文件名（缺省 text.txt）。沉淀类
+        入库（辩论式agent纪要/研讨式agent纪要）应传可溯源文件名，供检索命中时
+        判断内容性质与新旧。"""
+        names = filenames or ["text.txt"] * len(texts)
+        return self._ingest(kb_id, [(n, t.encode("utf-8"))
+                                    for n, t in zip(names, texts)])
 
     def ingest_files(self, kb_id: str, files: list[tuple[str, bytes]]) -> int:
         """批量文件入库：逐文件独立走 解析 -> 分块 -> 落盘 -> 向量化 -> ready。

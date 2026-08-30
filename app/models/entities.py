@@ -67,6 +67,9 @@ class KnowledgeBase(Base):
         JSON, default=list)                  # 按用户禁用检索的 user_id 列表（互不影响）
     status: Mapped[str] = mapped_column(String(16), default="indexing")
     #                       ↑ ready | indexing | reembedding | failed（状态机）
+    # kind：user=普通库 | archive=多 agent 自动沉淀库（辩论式agent纪要/研讨式agent纪要）。
+    # 沉淀库参与多 agent 的研读/调研与知识库检索工具，但不进入普通对话的检索目录。
+    kind: Mapped[str] = mapped_column(String(16), default="user")
     source_doc_ids: Mapped[list] = mapped_column(JSON, default=list)   # 原文档引用
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

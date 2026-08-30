@@ -98,6 +98,9 @@ with engine.begin() as conn:
     conn.execute(text("ALTER TABLE brainstorm_sessions "
                       "ADD COLUMN IF NOT EXISTS team VARCHAR(16) "
                       "NOT NULL DEFAULT 'debate'"))
+    # 知识库 kind 列（与 app.main lifespan 相同的幂等 DDL）
+    conn.execute(text("ALTER TABLE kbs ADD COLUMN IF NOT EXISTS kind VARCHAR(16) "
+                      "NOT NULL DEFAULT 'user'"))
 
 
 @pytest.fixture(autouse=True)

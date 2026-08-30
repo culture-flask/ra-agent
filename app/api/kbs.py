@@ -58,6 +58,7 @@ def _kb_dict(kb, user_id: str | None = None) -> dict:
         "kb_id": kb.kb_id, "name": kb.name,
         "description": kb.description or "",   # 知识库介绍
         "scope": kb.scope,
+        "kind": kb.kind,                                   # user=普通库 | archive=多 agent 自动沉淀库
         "owner_user_id": kb.owner_user_id, "category_id": kb.category_id,
         "embedding_provider": kb.embedding_provider,
         "embedding_model_id": kb.embedding_model_id,

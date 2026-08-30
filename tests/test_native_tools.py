@@ -183,3 +183,33 @@ def test_get_local_document_tolerates_non_string_args():
                             "t-bs-tool-10", "u1"))
     data = json.loads(out["output"])
     assert "error" in data and "AttributeError" not in data["error"]
+
+
+def test_add_documents_filenames_and_rolling_cap():
+    """沉淀库改进：①入库可带可溯源文件名（不再是千篇一律的 text.txt）；
+    ②滚动窗口按文件名（日期前缀字典序）保留最新 N 份、删除更旧。"""
+    adapter, ks = _make_adapter()
+    kb = ks.create_kb("滚动窗口库", "public", None, description="cap")
+    for i in range(12):                        # 超过 ARCHIVE_KEEP_DOCS(10)
+        fname = f"202608{i:02d}-争鸣社-test{i:02d}.md"
+        ks.add_documents(kb.kb_id, [f"# 报告{i}"], filenames=[fname])
+    docs = ks.list_documents(kb.kb_id)
+    assert len(docs) == 12
+    names = sorted(d["filename"] or "" for d in docs)
+    assert names[0].startswith("20260800") and names[-1].startswith("20260811")
+
+    from app.api.seminar import ARCHIVE_KEEP_DOCS, _cap_archive_docs
+    removed = _cap_archive_docs(ks, kb.kb_id)
+    assert removed == 12 - ARCHIVE_KEEP_DOCS
+    docs = ks.list_documents(kb.kb_id)
+    assert len(docs) == ARCHIVE_KEEP_DOCS
+    names = sorted(d["filename"] or "" for d in docs)
+    assert names[0].startswith(f"202608{12 - ARCHIVE_KEEP_DOCS:02d}")  # 最旧的已删
+
+    # 溯源：检索命中能带出真实文件名（不是 text.txt）
+    ks.add_documents(kb.kb_id, ["量子比特叠加态"], filenames=["溯源-报告.md"])
+    out = _run(adapter.call("search_knowledge_base", {"query": "叠加态"},
+                            "t-bs-tool-cap", "u1"))
+    data = json.loads(out["output"])
+    assert data["hit_count"] >= 1
+    assert data["results"][0]["source"] == "溯源-报告.md"

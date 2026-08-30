@@ -621,9 +621,11 @@ async def supervisor_node(ctx: WorkflowContext, state: AgentState) -> dict:
       是否需要检索、以及选哪几个库（按名称），再做可见性校验后落 state
     - LLM 判断异常/解析失败 → 降级为全部可见库检索（保持 RAG 兜底）
     """
-    # 只用"可检索"的库（用户可自行禁用某库参与对话检索）
+    # 只用"可检索"的库（用户可自行禁用某库参与对话检索）。
+    # 排除多 agent 自动沉淀库（辩论式agent纪要/研讨式agent纪要）：普通对话不应主动
+    # 翻旧方案——沉淀库只服务多 agent 团队的研读/调研与知识库检索工具。
     kbs = await asyncio.to_thread(ctx.kb_service.list_queryable_kbs,
-                                  state["user_id"])
+                                  state["user_id"], include_archives=False)
     if not kbs:
         emit("supervisor", {"needs_retrieval": False, "kb_count": 0, "selected": []})
         return {"needs_retrieval": False, "selected_kb_ids": [],

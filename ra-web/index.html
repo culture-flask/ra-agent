@@ -390,10 +390,17 @@ html[data-theme="dark"] .cite.parent{background:rgba(74,222,128,.06);border-colo
 .kb-del:hover{color:var(--danger);background:rgba(220,38,38,.07)}
 .kb-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-md);border-color:var(--line-strong)}
 .kb-card.private{border-top-color:var(--user)}
-.kb-card h3{margin:0 0 8px;font-size:15px;line-height:1.45;padding-right:150px;word-break:break-all;
+.kb-card h3{margin:2px 0 0;font-size:15px;line-height:1.5;word-break:break-word;
   font-weight:600;letter-spacing:-.01em}
-.kb-head-badges{position:absolute;top:11px;right:36px;display:flex;gap:5px;align-items:center}
-.kb-flag{margin-top:6px}
+.kb-head-badges{display:flex;gap:5px;flex-wrap:wrap;align-items:center;
+  margin-bottom:8px;padding-right:26px}          /* 右侧让出删除按钮的位置 */
+.kb-flag{margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.55;
+  word-break:break-word}
+.kb-group-t{font-size:12.5px;font-weight:650;color:var(--muted);letter-spacing:.05em;
+  margin:18px 0 2px;display:flex;align-items:center;gap:8px}
+.kb-group-t:first-child{margin-top:0}
+.kb-group-t .mono{font-weight:400}
+.kb-group-hint{font-size:11.5px;color:var(--muted);padding:2px 2px 8px}
 .kb-meta{font-size:12.5px;color:var(--muted);display:flex;flex-direction:column;gap:3px;margin-top:8px}
 .kb-meta .row{display:flex;justify-content:space-between;gap:10px}
 .kb-meta code{background:var(--chip);padding:0 6px;border-radius:5px;font-size:11.5px}
@@ -1246,7 +1253,7 @@ function logout() {
 const VIEWS = [
   { id: "chat", name: "对话", sub: "流式对话 · 两级知识库检索 · MCP 工具调用 · 长记忆",
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a8 8 0 01-8 8H5l-2 2V12a8 8 0 018-8h2a8 8 0 018 8z"/></svg>' },
-  { id: "brainstorm", name: "头脑风暴", sub: "多 Agent 群聊辩论 · 并行独立调研 · 主持人调度收敛 · 科研方案成稿",
+  { id: "brainstorm", name: "头脑风暴", sub: "双团队多 Agent：争鸣社辩论收敛方案 · 格致会讲研讨产出构想组合",
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 21h4M12 3a6 6 0 00-4 10.5c.7.6 1 1.4 1 2.5h6c0-1.1.3-1.9 1-2.5A6 6 0 0012 3z"/></svg>' },
   { id: "kb", name: "知识库", sub: "建库 / 上传文档 / 检索测试 / 换嵌入模型重建",
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>' },
@@ -2245,14 +2252,26 @@ function renderKBs() {
       点击「新建知识库」创建第一个库，上传文档后即可在对话中检索。</div>`;
     return;
   }
-  box.innerHTML = '<div class="kb-grid">' + state.kbs.map(kb => {
+
+  // 分组显示（按 kind）：我的知识库 / 多 agent 自动沉淀库
+  const mine = state.kbs.filter(k => k.kind !== "archive");
+  const arch = state.kbs.filter(k => k.kind === "archive");
+
+  const card = kb => {
     const st = KB_STATUS[kb.status] || { label: kb.status, cls: "gray" };
     const pulse = (kb.status === "indexing" || kb.status === "reembedding") ? " pulse" : "";
     const scopeBadge = kb.scope === "private"
       ? '<span class="badge purple">私人</span>' : '<span class="badge green">公共</span>';
+    const isArch = kb.kind === "archive";
+    const archTeam = (kb.name || "").includes("辩论") ? "争鸣社辩论式"
+      : ((kb.name || "").includes("研讨") ? "格致会讲研讨式" : "多 agent");
+    const archiveBadge = isArch
+      ? '<span class="badge gray" title="该库专用于' + archTeam + '多 agent 团队的成稿沉淀，不会被普通对话检索">自动沉淀</span>' : "";
+    const archiveFlag = isArch
+      ? `<div class="kb-flag">该库专用于${esc(archTeam)}多 agent 团队的成稿沉淀，不会被普通对话检索。</div>` : "";
     return `<div class="kb-card ${kb.scope === "private" ? "private" : ""}" data-kb="${kb.kb_id}">
       <button class="kb-del" data-del="${kb.kb_id}" title="删除知识库">✕</button>
-      <div class="kb-head-badges">${scopeBadge}<span class="badge ${st.cls}${pulse}">${st.label}</span></div>
+      <div class="kb-head-badges">${scopeBadge}${archiveBadge}<span class="badge ${st.cls}${pulse}">${st.label}</span></div>
       <h3>${esc(kb.name)}</h3>
       <div class="kb-meta">
         <div class="row"><span>嵌入模型</span><code>${esc(kb.embedding_provider)} / ${esc(kb.embedding_model_id)}</code></div>
@@ -2260,9 +2279,21 @@ function renderKBs() {
         <div class="row"><span>文档数</span><span>${(kb.source_doc_ids || []).length}</span></div>
         <div class="row"><span>创建时间</span><span>${fmtTime(kb.created_at)}</span></div>
       </div>
+      ${archiveFlag}
       ${kb.retrieval_enabled_for_user === false ? '<div class="kb-flag"><span class="badge disable" title="仅你禁用了该库的对话检索，点击详情可恢复">⚑ 我禁检索</span></div>' : ''}
     </div>`;
-  }).join("") + "</div>";
+  };
+
+  let out = '<div class="kb-group-t">我的知识库 <span class="mono">' + mine.length + "</span></div>";
+  out += mine.length
+    ? '<div class="kb-grid">' + mine.map(card).join("") + "</div>"
+    : '<div class="kb-group-hint">暂无普通知识库——点击左上「新建知识库」创建，上传文档后即可在对话中检索。</div>';
+  if (arch.length) {
+    out += '<div class="kb-group-t">自动沉淀库（多 agent 团队专用 · 不会被普通对话检索） <span class="mono">' + arch.length + "</span></div>";
+    out += '<div class="kb-group-hint">由头脑风暴（辩论式 agent）与格致会讲（研讨式 agent）自动沉淀：历场方案、会讲报告与构想组合。滚动保留最近 10 份，可作后续会讲/辩论的知识飞轮。</div>';
+    out += '<div class="kb-grid">' + arch.map(card).join("") + "</div>";
+  }
+  box.innerHTML = out;
   $$("#kb-list .kb-card").forEach(el => el.onclick = () => openKBDetail(el.dataset.kb));
   $$("#kb-list .kb-del").forEach(el => el.onclick = e => {
     e.stopPropagation(); deleteKB(el.dataset.del);

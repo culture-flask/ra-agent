@@ -3,11 +3,11 @@
 # ra-agent · 科研助手
 
 **基于 FastAPI + LangGraph 的全栈 RAG Agent 后端服务**
-*A RAG agent backend: streaming chat, hybrid retrieval, long-term memory, MCP tools, multi-provider LLM.*
+*A RAG agent backend: streaming chat, hybrid retrieval, long-term memory, MCP tools, multi-provider LLM, and two multi-agent teams (debate & seminar).*
 
 FastAPI · LangGraph · ChromaDB · PostgreSQL · BM25 · MCP
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/) [![FastAPI](https://img.shields.io/badge/FastAPI-0.140-009688)](https://fastapi.tiangolo.com/) [![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C)](https://langchain-ai.github.io/langgraph/) [![Tests](https://img.shields.io/badge/tests-225%20cases-brightgreen)](#运行测试) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/) [![FastAPI](https://img.shields.io/badge/FastAPI-0.140-009688)](https://fastapi.tiangolo.com/) [![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C)](https://langchain-ai.github.io/langgraph/) [![Tests](https://img.shields.io/badge/tests-260%20cases-brightgreen)](#运行测试) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
 
@@ -22,6 +22,7 @@ ra-agent 是一个「科研助手」风格的 **RAG Agent 后端服务**（配�
 - **MCP 工具调用**：外部 MCP Server 工具目录**运行时动态发现**（新增工具零代码改动），加进程内「原生工具」（按用户自动隔离），generate ⇄ tool_executor 循环直到不再需要工具。
 - **长期记忆**：每轮结束后 LLM 自动抽取「值得记住的用户信息」，core / short 分层注入 prompt；超限触发「主题压缩 → LRU 淘汰」的膨胀控制管线。
 - **多厂商 LLM 接入**：OpenAI 兼容协议接入 10+ 厂商（openai / deepseek / qwen / moonshot / zhipu / siliconflow / minimax / openrouter / gemini / ollama 及任意自建端点）；用户级配置落库、api_key AES 加密、指数退避重试、上下文窗口自动探测。
+- **多 Agent 团队**：两支可切换的多 Agent 协作团队——「争鸣社」（辩论式：四辩手立场碰撞、主持人调度多轮辩论、撰稿人收敛科研方案）与「格致会讲」（研讨式：四学者研读汇报、承接式问答、构想工作坊、独立评审打分，产出研究构想组合）；支持按角色绑定不同模型、**会后追问**（点名角色作答）、成稿自动入库形成跨会话知识飞轮。
 - **用户体系与可观测性**：注册 / 登录（bcrypt + JWT）、公共/私人两级知识库可见性与越权防护；调用链追踪、事件流推送、token 用量计量、用户反馈沉淀为离线评测集。
 
 > 设计纪律一句话：**对话生成是主链路，检索路由 / 记忆 / 压缩 / 工具皆可降级——增强能力故障绝不让 `/chat` 变成 500。**
@@ -34,7 +35,8 @@ ra-agent 是一个「科研助手」风格的 **RAG Agent 后端服务**（配�
 | 知识库 | PDF/DOCX/TXT/MD 入库、逐文件事务与进度明细、入库/重建/复制后台任务可取消、知识库复制与分类、每库独立嵌入模型 |
 | 检索 | 纯向量 / 向量+BM25 混合两种模式、RRF 融合排序、父块聚合返回、检索参数前后端可调 |
 | 记忆 | core/short 分层注入、short 层 TTL 过期、条数上限控制、主题压缩 → LRU 淘汰逐级降级 |
-| 工具 | MCP stdio 多 server 管理、连接失败降级空目录、原生工具按用户隔离（列库内文件 / 取完整原文等） |
+| 工具 | MCP stdio 多 server 管理、连接失败降级空目录、原生工具按用户隔离（知识库检索 / 列库内文件 / 取完整原文 / 学术检索 / 引文追溯 / GitHub / 数据集 / 文档保存 / BibTeX 导出等） |
+| 多 Agent 团队 | 争鸣社（辩论式：立场书 → 主持人调度辩论 → 收敛成稿）与格致会讲（研讨式：研读笔记 → 议程式汇报问答 → 构想卡谱系 → 独立评审聚合）双团队前端一键切换；每角色可绑定不同模型、token 预算硬熔断（撰稿豁免）、工具失败自动降级、成稿自动入库 |
 | LLM | 多厂商目录动态拉取模型列表、用户级 base_url/model/api_key、密钥 AES 落库加密、限流与额度耗尽区分处理、KV prefix cache 命中率工程化 |
 | 运维 | /health 健康检查、启动孤儿状态自愈（中断任务复位）、幂等建表补列、Alembic 迁移、token 用量报表 |
 
@@ -45,10 +47,14 @@ ra-agent 是一个「科研助手」风格的 **RAG Agent 后端服务**（配�
             │  API 层  app/api/                           │  ← HTTP 契约：校验 / 状态码 / SSE
             │  auth chat kbs conversations memories       │
             │  llm_config settings traces usage feedbacks │
+            │  brainstorm seminar                         │  ← 多 Agent 团队（争鸣社/格致会讲）
             └──────────────┬─────────────────────────────┘
             ┌──────────────▼─────────────────────────────┐
             │  编排层  app/graph/                         │  ← LangGraph 状态机
-            │  记忆加载→压缩→路由→检索→生成⇄工具循环      │     8 节点 + 条件路由
+            │  主图：记忆加载→压缩→路由→检索→生成⇄工具循环 │     8 节点 + 条件路由
+            │  子图：争鸣社辩论 / 格致会讲研讨             │     议程驱动 + Send fan-out
+            │  （agent_runtime 共享运行时：空完成重试/     │
+            │   强制收尾轮/每角色独立模型）                │
             │  →记忆抽取→保存；WorkflowContext 依赖注入   │
             └──┬───────────┬───────────┬─────────┬───────┘
      ┌─────────▼───┐ ┌─────▼─────┐ ┌───▼────┐ ┌──▼─────────┐
@@ -151,7 +157,9 @@ ra-agent/
 │   ├── main.py              # FastAPI 入口 + lifespan 组件装配
 │   ├── settings.py          # 三级配置合并加载
 │   ├── api/                 # API 层：HTTP 端点与 SSE
-│   ├── graph/               # 编排层：LangGraph 状态机（state/nodes/workflow）
+│   ├── graph/               # 编排层：主图 + 争鸣社/格致会讲子图 + agent_runtime 共享运行时
+│   ├── api/brainstorm.py    # 争鸣社 API（SSE/停止/列表/追问）
+│   ├── api/seminar.py       # 格致会讲 API（同构）
 │   ├── services/            # 服务层：kb_service / memory_service / parsing
 │   ├── abstractions/        # 抽象层：llm / embedding / vectorstore / bm25 四大接口
 │   ├── mcp/                 # MCP 层：host（连接发现）/ adapter（执行适配）
@@ -160,9 +168,10 @@ ra-agent/
 ├── config/settings.yaml     # 行为参数配置（主题式嵌套）
 ├── servers/research_server.py   # 示例 MCP Server（联网搜索/学术检索/网页阅读）
 ├── alembic/                 # 数据库迁移
-├── tests/                   # pytest 全量测试（21 个文件、225 个用例）
+├── tests/                   # pytest 全量测试（30 个文件、260 个用例）
+├── docs/                    # 设计文档与实现教程（争鸣社 brainstorm / 格致会讲 seminar 两支团队）
 ├── rag_test/                # RAG 离线评估工程：实验脚本 + 超参网格实验报告
-├── ra-web/index.html        # 单页前端（服务同源托管）
+├── ra-web/index.html        # 单页前端（服务同源托管）：对话/知识库/双团队多 Agent/记忆/追踪
 ├── docker-compose.yml       # 基础设施：Postgres 16 + Redis 7
 ├── Dockerfile               # 应用镜像（python:3.10-slim）
 ├── run.sh                   # 服务启停脚本
@@ -198,6 +207,7 @@ DATABASE_URL=postgresql+psycopg://ra:ra@localhost:5432/ra_agent_test pytest test
 - **三段式存储一致性**：KB 元数据在 Postgres、chunk 文本在本地磁盘、向量在 Chroma，逐文件事务推进，崩溃只留下可恢复状态。
 - **供应商前缀缓存工程**：检索上下文改为末尾消息注入，system 与对话历史跨轮字节级稳定，让厂商 KV prefix cache 真正命中，摊薄 token 成本与时延。
 - **四大抽象接口**：LLM / Embedding / VectorStore / BM25 均为可替换实现，业务不感知具体厂商。
+- **双团队多 Agent**：争鸣社（对抗收敛）与格致会讲（议程研讨）共享同一套 agent 运行时（事件前缀参数化、空完成重试、强制收尾轮、每角色独立模型）；会讲采用议程驱动编排，步数确定、降级路径全部确定性化。
 
 ## Roadmap
 

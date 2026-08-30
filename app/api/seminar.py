@@ -8,6 +8,7 @@
 import asyncio
 import contextlib
 import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -22,6 +23,7 @@ from app.core.deps import get_current_user
 from app.core.events import clear_event_sink, set_event_sink
 from app.core.logging import get_logger
 from app.graph.seminar import SCHOLAR_IDS
+from app.graph.workflow import aget_state_retry
 from app.models import BrainstormSession, KnowledgeBase, User, utcnow
 
 logger = get_logger("seminar")
@@ -137,7 +139,27 @@ def _fail_session(user_id: str, session_id: str, error: str) -> None:
             db.commit()
 
 
-SEM_OUTPUT_KB_NAME = "会讲纪要"            # 会讲的知识沉淀库（区别于争鸣社）
+SEM_OUTPUT_KB_NAME = "研讨式agent纪要"       # 会讲的知识沉淀库（自动创建；不会被普通对话检索）
+
+# 沉淀库滚动窗口：每库最多保留的文档数（超过删最旧，防重复膨胀与召回稀释）
+ARCHIVE_KEEP_DOCS = 10
+
+
+def _cap_archive_docs(kb_service, kb_id: str, keep: int = ARCHIVE_KEEP_DOCS) -> int:
+    """沉淀库滚动窗口：按文件名（前缀为日期，字典序即时间序）保留最新
+    keep 份，删除更旧的。返回删除数。失败只记日志，不阻断沉淀。"""
+    try:
+        docs = kb_service.list_documents(kb_id)
+        if len(docs) <= keep:
+            return 0
+        dated = sorted(docs, key=lambda d: d.get("filename") or "")
+        stale = [d["doc_id"] for d in dated[:len(dated) - keep]]
+        if stale:
+            kb_service.delete_documents(kb_id, stale)
+        return len(stale)
+    except Exception as e:
+        logger.warning("archive cap failed kb=%s: %s", kb_id, e)
+        return 0
 
 
 def _archive_report_to_kb(user_id: str, session_id: str,
@@ -155,9 +177,16 @@ def _archive_report_to_kb(user_id: str, session_id: str,
             if kb is None:
                 kb = kb_service.create_kb(
                     SEM_OUTPUT_KB_NAME, "private", user_id,
-                    description="会讲自动沉淀：历场研讨报告与构想组合")
+                    description="研讨式多 agent 自动沉淀：历场研讨报告与构想组合"
+                                 "（专用于研讨团队，不会被普通对话检索）",
+                    kind="archive")
             kb_id = kb.kb_id
-        kb_service.add_documents(kb_id, [f"# {topic}\n\n{report}"])
+        date = datetime.now(timezone.utc).strftime("%Y%m%d")
+        filename = f"{date}-会讲-{session_id[:12]}.md"   # 日期前缀：文件名字典序即时间序
+        text = (f"# [{date}] 格致会讲报告（会话 {session_id[:12]}）\n"
+                f"议题：{topic}\n\n{report}")
+        kb_service.add_documents(kb_id, [text], filenames=[filename])
+        _cap_archive_docs(kb_service, kb_id)
     except Exception as e:
         logger.warning("seminar archive to kb failed %s: %s", session_id, e)
 
@@ -271,7 +300,7 @@ async def session_detail(session_id: str, request: Request,
         raise HTTPException(status_code=403, detail="not seminar owner")
 
     graph = request.app.state.seminar_graph
-    snap = await graph.aget_state({"configurable": {"thread_id": session_id}})
+    snap = await aget_state_retry(graph, {"configurable": {"thread_id": session_id}})
     values = (snap.values or {}) if snap else {}
     return {
         "session_id": session_id, "topic": row.topic, "status": row.status,

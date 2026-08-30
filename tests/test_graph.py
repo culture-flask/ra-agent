@@ -438,3 +438,29 @@ def test_rewind_on_empty_thread_returns_false():
     graph = _run(build_graph(ctx))
     cfg = {"configurable": {"thread_id": "brand-new-thread"}}
     assert _run(_rewind_to_last_user(graph, cfg)) is False
+
+def test_supervisor_excludes_archive_kbs():
+    """普通对话的检索目录排除多 agent 自动沉淀库（头脑风暴成果/会讲纪要）：
+    路由提示词不含沉淀库、检索不命中；沉淀库仍服务多 agent 团队（飞轮保留）。"""
+    ctx, kb_service = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "普通资料库", "scope": "public"}]}',
+        captured=None)
+    _ensure_user("u1")
+    kb_service.create_kb("普通资料库", "public", "u1",
+                         ["量子比特可以处于叠加态"], description="量子")
+    kb_service.create_kb("辩论式agent纪要", "private", "u1",
+                         ["往期方案：攻击成功率提升三成"], kind="archive")
+    graph = _run(build_graph(ctx))
+
+    result = _run_graph(graph, {"user_id": "u1", "session_id": "t-arch-1",
+                                "query": "叠加态是什么",
+                                "messages": [HumanMessage(content="叠加态是什么")]})
+    assert result["retrievals"]
+    assert all(r.get("kb_name") == "普通资料库" for r in result["retrievals"])
+    assert all(r.get("kb_name") != "头脑风暴成果" for r in result["retrievals"])
+
+    # 服务层开关：include_archives=False 排除沉淀库（多 agent 研读仍默认包含 → 飞轮保留）
+    both = kb_service.list_queryable_kbs("u1")
+    assert {k.name for k in both} >= {"普通资料库", "辩论式agent纪要"}
+    no_arch = kb_service.list_queryable_kbs("u1", include_archives=False)
+    assert {k.name for k in no_arch} == {"普通资料库"}

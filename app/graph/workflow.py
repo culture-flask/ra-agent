@@ -1,5 +1,26 @@
-import psycopg
+from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+import asyncio
+
+from psycopg import OperationalError
+
+
+async def aget_state_retry(graph, config: dict, attempts: int = 3):
+    """aget_state 的连接自愈重试。
+
+    Postgres/项目重启后，连接池异步丢弃旧连接存在竞态：第一次取出的
+    连接可能仍报 OperationalError（"the connection is closed"）。
+    指数退避重试，池换上新连接后即恢复。"""
+    for i in range(attempts):
+        try:
+            return await graph.aget_state(config)
+        except OperationalError:
+            # 整类连接级错误都重试：连接关闭 / AdminShutdown（Postgres 重启
+            # "terminating connection due to administrator command"）/ 断连。
+            # 池会在失败后异步丢弃坏连接并重建，退避一次即拿到新连接。
+            if i == attempts - 1:
+                raise
+            await asyncio.sleep(0.5 * (i + 1))
 from langgraph.graph import END, START, StateGraph
 
 from app.graph.nodes import (
@@ -20,11 +41,19 @@ from app.graph.state import AgentState
 
 
 async def _build_checkpointer(database_url: str) -> AsyncPostgresSaver:
-    """创建 Postgres 检查点保存器（异步版）。
+    """创建 Postgres 检查点保存器（异步连接池版）。
+
+    用连接池而非单条长连接：Postgres/项目重启后旧连接会死亡
+    （psycopg.OperationalError: the connection is closed），详情/追问等
+    aget_state 调用会集体 500；池在取出时校验并自动重建坏连接。
+    prepare_threshold=0 是 langgraph 官方对 checkpoint 表的建议配置。
     """
     url = database_url.replace("postgresql+psycopg://", "postgresql://")
-    conn = await psycopg.AsyncConnection.connect(url, autocommit=True)
-    saver = AsyncPostgresSaver(conn)
+    pool = AsyncConnectionPool(
+        url, min_size=1, max_size=10, open=True,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+    )
+    saver = AsyncPostgresSaver(pool)
     await saver.setup()
     return saver
 
