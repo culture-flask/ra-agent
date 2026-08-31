@@ -198,8 +198,8 @@ def test_add_documents_filenames_and_rolling_cap():
     names = sorted(d["filename"] or "" for d in docs)
     assert names[0].startswith("20260800") and names[-1].startswith("20260811")
 
-    from app.api.seminar import ARCHIVE_KEEP_DOCS, _cap_archive_docs
-    removed = _cap_archive_docs(ks, kb.kb_id)
+    from app.services.kb_service import ARCHIVE_KEEP_DOCS
+    removed = ks.cap_archive_docs(kb.kb_id)
     assert removed == 12 - ARCHIVE_KEEP_DOCS
     docs = ks.list_documents(kb.kb_id)
     assert len(docs) == ARCHIVE_KEEP_DOCS

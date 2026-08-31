@@ -176,6 +176,7 @@ def _archive_proposal_to_kb(user_id: str, session_id: str,
     best-effort：失败只记日志（飞轮断一环不影响本次会话交付）。
     private scope：成果只对本人可见。入库是分块+嵌入的慢操作，故只在
     收尾（SSE 已推完 done 之前的一次线程池调用）执行且绝不阻塞图运行。
+    入库后由 kb_service.cap_archive_docs 滚动保留最近 ARCHIVE_KEEP_DOCS 份。
     """
     if not proposal.strip():
         return
@@ -199,7 +200,7 @@ def _archive_proposal_to_kb(user_id: str, session_id: str,
         text = (f"# [{date}] 争鸣社方案（会话 {session_id[:12]}）\n"
                 f"议题：{topic}\n\n{proposal}")
         kb_service.add_documents(kb_id, [text], filenames=[filename])
-        _cap_archive_docs(kb_service, kb_id)
+        kb_service.cap_archive_docs(kb_id)
     except Exception as e:
         logger.warning("brainstorm archive to kb failed %s: %s", session_id, e)
 

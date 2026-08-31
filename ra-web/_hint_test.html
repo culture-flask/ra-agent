@@ -1,6 +1,20 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<script>localStorage.setItem('ra.token', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkOTg2ODkyZTQ3NzI0NzY3OTFhOTUxZmMwM2MzNGExZSIsImV4cCI6MTc4OTM5MjE3NywiaWF0IjoxNzg4MTgyNTc3LCJqdGkiOiIzNGY0MzZmMWE0ZWY0MmI4OTBhMGU3ODdjNzVhZmY1OCJ9.BR1M1euEFJqpwE2GUZ3K6IacoS-WhHj5U_QJ_f0MX08');
+(function poll(){
+  let n = 0;
+  const t = setInterval(() => {
+    n++;
+    const nav = document.querySelector('.nav-item[data-view="brainstorm"]');
+    if (nav && typeof switchView === "function") {
+      clearInterval(t);
+      switchView("brainstorm");
+    } else if (n > 120) clearInterval(t);
+  }, 150);
+})();
+</script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>科研助手 · Research Assistant</title>
@@ -584,7 +598,7 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
 .bs-plan-body h1,.bs-plan-body .b{font-weight:650}
 .bs-plan-body p{margin:6px 0}
 /* 团队切换 */
-.bs-team-switch{display:flex;gap:8px;margin-bottom:14px;max-width:760px}
+.bs-team-switch{display:flex;gap:8px;margin-bottom:14px}
 .bs-team-btn{flex:1;border:1px solid var(--line-strong);border-radius:12px;
   background:var(--surface);padding:10px 14px;cursor:pointer;text-align:left;
   line-height:1.6;transition:.15s;color:var(--ink);display:flex;flex-direction:column;gap:3px}
@@ -825,7 +839,7 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
       <div class="bs-layout">
         <div class="bs-main" id="bs-main">
           <!-- 未选择提示（推荐先读这里再选团队） -->
-          <div class="card" id="bs-team-hint" style="margin-bottom:14px;max-width:760px">
+          <div class="card" id="bs-team-hint" style="margin-bottom:14px">
             <div class="muted" style="font-size:13px;padding:4px 2px">
               点击下方选择一支团队开始。两支团队互补：<b>格致会讲</b>做前期探索（读领域、出构想），<b>争鸣社</b>做后期对抗验证（把首选构想拿去辩论锤打）。</div>
             <div style="font-size:12.5px;padding:4px 2px;color:var(--danger)">

@@ -106,6 +106,11 @@ def _safe_filename(name: str) -> str:
     return safe[:150] or "upload.bin"
 
 
+# 多 agent 沉淀库（辩论式agent纪要/研讨式agent纪要）滚动窗口：
+# 每库最多保留的文档数（超过删最旧，防重复膨胀与召回稀释）
+ARCHIVE_KEEP_DOCS = 10
+
+
 class KBService:
     """两级知识库管理：元数据在 Postgres，chunk 在本地盘，向量在 Chroma。"""
 
@@ -365,6 +370,26 @@ class KBService:
         emit("doc_delete", {"kb_id": kb_id, "files": files,
                             "chunks": removed_chunks})
         return {"files": files, "chunks": removed_chunks}
+
+    def cap_archive_docs(self, kb_id: str, keep: int = ARCHIVE_KEEP_DOCS) -> int:
+        """沉淀库滚动窗口：按文件名（前缀为日期，字典序即时间序）保留最新
+        keep 份，删除更旧的。返回删除数。失败只记日志，不阻断沉淀。
+
+        供两支多 agent 团队的成稿入库收尾调用（辩论式agent纪要/研讨式agent纪要）——
+        历史上逻辑重复放在两个 API 模块且辩论侧漏了 import（NameError 被吞、
+        沉淀静默失效），现下沉为本方法，单一实现。"""
+        try:
+            docs = self.list_documents(kb_id)
+            if len(docs) <= keep:
+                return 0
+            dated = sorted(docs, key=lambda d: d.get("filename") or "")
+            stale = [d["doc_id"] for d in dated[:len(dated) - keep]]
+            if stale:
+                self.delete_documents(kb_id, stale)
+            return len(stale)
+        except Exception as e:
+            logger.warning("archive cap failed kb=%s: %s", kb_id, e)
+            return 0
 
 
     def delete_kb(self, kb_id: str) -> None:

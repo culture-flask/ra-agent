@@ -1,6 +1,22 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<script>localStorage.setItem('ra.token', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkOTg2ODkyZTQ3NzI0NzY3OTFhOTUxZmMwM2MzNGExZSIsImV4cCI6MTc4OTM5MjYwMiwiaWF0IjoxNzg4MTgzMDAyLCJqdGkiOiI5NjExNzg1ZTMxNDE0OGQxYjllZTM0OTI1YWYyZWJmNSJ9.j2sbgAzML7wz0JsRb1Aq383vyHTOkhw5I6o2wJS3Qqk');
+localStorage.setItem('ra.theme', 'light');
+(function poll(){
+  let n = 0;
+  const t = setInterval(() => {
+    n++;
+    const nav = document.querySelector('.nav-item[data-view="brainstorm"]');
+    if (nav && typeof switchView === "function") {
+      clearInterval(t);
+      switchView("brainstorm");
+      setTimeout(() => { document.querySelector('[data-bs-team="seminar"]')?.click(); }, 600);
+    } else if (n > 120) clearInterval(t);
+  }, 150);
+})();
+</script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>科研助手 · Research Assistant</title>

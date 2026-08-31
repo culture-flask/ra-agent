@@ -146,30 +146,11 @@ def _fail_session(user_id: str, session_id: str, error: str) -> None:
 
 SEM_OUTPUT_KB_NAME = "研讨式agent纪要"       # 会讲的知识沉淀库（自动创建；不会被普通对话检索）
 
-# 沉淀库滚动窗口：每库最多保留的文档数（超过删最旧，防重复膨胀与召回稀释）
-ARCHIVE_KEEP_DOCS = 10
-
-
-def _cap_archive_docs(kb_service, kb_id: str, keep: int = ARCHIVE_KEEP_DOCS) -> int:
-    """沉淀库滚动窗口：按文件名（前缀为日期，字典序即时间序）保留最新
-    keep 份，删除更旧的。返回删除数。失败只记日志，不阻断沉淀。"""
-    try:
-        docs = kb_service.list_documents(kb_id)
-        if len(docs) <= keep:
-            return 0
-        dated = sorted(docs, key=lambda d: d.get("filename") or "")
-        stale = [d["doc_id"] for d in dated[:len(dated) - keep]]
-        if stale:
-            kb_service.delete_documents(kb_id, stale)
-        return len(stale)
-    except Exception as e:
-        logger.warning("archive cap failed kb=%s: %s", kb_id, e)
-        return 0
-
 
 def _archive_report_to_kb(user_id: str, session_id: str,
                           topic: str, report: str) -> None:
-    """会讲知识闭环：成稿入库（与争鸣社 _archive_proposal_to_kb 同构）。"""
+    """会讲知识闭环：成稿入库（与争鸣社 _archive_proposal_to_kb 同构）。
+    入库后由 kb_service.cap_archive_docs 滚动保留最近 ARCHIVE_KEEP_DOCS 份。"""
     if not report.strip():
         return
     try:
@@ -191,7 +172,7 @@ def _archive_report_to_kb(user_id: str, session_id: str,
         text = (f"# [{date}] 格致会讲报告（会话 {session_id[:12]}）\n"
                 f"议题：{topic}\n\n{report}")
         kb_service.add_documents(kb_id, [text], filenames=[filename])
-        _cap_archive_docs(kb_service, kb_id)
+        kb_service.cap_archive_docs(kb_id)
     except Exception as e:
         logger.warning("seminar archive to kb failed %s: %s", session_id, e)
 
