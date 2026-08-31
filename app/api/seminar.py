@@ -22,7 +22,12 @@ from app.core.db import SessionLocal
 from app.core.deps import get_current_user
 from app.core.events import clear_event_sink, set_event_sink
 from app.core.logging import get_logger
-from app.graph.seminar import SCHOLAR_IDS
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from app.graph.agent_runtime import effective_cfg as _effective_cfg, role_cfg as _role_cfg
+from app.graph.native_llm import native_round
+from app.graph.seminar import (SCHOLAR_IDS, _cards_digest, _insight_digest,
+                               _notes_digest, SCHOLAR_ORIENTATION)
 from app.graph.workflow import aget_state_retry
 from app.models import BrainstormSession, KnowledgeBase, User, utcnow
 
@@ -314,3 +319,135 @@ async def session_detail(session_id: str, request: Request,
         "idea_ranking": values.get("idea_ranking", []),
         "final_proposal": values.get("final_proposal") or row.final_proposal,
     }
+
+
+# ---------- 追问：会话结束后向点名学者（或主席）继续提问 ----------
+
+class SeminarAskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=8000)
+
+
+# 触发词 → 角色别名表：问题文本中最早命中的学者被唤起；未命中 → 主席
+SEM_QA_ALIASES = [
+    ("historian", ["文献学家", "historian"]),
+    ("theorist", ["理论家", "theorist"]),
+    ("experimentalist", ["实验家", "experimentalist"]),
+    ("visitor", ["访问学者", "visitor"]),
+    ("rapporteur", ["执笔人", "执笔", "rapporteur"]),
+    ("chair", ["主席", "主持人", "chair"]),
+]
+
+
+def _pick_agent(question: str, roles: list[dict]) -> str:
+    """按触发词选唤起学者：问题中**最早出现**的身份优先（同一位置取更长
+    别名）。未命中任何身份 → 主席（会讲的调度者是主席，不输出观点）。"""
+    best: tuple[int, str] | None = None
+    for agent_id, names in SEM_QA_ALIASES:
+        for n in names:
+            i = question.find(n)
+            if i >= 0 and (best is None or i < best[0]
+                           or (i == best[0] and len(n) > len(best[1]))):
+                best = (i, agent_id)
+    return best[1] if best else "chair"
+
+
+@router.post("/{session_id}/ask")
+async def seminar_ask(session_id: str, req: SeminarAskRequest,
+                      request: Request,
+                      user: User = Depends(get_current_user)):
+    """会讲追问（SSE）：点名学者以其人设+绑定模型作答，未点名由主席作答。
+
+    只读回放 checkpoint，不改变会话状态；追问不计入会讲预算。
+    事件流：ask_start（agent/model）→ token → done / error。
+    """
+    with SessionLocal() as db:
+        row = db.get(BrainstormSession, session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if row.user_id != user.id:
+        raise HTTPException(status_code=403, detail="not seminar owner")
+
+    graph = request.app.state.seminar_graph
+    ctx = request.app.state.workflow_ctx
+    snap = await aget_state_retry(graph,
+                                  {"configurable": {"thread_id": session_id}})
+    values = dict((snap.values or {}) if snap else {})
+    values.setdefault("user_id", user.id)   # _role_cfg 解析角色配置需要
+    topic = values.get("topic") or row.topic
+    roles = values.get("roles") or row.roles
+    notes = values.get("reading_notes") or []
+    cards = values.get("card_registry") or []
+    ranking = values.get("idea_ranking") or []
+    open_qs = values.get("open_questions") or []
+    proposal = values.get("final_proposal") or row.final_proposal
+
+    agent_id = _pick_agent(req.question, roles)
+    is_scholar = agent_id in SCHOLAR_IDS
+    role = next((r for r in roles if r.get("id") == agent_id), {}) \
+        if is_scholar else {}
+    if agent_id == "chair":
+        cfg = _effective_cfg(ctx, user.id)
+        system = ("你是本场格致会讲的主席，基于全场研讨客观回答用户追问；"
+                  "引用观点请标明来自哪位学者，不清楚的如实说明。")
+    elif agent_id == "rapporteur":
+        cfg = _effective_cfg(ctx, user.id)
+        system = ("你是本场格致会讲的执笔人，会讲报告由你执笔；"
+                  "就报告内容与依据回答用户追问。")
+    else:
+        cfg = _role_cfg(ctx, values, agent_id)
+        own = next((n.get("content", "") for n in notes
+                    if n.get("agent_id") == agent_id), "（研读笔记缺失）")
+        system = (f"你是本场格致会讲中的「{role.get('name', agent_id)}」。"
+                  f"角色取向：{SCHOLAR_ORIENTATION[agent_id]}\n本场议题：{topic}\n\n"
+                  f"你的研读笔记：\n{own[:1200]}\n\n"
+                  "现在用户向你追问。以你的学者身份、基于你的研读与全场讨论"
+                  "直接回答；与你的立场有出入时如实说明，不要扮演其他学者。")
+
+    ranking_text = "\n".join(
+        f"- {r.get('card_id')} 总分{r.get('total')}：{r.get('title')}"
+        for r in ranking) or "（无）"
+    system += (f"\n\n【全场参考】\n议题：{topic}\n\n学者研读笔记摘要：\n"
+               f"{_notes_digest(values, limit=300)}\n\n洞见池：\n"
+               f"{_insight_digest(values, 30)}\n\n构想卡：\n"
+               f"{_cards_digest(cards, 200)}\n\n评审排序：\n{ranking_text}\n\n"
+               f"开放问题：{'; '.join(q.get('q', '') for q in open_qs) or '（无）'}\n"
+               f"最终报告（节选）：{proposal[:2000]}")
+    temperature = float(role.get("temperature", 0.3))
+    msgs = [SystemMessage(content=system),
+            HumanMessage(content=req.question)]
+    sid = session_id
+    sink: asyncio.Queue = asyncio.Queue()
+
+    async def run_ask():
+        set_event_sink(sink)
+        try:
+            resp, _usage, stopped = await native_round(
+                cfg, msgs, None, temperature, sid,
+                token_event="token", reasoning_event="ask_reasoning")
+            await sink.put({"type": "__done__"})
+        except Exception as e:
+            logger.warning("seminar ask failed: %s", e)
+            await sink.put({"type": "__error__", "error": str(e)})
+        finally:
+            clear_event_sink()
+
+    async def event_gen():
+        task = asyncio.create_task(run_ask())
+        try:
+            yield _sse({"type": "ask_start", "agent": agent_id,
+                        "model": getattr(cfg, "model_id", "") or ""})
+            while True:
+                ev = await sink.get()
+                t = ev.get("type")
+                if t == "__done__":
+                    break
+                if t == "__error__":
+                    yield _sse({"type": "error", "error": ev.get("error", "")})
+                    break
+                yield _sse(ev)
+            yield _sse({"type": "done"})
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")

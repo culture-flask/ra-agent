@@ -92,3 +92,71 @@ def test_seminar_detail_shape(auth_factory):
         # 他人访问 → 403
         assert c.get("/api/v1/seminar/sem-api-2",
                      headers=auth_factory("u2")).status_code == 403
+
+
+def test_ask_endpoint_routing_stream_and_ownership(auth_factory):
+    """会讲追问：点名学者路由正确（最早命中优先）、未点名 → 主席；
+    SSE 流 ask_start/token/done；属主校验 403、未知会话 404。"""
+    from app.main import app
+
+    class FakeGraph:
+        async def aget_state(self, config):
+            class _Snap:
+                values = {
+                    "user_id": "u1", "topic": "RAG评测",
+                    "roles": [{"id": "historian"}],
+                    "reading_notes": [{"agent_id": "historian",
+                                       "content": "研读笔记", "failed": False}],
+                    "qa_transcript": [], "insight_board": [], "open_questions": [],
+                    "evidence_pool": [],
+                    "card_registry": [{"card_id": "C1", "author": "visitor",
+                                       "title": "迁移构想"}],
+                    "idea_ranking": [], "final_proposal": "# 会讲报告",
+                }
+            return _Snap()
+
+    from app.core.db import SessionLocal
+    from app.models import BrainstormSession, User
+    from app.core.security import hash_password
+
+    def _setup():
+        with SessionLocal() as db:
+            for uid in ("u1", "u2"):
+                if not db.get(User, uid):
+                    db.add(User(id=uid, username=f"t-{uid}",
+                                password_hash=hash_password("x")))
+            if not db.get(BrainstormSession, "sem-ask-1"):
+                db.add(BrainstormSession(session_id="sem-ask-1", user_id="u1",
+                                         topic="议题", status="done",
+                                         team="seminar"))
+            db.commit()
+
+    _setup()
+    with TestClient(app) as c:
+        saved = app.state.seminar_graph
+        app.state.seminar_graph = FakeGraph()
+        try:
+            h1, h2 = auth_factory("u1"), auth_factory("u2")
+            r = c.post("/api/v1/seminar/sem-none/ask", headers=h1,
+                       json={"question": "文献学家在想什么"})
+            assert r.status_code == 404
+            r = c.post("/api/v1/seminar/sem-ask-1/ask", headers=h2,
+                       json={"question": "q"})
+            assert r.status_code == 403
+            with c.stream("POST", "/api/v1/seminar/sem-ask-1/ask",
+                          headers=h1,
+                          json={"question": "文献学家在想什么"}) as resp:
+                assert resp.status_code == 200
+                evs = [json.loads(l[6:]) for l in resp.iter_lines()
+                       if l.startswith("data: ")]
+            types = [e["type"] for e in evs]
+            assert types[0] == "ask_start" and evs[0]["agent"] == "historian"
+            assert "token" in types and types[-1] == "done"
+            # 未点名 → 主席
+            with c.stream("POST", "/api/v1/seminar/sem-ask-1/ask",
+                          headers=h1, json={"question": "总结一下"}) as resp:
+                evs = [json.loads(l[6:]) for l in resp.iter_lines()
+                       if l.startswith("data: ")]
+            assert evs[0]["agent"] == "chair"
+        finally:
+            app.state.seminar_graph = saved

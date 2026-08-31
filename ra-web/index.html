@@ -862,7 +862,7 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
           <!-- 追问区 -->
           <div class="card bs-qa" id="bs-qa-wrap" hidden>
             <div class="section-t" style="margin:0">追问</div>
-            <div class="hint" style="font-size:11.5px;color:var(--muted);margin:2px 0 8px">
+            <div class="hint" style="font-size:11.5px;color:var(--muted);margin:2px 0 8px" id="bs-qa-hint">
               点名角色（如「创新者」「批评者」「方法论专家」「实践者」「撰稿人」）由该角色作答；未点名由主持人回答</div>
             <div id="bs-qa-list"></div>
             <div style="display:flex;gap:8px;margin-top:8px;align-items:flex-end">
@@ -3397,6 +3397,7 @@ async function bsStart() {
                liveTools: {}, live: {}, qa: [], team: state.bs.team,
                insights: [], openQs: [], cards: [], ranking: [] };
   $("#bs-qa-wrap").hidden = false;
+  bsQAHint();
   $("#bs-qa-list").innerHTML = "";
   $("#bs-setup").hidden = true;
   $("#bs-plan-wrap").hidden = true;
@@ -3802,7 +3803,8 @@ async function bsReplay(sid) {
                plan: null, replayed: true, liveTools: {}, live: {}, qa: [],
                team: state.bs.team, insights: [], openQs: [], cards: [],
                ranking: [] };
-  $("#bs-qa-wrap").hidden = isSem;              // 追问目前仅争鸣社
+  $("#bs-qa-wrap").hidden = false;
+  bsQAHint();
   $("#bs-qa-list").innerHTML = "";
   $("#bs-setup").hidden = true;
   $("#bs-plan-wrap").hidden = true;
@@ -3967,6 +3969,7 @@ function bsEnter() {
     $("#bs-plan-wrap").hidden = true;
     $("#bs-qa-wrap").hidden = true;
   }
+  bsQAHint();
 }
 
 /* 团队按钮：点击才展开发起面板（bsSetTeam 内含介绍/重置逻辑） */
@@ -4055,6 +4058,12 @@ function bsFlushQA(x) {
   });
 }
 
+function bsQAHint() {
+  $("#bs-qa-hint").textContent = state.bs.team === "seminar"
+    ? "点名学者（文献学家/理论家/实验家/访问学者/执笔人）由该学者作答；未点名由主席回答"
+    : "点名角色（如「创新者」「批评者」「方法论专家」「实践者」「撰稿人」）由该角色作答；未点名由主持人回答";
+}
+
 async function bsAsk() {
   if (state.bs.running) return toast("场次进行中，结束后再追问", "err");
   const q = $("#bs-qa-input").value.trim();
@@ -4067,8 +4076,9 @@ async function bsAsk() {
   try {
     const headers = { "Content-Type": "application/json" };
     if (store.token) headers["Authorization"] = "Bearer " + store.token;
+    const base = state.bs.team === "seminar" ? "/api/v1/seminar" : "/api/v1/brainstorm";
     const res = await fetch(store.base +
-      `/api/v1/brainstorm/${encodeURIComponent(state.bs.sid)}/ask`, {
+      `${base}/${encodeURIComponent(state.bs.sid)}/ask`, {
       method: "POST", headers, body: JSON.stringify({ question: q }) });
     if (!res.ok) throw new Error("HTTP " + res.status + "：" + await res.text());
     const reader = res.body.getReader();
