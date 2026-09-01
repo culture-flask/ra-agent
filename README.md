@@ -22,23 +22,21 @@ ra-agent 是一个「科研助手」风格的 **RAG Agent 后端服务**（配�
 - **MCP 工具调用**：外部 MCP Server 工具目录**运行时动态发现**（新增工具零代码改动），加进程内「原生工具」（按用户自动隔离），generate ⇄ tool_executor 循环直到不再需要工具。
 - **长期记忆**：每轮结束后 LLM 自动抽取「值得记住的用户信息」，core / short 分层注入 prompt；超限触发「主题压缩 → LRU 淘汰」的膨胀控制管线。
 - **多厂商 LLM 接入**：OpenAI 兼容协议接入 10+ 厂商（openai / deepseek / qwen / moonshot / zhipu / siliconflow / minimax / openrouter / gemini / ollama 及任意自建端点）；用户级配置落库、api_key AES 加密、指数退避重试、上下文窗口自动探测。
-- **多 Agent 团队**：两支可切换的多 Agent 协作团队——「争鸣社」（辩论式：四辩手立场碰撞、主持人调度多轮辩论、撰稿人收敛科研方案）与「格致会讲」（研讨式：四学者研读汇报、承接式问答、构想工作坊、独立评审打分，产出研究构想组合）；支持按角色绑定不同模型、**会后追问**（点名角色作答）、成稿自动入库形成跨会话知识飞轮。
-- **用户体系与可观测性**：注册 / 登录（bcrypt + JWT）、公共/私人两级知识库可见性与越权防护；调用链追踪、事件流推送、token 用量计量、用户反馈沉淀为离线评测集。
-
-> 设计纪律一句话：**对话生成是主链路，检索路由 / 记忆 / 压缩 / 工具皆可降级——增强能力故障绝不让 `/chat` 变成 500。**
+- **多 Agent 团队**：两支可切换的多 Agent 协作团队——「格致会讲」（研讨式：四学者研读汇报、承接式问答、构想工作坊、独立评审打分，产出研究构想组合）与「争鸣社」（辩论式：四辩手立场碰撞、主持人调度多轮辩论、撰稿人收敛科研方案）；支持按角色绑定不同模型、**会后追问**（点名角色作答）、成稿自动入库形成跨会话知识飞轮。
+- **用户体系与可观测性**：注册 / 登录（bcrypt + JWT）、公共/私人两级知识库可见性与越权防护；调用链追踪、事件流推送、token 用量计量。**
 
 ## 功能特性
 
-| 模块 | 能力 |
-|---|---|
-| 对话 | SSE 流式输出、思考过程流式展示、生成中断（部分答复保留）、分支会话、重新生成、上下文占用进度 + 达阈值自动压缩 |
-| 知识库 | PDF/DOCX/TXT/MD 入库、逐文件事务与进度明细、入库/重建/复制后台任务可取消、知识库复制与分类、每库独立嵌入模型 |
-| 检索 | 纯向量 / 向量+BM25 混合两种模式、RRF 融合排序、父块聚合返回、检索参数前后端可调 |
-| 记忆 | core/short 分层注入、short 层 TTL 过期、条数上限控制、主题压缩 → LRU 淘汰逐级降级 |
-| 工具 | MCP stdio 多 server 管理、连接失败降级空目录、原生工具按用户隔离（知识库检索 / 列库内文件 / 取完整原文 / 学术检索 / 引文追溯 / GitHub / 数据集 / 文档保存 / BibTeX 导出等） |
-| 多 Agent 团队 | 争鸣社（辩论式：立场书 → 主持人调度辩论 → 收敛成稿）与格致会讲（研讨式：研读笔记 → 议程式汇报问答 → 构想卡谱系 → 独立评审聚合）双团队前端一键切换；每角色可绑定不同模型、token 预算硬熔断（撰稿豁免）、工具失败自动降级、成稿自动入库 |
-| LLM | 多厂商目录动态拉取模型列表、用户级 base_url/model/api_key、密钥 AES 落库加密、限流与额度耗尽区分处理、KV prefix cache 命中率工程化 |
-| 运维 | /health 健康检查、启动孤儿状态自愈（中断任务复位）、幂等建表补列、Alembic 迁移、token 用量报表 |
+| 模块         | 能力                                                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 对话         | SSE 流式输出、思考过程流式展示、生成中断（部分答复保留）、分支会话、重新生成、上下文占用进度 + 达阈值自动压缩                                                                    |
+| 知识库        | PDF/DOCX/TXT/MD 入库、逐文件事务与进度明细、入库/重建/复制后台任务可取消、知识库复制与分类、每库独立嵌入模型                                                               |
+| 检索         | 纯向量 / 向量+BM25 混合两种模式、RRF 融合排序、父块聚合返回、检索参数前后端可调                                                                                |
+| 记忆         | core/short 分层注入、short 层 TTL 过期、条数上限控制、主题压缩 → LRU 淘汰逐级降级                                                                       |
+| 工具         | MCP stdio 多 server 管理、连接失败降级空目录、原生工具按用户隔离（知识库检索 / 列库内文件 / 取完整原文 / 学术检索 / 引文追溯 / GitHub / 数据集 / 文档保存 / BibTeX 导出等）             |
+| 多 Agent 团队 | 格致会讲（研讨式：研读笔记 → 议程式汇报问答 → 构想卡谱系 → 独立评审聚合）与争鸣社（辩论式：立场书 → 主持人调度辩论 → 收敛成稿）双团队前端一键切换；每角色可绑定不同模型、token 预算硬熔断（撰稿豁免）、工具失败自动降级、成稿自动入库 |
+| LLM        | 多厂商目录动态拉取模型列表、用户级 base_url/model/api_key、密钥 AES 落库加密、限流与额度耗尽区分处理、KV prefix cache 命中率工程化                                       |
+| 运维         | /health 健康检查、启动孤儿状态自愈（中断任务复位）、幂等建表补列、Alembic 迁移、token 用量报表                                                                    |
 
 ## 架构总览
 
@@ -74,19 +72,19 @@ ra-agent 是一个「科研助手」风格的 **RAG Agent 后端服务**（配�
 
 ## 技术栈
 
-| 类别 | 选型 | 用途 |
-|---|---|---|
-| Web 框架 | FastAPI + uvicorn | REST API + SSE 流式 |
-| Agent 编排 | LangGraph + langgraph-checkpoint-postgres | 状态机工作流 + 会话 checkpoint |
-| LLM 接入 | langchain-openai（ChatOpenAI） | OpenAI 兼容协议多厂商 |
-| 向量库 | ChromaDB（PersistentClient） | 每库一个 collection |
-| 稀疏检索 | rank-bm25 | 混合检索的 BM25 腿 |
-| 关系库 | PostgreSQL 16 + SQLAlchemy 2 + Alembic | 业务元数据 + checkpoint 存储 |
-| 缓存 | Redis 7 | 已预留（当前主链路未强依赖） |
-| 文档解析 | pypdf / python-docx | PDF 逐页 / DOCX 段落 |
-| 工具协议 | mcp + langchain-mcp-adapters | MCP Host / Client，stdio 传输 |
-| 安全 | bcrypt / PyJWT / cryptography(Fernet) | 密码哈希 / token / 密钥加密 |
-| 配置 | pydantic-settings + PyYAML | 环境变量 > yaml > 默认值 三级合并 |
+| 类别       | 选型                                        | 用途                         |
+| -------- | ----------------------------------------- | -------------------------- |
+| Web 框架   | FastAPI + uvicorn                         | REST API + SSE 流式          |
+| Agent 编排 | LangGraph + langgraph-checkpoint-postgres | 状态机工作流 + 会话 checkpoint     |
+| LLM 接入   | langchain-openai（ChatOpenAI）              | OpenAI 兼容协议多厂商             |
+| 向量库      | ChromaDB（PersistentClient）                | 每库一个 collection            |
+| 稀疏检索     | rank-bm25                                 | 混合检索的 BM25 腿               |
+| 关系库      | PostgreSQL 16 + SQLAlchemy 2 + Alembic    | 业务元数据 + checkpoint 存储      |
+| 缓存       | Redis 7                                   | 已预留（当前主链路未强依赖）             |
+| 文档解析     | pypdf / python-docx                       | PDF 逐页 / DOCX 段落           |
+| 工具协议     | mcp + langchain-mcp-adapters              | MCP Host / Client，stdio 传输 |
+| 安全       | bcrypt / PyJWT / cryptography(Fernet)     | 密码哈希 / token / 密钥加密        |
+| 配置       | pydantic-settings + PyYAML                | 环境变量 > yaml > 默认值 三级合并     |
 
 ## 快速开始
 
@@ -138,14 +136,14 @@ python3 -m venv .venv
 
 关键环境变量：
 
-| 变量 | 说明 |
-|---|---|
-| `DATABASE_URL` | Postgres 连接串（默认 `postgresql+psycopg://ra:ra@localhost:5432/ra_agent`） |
-| `REDIS_URL` | Redis 连接串 |
-| `LLM_API_KEY` | 系统级默认模型的 API Key |
-| `EMBEDDING_API_KEY` | 云端嵌入模型密钥（不配则走本地 / 自建端点） |
-| `EMBEDDING_DEFAULT_PROVIDER` | `local` / `doubao` / `ollama` 等 |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 出网代理（无代理环境留空即可） |
+| 变量                                        | 说明                                                                    |
+| ----------------------------------------- | --------------------------------------------------------------------- |
+| `DATABASE_URL`                            | Postgres 连接串（默认 `postgresql+psycopg://ra:ra@localhost:5432/ra_agent`） |
+| `REDIS_URL`                               | Redis 连接串                                                             |
+| `LLM_API_KEY`                             | 系统级默认模型的 API Key                                                      |
+| `EMBEDDING_API_KEY`                       | 云端嵌入模型密钥（不配则走本地 / 自建端点）                                               |
+| `EMBEDDING_DEFAULT_PROVIDER`              | `local` / `doubao` / `ollama` 等                                       |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 出网代理（无代理环境留空即可）                                                       |
 
 完整行为参数（检索 k 值、父块聚合、LLM 重试、上下文窗口、嵌入端点目录等）均在 `config/settings.yaml`，带注释可直接改。
 
@@ -169,8 +167,6 @@ ra-agent/
 ├── servers/research_server.py   # 示例 MCP Server（联网搜索/学术检索/网页阅读）
 ├── alembic/                 # 数据库迁移
 ├── tests/                   # pytest 全量测试（30 个文件、260 个用例）
-├── docs/                    # 设计文档与实现教程（争鸣社 brainstorm / 格致会讲 seminar 两支团队）
-├── rag_test/                # RAG 离线评估工程：实验脚本 + 超参网格实验报告
 ├── ra-web/index.html        # 单页前端（服务同源托管）：对话/知识库/双团队多 Agent/记忆/追踪
 ├── docker-compose.yml       # 基础设施：Postgres 16 + Redis 7
 ├── Dockerfile               # 应用镜像（python:3.10-slim）
@@ -199,15 +195,6 @@ DATABASE_URL=postgresql+psycopg://ra:ra@localhost:5432/ra_agent_test pytest test
 - `eval4_run.py` + `eval4_hparam_results.json`：分块大小、overlap、k 值、融合权重的超参网格实验与结果存档；
 - `build_golden_from_feedback.py`：把线上用户反馈沉淀为 golden 评测集；
 - `hparam_reeval_tokenizer_v5.md`：更换分词器后的复评结论。
-
-## 设计亮点
-
-- **降级纪律**：MCP 失联 → 空工具目录、路由解析失败 → 全库检索、压缩 / 记忆失败 → 静默跳过……增强能力的任何故障都退化为「少一点智能」，而不是 500。
-- **幂等与自愈**：写操作设计为「再来一次结果不变」；启动时幂等建表补列、自动复位进程中断遗留的非终态知识库。
-- **三段式存储一致性**：KB 元数据在 Postgres、chunk 文本在本地磁盘、向量在 Chroma，逐文件事务推进，崩溃只留下可恢复状态。
-- **供应商前缀缓存工程**：检索上下文改为末尾消息注入，system 与对话历史跨轮字节级稳定，让厂商 KV prefix cache 真正命中，摊薄 token 成本与时延。
-- **四大抽象接口**：LLM / Embedding / VectorStore / BM25 均为可替换实现，业务不感知具体厂商。
-- **双团队多 Agent**：争鸣社（对抗收敛）与格致会讲（议程研讨）共享同一套 agent 运行时（事件前缀参数化、空完成重试、强制收尾轮、每角色独立模型）；会讲采用议程驱动编排，步数确定、降级路径全部确定性化。
 
 ## Roadmap
 

@@ -9,5 +9,5 @@ PLAN.md
 tutorials/
 manual_test.py
 docs/
-_route_probe.py
+rag_test/
 docker-compose.api.yml
