@@ -21,6 +21,7 @@ from app.core.db import SessionLocal
 from app.core.deps import get_current_user
 from app.core.events import clear_event_sink, set_event_sink
 from app.core.logging import get_logger
+from app.core.team_ctx import set_agent_team
 from app.graph.workflow import aget_state_retry
 from app.graph.brainstorm import (DEBATER_IDS, ROLE_ORIENTATION,
                                   _evidence_digest, _positions_digest,
@@ -217,6 +218,7 @@ async def brainstorm_stream(req: BrainstormRequest, request: Request,
     bs_agent_start / bs_agent_end / bs_token / bs_reasoning /
     bs_moderator / bs_plan，最终 done。
     """
+    set_agent_team("debate")     # 团队身份：只检索普通库 + 本队沉淀库
     uid = user.id
     graph = request.app.state.brainstorm_graph
     settings = request.app.state.settings
@@ -378,6 +380,7 @@ async def brainstorm_ask(session_id: str, req: BrainstormAskRequest,
     只读回放 checkpoint，不改变会话状态；追问不计入头脑风暴预算。
     事件流：ask_start（agent/model）→ token → done / error。
     """
+    set_agent_team("debate")     # 追问与主流程同一团队身份
     with SessionLocal() as db:
         row = db.get(BrainstormSession, session_id)
     if row is None:

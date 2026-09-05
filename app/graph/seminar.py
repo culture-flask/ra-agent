@@ -114,7 +114,7 @@ async def build_seminar_graph(ctx: WorkflowContext):
     builder.add_node("aggregate", aggregate_node)
     builder.add_node("rapporteur", make_rapporteur_node(ctx))
     for rid in SCHOLAR_IDS:
-        # 工厂在构建期闭包绑定 ctx（争鸣社实测教训：LangGraph 节点只传 state）
+        # 工厂在构建期闭包绑定 ctx
         builder.add_node(f"read_{rid}", make_read_node(ctx, rid))
         builder.add_node(f"propose_{rid}", make_propose_node(ctx, rid))
         builder.add_node(f"improve_{rid}", make_improve_node(ctx, rid))
@@ -205,8 +205,13 @@ def _insight_digest(state: SeminarState, window: int = 20) -> str:
                      f"（{i.get('origin')}）" for i in items)
 
 
-def _cards_digest(cards: list[dict], limit: int = 200) -> str:
-    """构想卡摘要：每卡截 limit 字（执笔人用更长版本）。"""
+def _cards_digest(cards: list[dict], limit: int = 500) -> str:
+    """构想卡摘要：每卡各字段截 limit 字。
+
+    存库上限（panel/merge/improve 解析时截断）：标题 120、灵感 300、
+    假设 500、风险 300、**验证思路 5500**——limit < 5500 时验证思路
+    展示不全，消费方按需选择：评审 2000（可行性打分要见验证深度）、
+    执笔 5500（全文）。"""
     if not cards:
         return "（无）"
     out = []
@@ -215,7 +220,8 @@ def _cards_digest(cards: list[dict], limit: int = 200) -> str:
         out.append(f"[{c.get('card_id', '?')}] {c.get('author', '?')}{builds}："
                    f"{c.get('title', '')}\n"
                    f"假设：{str(c.get('hypothesis', ''))[:limit]}\n"
-                   f"验证：{str(c.get('validation_sketch', ''))[:limit]}")
+                   f"验证：{str(c.get('validation_sketch', ''))[:limit]}\n"
+                   f"风险：{str(c.get('risk', ''))[:limit]}")
     return "\n\n".join(out)
 
 
@@ -236,7 +242,7 @@ def make_curate_node(ctx: WorkflowContext):
     async def curate_node(state: SeminarState) -> dict:
         """主席规划全场：领域定位 + 邻近领域选定 + 双重差异化任务单。
 
-        解析失败 → 通用任务单 + 角色默认取向（争鸣社 prepare 同纪律）。
+        解析失败 → 通用任务单 + 角色默认取向。
         """
         emit("sem_curate", {"topic": state["topic"][:100]})
         positioning, adjacent = "", ""
@@ -293,18 +299,18 @@ def make_read_node(ctx: WorkflowContext, role_id: str):
         evidence: list[dict] = []
         try:
             kbs = await asyncio.to_thread(ctx.kb_service.list_queryable_kbs,
-                                          state["user_id"])
+                                          state["user_id"], team="seminar")
             for kb in kbs:
                 try:
                     hits = await asyncio.to_thread(
-                        ctx.kb_service.search, kb.kb_id, state["topic"], k=3,
+                        ctx.kb_service.search, kb.kb_id, state["topic"], k=15,
                         user_id=state["user_id"], mode="hybrid")
                 except Exception as e:              # 单库隔离
                     logger.warning("sem read kb search failed kb=%s: %s",
                                    kb.name, e)
                     continue
                 for h in hits:
-                    text = str(h.get("text", ""))[:800]
+                    text = str(h.get("text", ""))
                     meta = h.get("metadata") or {}
                     src = h.get("source") or meta.get("source") or "未知来源"
                     if meta.get("page"):
@@ -312,7 +318,7 @@ def make_read_node(ctx: WorkflowContext, role_id: str):
                     kb_lines.append(f"[{kb.name} / {src}] {text}")
                     evidence.append({"id": f"{role_id}-{len(evidence)}",
                                      "found_by": role_id, "kb": kb.name,
-                                     "source": src, "digest": text[:120]})
+                                     "source": src, "digest": text[:400]})
             if evidence:
                 emit("sem_retrievals", {"agent": role_id, "results": [
                     {"kb_name": e["kb"], "source": e["source"],
@@ -339,7 +345,7 @@ def make_read_node(ctx: WorkflowContext, role_id: str):
             fail_reason = _short_reason(e)
             content, used, stopped = "", 0, False
 
-        # 停止 ≠ 失败（争鸣社实测语义，原样继承）
+        # 停止 ≠ 失败
         if content.strip():
             body = content[:max_chars]
         elif stopped:
@@ -444,16 +450,16 @@ def make_qa_node(ctx: WorkflowContext):
             emit("sem_agent_start", {"agent": asker, "phase": "qa",
                                      "target": presenter,
                                      "model": getattr(acfg, "model_id", "") or ""})
-            own_note = next((n.get("content", "")[:300] for n in
+            own_note = next((n.get("content", "") for n in
                              state.get("reading_notes") or []
                              if n.get("agent_id") == asker), "")
             ask_sys = ASK_SYSTEM.format(
                 name=arole["name"], role_id=asker,
                 orientation=SCHOLAR_ORIENTATION[asker],
                 presenter=prole["name"])
-            ask_human = (f"{prole['name']}的汇报：\n{presentation[:1200]}\n\n"
-                         f"你的研读笔记摘要：\n{own_note}\n\n"
-                         f"已提出的洞见池：\n{_insight_digest(state, 10)}\n\n"
+            ask_human = (f"{prole['name']}的汇报：\n{presentation[:1500]}\n\n"
+                         f"你的研读笔记：\n{own_note}\n\n"
+                         f"已提出的洞见池：\n{_insight_digest(state, 20)}\n\n"
                          "请提出你的问题。")
             try:
                 question, used, stopped = await _agent_speak(
@@ -483,7 +489,7 @@ def make_qa_node(ctx: WorkflowContext):
                 asker=arole["name"])
             ans_human = (f"{arole['name']}的问题：\n{question}\n\n"
                          f"你的研读笔记：\n"
-                         f"{next((n.get('content', '') for n in state.get('reading_notes') or [] if n.get('agent_id') == presenter), '')[:1200]}\n\n"
+                         f"{next((n.get('content', '') for n in state.get('reading_notes') or [] if n.get('agent_id') == presenter), '')[:1500]}\n\n"
                          "请回答。")
             try:
                 answer, used, stopped = await _agent_speak(
@@ -512,7 +518,7 @@ def make_qa_node(ctx: WorkflowContext):
                 ctx, state,
                 CHAIR_INSIGHT_PROMPT.format(presenter=prole["name"],
                                             presentation=presentation[:1500],
-                                            qa_pairs=qa_pairs[:3000]),
+                                            qa_pairs=qa_pairs[:20000]),
                 "请提取洞见并输出 JSON。", temperature=0.2, prefix="sem_")
             used_total += used
             data = _loads_fuzzy(text) or {}
@@ -540,8 +546,11 @@ def make_qa_node(ctx: WorkflowContext):
 def make_propose_node(ctx: WorkflowContext, role_id: str):
     async def propose_node(state: SeminarState) -> dict:
         """各学者基于洞见池+自己的笔记提出构想卡（JSON 数组输出）。"""
+        # 并行 fan-out 节点（编排纪律）：绝不写单值 channel（stopped）——
+        # 四路同时返回会 InvalidUpdateError。停止语义走 is_stopped 注册表，
+        # 本节点只负责"少产出/不产出"，收尾由 rapporteur 统一处理。
         if is_stopped(state["session_id"]):
-            return {"stopped": True}
+            return {}
         rmap = _role_map(state)
         role = rmap[role_id]
         cfg = _role_cfg(ctx, state, role_id)
@@ -557,7 +566,7 @@ def make_propose_node(ctx: WorkflowContext, role_id: str):
             orientation=SCHOLAR_ORIENTATION[role_id], directive=directive,
             max_cards=max_cards)
         human = (f"议题：{state['topic']}\n\n"
-                 f"【你的研读笔记】\n{own[:1200]}\n\n"
+                 f"【你的研读笔记】\n{own}\n\n"
                  f"【全场洞见池】\n{_insight_digest(state)}\n\n"
                  "请提出你的研究构想。")
         try:
@@ -575,12 +584,13 @@ def make_propose_node(ctx: WorkflowContext, role_id: str):
                       "title": str(c.get("title", ""))[:120],
                       "inspiration": str(c.get("inspiration", ""))[:300],
                       "hypothesis": str(c.get("hypothesis", ""))[:500],
-                      "validation_sketch": str(c.get("validation_sketch", ""))[:500],
+                      "validation_sketch": str(c.get("validation_sketch", ""))[:5500],
                       "risk": str(c.get("risk", ""))[:300]}
                      for c in data[:max_cards] if isinstance(c, dict)
                      and c.get("title")]
-        return {"idea_cards": cards, "token_budget_used": used,
-                **({"stopped": True} if stopped else {})}
+        # 并行节点不写单值 channel（stopped）：停止由注册表承载，
+        # 本阶段的"少产出"由路由与 rapporteur 兜底
+        return {"idea_cards": cards, "token_budget_used": used}
     return propose_node
 
 
@@ -594,7 +604,7 @@ def make_merge_node(ctx: WorkflowContext):
             cards_json = json.dumps(
                 [{"i": i, **c} for i, c in enumerate(raw)], ensure_ascii=False)
             text, used = await _llm_text(
-                ctx, state, MERGE_PROMPT.format(cards=cards_json[:6000]),
+                ctx, state, MERGE_PROMPT.format(cards=cards_json[:150000]),
                 "请合并定稿并输出 JSON。", temperature=0.2, prefix="sem_")
             data = _loads_fuzzy(text) or {}
             if isinstance(data.get("merged_cards"), list):
@@ -607,7 +617,7 @@ def make_merge_node(ctx: WorkflowContext):
                                   "inspiration": str(c.get("inspiration", ""))[:300],
                                   "hypothesis": str(c.get("hypothesis", ""))[:500],
                                   "validation_sketch":
-                                      str(c.get("validation_sketch", ""))[:500],
+                                      str(c.get("validation_sketch", ""))[:5500],
                                   "risk": str(c.get("risk", ""))[:300]})
         except Exception as e:
             logger.warning("seminar merge failed, code fallback: %s", e)
@@ -622,8 +632,9 @@ def make_merge_node(ctx: WorkflowContext):
 def make_improve_node(ctx: WorkflowContext, role_id: str):
     async def improve_node(state: SeminarState) -> dict:
         """建构轮：各学者必须改进至少一张**他人的**卡（builds_on 谱系）。"""
+        # 同 propose：并行节点不写单值 channel（stopped）
         if is_stopped(state["session_id"]):
-            return {"stopped": True}
+            return {}
         rmap = _role_map(state)
         role = rmap[role_id]
         cfg = _role_cfg(ctx, state, role_id)
@@ -636,7 +647,7 @@ def make_improve_node(ctx: WorkflowContext, role_id: str):
         system = IMPROVE_SYSTEM.format(
             name=role["name"], role_id=role_id,
             orientation=SCHOLAR_ORIENTATION[role_id],
-            cards=_cards_digest(others, limit=250),
+            cards=_cards_digest(others, limit=500),
             insights=_insight_digest(state, 15))
         human = "请提出你对他人构想的改进版。"
         try:
@@ -662,10 +673,10 @@ def make_improve_node(ctx: WorkflowContext, role_id: str):
                               "improvement": str(c.get("improvement", ""))[:300],
                               "hypothesis": str(c.get("hypothesis", ""))[:500],
                               "validation_sketch":
-                                  str(c.get("validation_sketch", ""))[:500],
+                                  str(c.get("validation_sketch", ""))[:5500],
                               "risk": str(c.get("risk", ""))[:300]})
-        return {"idea_cards": cards, "token_budget_used": used,
-                **({"stopped": True} if stopped else {})}
+        # 同 propose：并行节点不写单值 channel（stopped）
+        return {"idea_cards": cards, "token_budget_used": used}
     return improve_node
 
 
@@ -680,7 +691,7 @@ def make_panel_node(ctx: WorkflowContext):
         try:
             cards_json = json.dumps(raw, ensure_ascii=False, default=str)
             text, used = await _llm_text(
-                ctx, state, MERGE_PROMPT.format(cards=cards_json[:8000]),
+                ctx, state, MERGE_PROMPT.format(cards=cards_json[:150000]),
                 "请合并定稿全部卡片并输出 JSON。", temperature=0.2,
                 prefix="sem_")
             data = _loads_fuzzy(text) or {}
@@ -691,12 +702,13 @@ def make_panel_node(ctx: WorkflowContext):
                                       "author": str(c.get("author", "?"))[:20],
                                       "builds_on": c.get("builds_on"),
                                       "title": str(c.get("title", ""))[:120],
-                                      "improvement": c.get("improvement"),
+                                      "improvement":
+                                          str(c.get("improvement") or "")[:300],
                                       "inspiration":
                                           str(c.get("inspiration", ""))[:300],
                                       "hypothesis": str(c.get("hypothesis", ""))[:500],
                                       "validation_sketch":
-                                          str(c.get("validation_sketch", ""))[:500],
+                                          str(c.get("validation_sketch", ""))[:5500],
                                       "risk": str(c.get("risk", ""))[:300]})
         except Exception as e:
             logger.warning("seminar panel failed, code fallback: %s", e)
@@ -713,8 +725,9 @@ def make_panel_node(ctx: WorkflowContext):
 def make_score_node(ctx: WorkflowContext, role_id: str):
     async def score_node(state: SeminarState) -> dict:
         """各学者对全部卡片独立打分（并行 fan-out，互不可见）。"""
+        # 同 propose：并行节点不写单值 channel（stopped）
         if is_stopped(state["session_id"]):
-            return {"stopped": True}
+            return {}
         rmap = _role_map(state)
         role = rmap[role_id]
         cfg = _role_cfg(ctx, state, role_id)
@@ -724,7 +737,7 @@ def make_score_node(ctx: WorkflowContext, role_id: str):
         system = SCORE_SYSTEM.format(
             name=role["name"], role_id=role_id,
             orientation=SCHOLAR_ORIENTATION[role_id],
-            cards=_cards_digest(cards, limit=250))
+            cards=_cards_digest(cards, limit=2000))
         human = "请独立评审全部构想卡。"
         try:
             text, used, stopped = await _agent_speak(
@@ -756,8 +769,8 @@ def make_score_node(ctx: WorkflowContext, role_id: str):
                                "risk_control": _dim("risk_control"),
                                "comment": str(s.get("comment", ""))[:300]})
         emit("sem_review", {"agent": role_id, "scores": scores})
-        return {"review_scores": scores, "token_budget_used": used,
-                **({"stopped": True} if stopped else {})}
+        # 同 propose：并行节点不写单值 channel（stopped）
+        return {"review_scores": scores, "token_budget_used": used}
     return score_node
 
 
@@ -826,7 +839,7 @@ def _fallback_report(state: SeminarState) -> str:
     if state.get("insight_board"):
         parts.append("## 洞见池\n" + _insight_digest(state, 50))
     if state.get("card_registry"):
-        parts.append("## 构想卡\n" + _cards_digest(state["card_registry"], 400))
+        parts.append("## 构想卡\n" + _cards_digest(state["card_registry"], 500))
     if state.get("idea_ranking"):
         rows = "\n".join(f"- {r['card_id']}（{r.get('author')}）总分 {r['total']}"
                          f" 分歧度 {r['divergence']}：{r['title']}"
@@ -870,9 +883,9 @@ def make_rapporteur_node(ctx: WorkflowContext):
         system = RAPPORTEUR_PROMPT.format(
             topic=state["topic"], notes=notes,
             insights=_insight_digest(state, 50),
-            cards=_cards_digest(state.get("card_registry") or [], 400),
+            cards=_cards_digest(state.get("card_registry") or [], 5500),
             ranking=ranking_text, open_questions=open_qs)
-        # 执笔人文档工具子集（争鸣社 synthesis 同款：产出资产，不再调研）
+        # 执笔人文档工具子集（产出资产，不再调研）
         def _schema_name(t: dict) -> str:
             return t.get("name") or (t.get("function") or {}).get("name") or ""
         doc_tools = []

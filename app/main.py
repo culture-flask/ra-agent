@@ -11,6 +11,7 @@ from app.abstractions.llm import LLMService
 from app.api.auth import router as auth_router
 from app.api.brainstorm import router as brainstorm_router
 from app.api.seminar import router as seminar_router
+from app.api.deep_research import router as deep_research_router   # 溯源社：深度调研式多 agent
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.feedbacks import router as feedbacks_router
@@ -27,6 +28,7 @@ from app.core.net import apply_proxy
 from app.core.tracing import Tracer
 from app.graph.brainstorm import build_brainstorm_graph
 from app.graph.seminar import build_seminar_graph
+from app.graph.deep_research import build_deep_research_graph      # 溯源社：深度调研式多 agent
 from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter
@@ -152,6 +154,8 @@ async def lifespan(app: FastAPI):
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver
     app.state.brainstorm_graph = await build_brainstorm_graph(ctx)   # 争鸣社子图（独立 checkpointer）
     app.state.seminar_graph = await build_seminar_graph(ctx)   # 会讲子图
+    # 溯源社子图（独立 checkpointer：AsyncPostgresSaver 绑定事件循环，不可跨图共享实例）
+    app.state.deep_research_graph = await build_deep_research_graph(ctx)
     app.state.kb_service = kb_service
     app.state.tracer = tracer
     app.state.memory_service = memory_service
@@ -171,6 +175,7 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(brainstorm_router)
 app.include_router(seminar_router)
+app.include_router(deep_research_router)   # 溯源社：深度调研式多 agent
 app.include_router(conversations_router)
 app.include_router(kbs_router)
 app.include_router(traces_router)

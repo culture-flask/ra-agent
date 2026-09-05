@@ -1,14 +1,14 @@
 """头脑风暴子图：多 Agent 相互对话、集思广益产出科研方案。
 
-拓扑（对应设计文档 §3/§5）：
+拓扑（对应设计文档 ）：
   START → prepare ──(Send fan-out)──▶ research_{innovator|critic|methodologist|practitioner}
                                         │（四路并行，各自检索+调工具+写立场书）
                                         ▼
-              ┌──────────────────── moderator（主持人调度）◀────┐
+              ┌──────────────────── moderator（主持人调度）◀───────┐
               │                        │                        │
-              │  next_speaker=""       │ next_speaker="critic"   │
+              │  next_speaker=""       │ next_speaker="critic"  │
               ▼                        ▼                        │
-           synthesis ──▶ END      agent_{role}（辩手发言）───────┘
+           synthesis ──▶ END      agent_{role}（辩手发言）────────┘
 
 纪律（与主链路一致）：工具失败→无工具辩论；单 agent 失败→缺席声明继续；
 预算耗尽/用户停止→立即进 synthesis。绝不让 brainstorm 变 500。
@@ -167,24 +167,24 @@ def make_research_node(ctx: WorkflowContext, role_id: str):
             orientation=ROLE_ORIENTATION[role_id],
             directive=directive, max_chars=max_chars)
 
-        # 1) 知识库直接检索：对每个可见库用「议题」搜 top3（混合模式），
+        # 1) 知识库直接检索：对每个可见库用「议题」搜 top15（混合模式），
         #    结果进共享证据池 + 拼进调研 prompt（不依赖模型自觉调工具）
         kb_lines: list[str] = []
         evidence: list[dict] = []
         try:
             kbs = await asyncio.to_thread(ctx.kb_service.list_queryable_kbs,
-                                          state["user_id"])
+                                          state["user_id"], team="debate")
             for kb in kbs:
                 try:
                     hits = await asyncio.to_thread(
-                        ctx.kb_service.search, kb.kb_id, state["topic"], k=3,
+                        ctx.kb_service.search, kb.kb_id, state["topic"], k=15,
                         user_id=state["user_id"], mode="hybrid")
                 except Exception as e:          # 单库隔离：坏库跳过
                     logger.warning("bs research kb search failed kb=%s: %s",
                                    kb.name, e)
                     continue
                 for h in hits:
-                    text = str(h.get("text", ""))[:800]
+                    text = str(h.get("text", ""))
                     # 来源与主链路同款回退：Chroma 命中的 source 在 metadata 里
                     meta = h.get("metadata") or {}
                     src = h.get("source") or meta.get("source") or "未知来源"
@@ -239,7 +239,7 @@ def make_research_node(ctx: WorkflowContext, role_id: str):
                               **({"aborted": True}
                                  if stopped and not content.strip() else {})})
         # 只返回增量：positions/evidence_pool/token_budget_used 全是 add reducer。
-        # ⚠️ 不能返回 stopped：它是单值 channel，四路并行写直接 InvalidUpdateError；
+        # 不能返回 stopped：它是单值 channel，四路并行写直接 InvalidUpdateError；
         # 停止语义由 is_stopped(sid) 注册表承载（moderator/synthesis 各自查表）。
         return {"positions": [position], "evidence_pool": evidence,
                 "token_budget_used": used}
@@ -273,7 +273,7 @@ async def moderator_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
 
     # ④ 主持人 LLM 判定
     notes = state.get("moderator_notes") or {}
-    window = int(getattr(ctx.settings, "brainstorm_transcript_window", 6))
+    window = int(getattr(ctx.settings, "brainstorm_transcript_window", 8))
     prompt = MODERATOR_PROMPT.format(
         topic=state["topic"],
         positions=_positions_digest(state),
@@ -375,7 +375,7 @@ def make_agent_node(ctx: WorkflowContext, role_id: str):
     return agent_node
 
 
-# ---------- 上下文摘要（控窗口占用的三把刀） ----------
+# ---------- 上下文摘要（控窗口占用） ----------
 
 def _positions_full(state: BrainstormState) -> str:
     """立场书全文（撰稿人专用：立场书本就 ≤500 字/份，全文注入成本可忽略，
@@ -485,7 +485,7 @@ async def synthesis_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
         content, used, _ = await _agent_speak(
             ctx, state, "writer", system,
             "请把全场讨论收敛为一份唯一、明确、可执行的研究方案（不是观点综述）；"
-            "完成后如需保存草稿或导出引文可调用文档工具。", 0.4, tools=doc_tools,
+            "完成后如需保存草稿或导出引文可调用文档工具。", 0.3, tools=doc_tools,
             tool_loop_max=3, cfg=wcfg)
         if not content.strip():
             raise RuntimeError("empty proposal")

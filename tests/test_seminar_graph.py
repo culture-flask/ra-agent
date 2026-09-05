@@ -180,3 +180,36 @@ def test_seminar_budget_exhausted_skips_to_rapporteur():
     assert len(presents) < 4                       # 议程被截断
     assert result["final_proposal"]                # 执笔人照常执行
     assert result.get("budget_exhausted") is True
+
+
+def test_seminar_stop_during_propose_no_invalid_update():
+    """回归（§5.2 纪律）：停止恰好落在 propose 并行段——四个学者节点同时
+    返回 stopped 曾把单值 channel 打爆（InvalidUpdateError）。并行节点
+    不得写单值字段，停止语义只走 is_stopped 注册表。"""
+    from app.core.cancel import request_stop, clear_stop
+
+    class StopOnProposeModel(SeminarFakeModel):
+        async def astream(self, messages):
+            system = str(next((m.content for m in messages
+                               if getattr(m, "type", "") == "system"), ""))
+            if "构想工作坊" in system:          # PROPOSE_SYSTEM 的标志串
+                request_stop("sem-t4")          # 模拟用户在构想阶段点停止
+            for c in super().astream(messages):
+                yield c
+
+    class Service(FakeSemLLMService):
+        def __init__(self):
+            self._model = StopOnProposeModel()
+
+        def get_chat_model(self, user_id, temperature=None):
+            return self._model
+
+    base = _make_ctx()
+    ctx = WorkflowContext(base.settings, Service(), base.kb_service)
+    graph = _run(build_seminar_graph(ctx))
+    clear_stop("sem-t4")
+    result = _run(graph.ainvoke(
+        _sem_initial("u1", "sem-t4", "议题"),
+        config={"configurable": {"thread_id": "sem-t4"}, "recursion_limit": 200}))
+    assert result["stopped"] is True              # rapporteur 收尾置位
+    assert result["final_proposal"]               # 汇编降级稿仍在

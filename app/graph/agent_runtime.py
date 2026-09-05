@@ -79,14 +79,30 @@ async def llm_text(ctx: WorkflowContext, state: dict,
                HumanMessage(content=human_content)]
     cfg = effective_cfg(ctx, state["user_id"])
     if cfg is not None:
-        resp, usage, stopped = await native_round(
-            cfg, payload, None, temperature, sid,
-            token_event=f"{prefix}internal",
-            reasoning_event=f"{prefix}internal",
-            stream_events=False)          # 控制流不打字机
-        if stopped:
-            raise RuntimeError("stopped")
-        return str(resp.content or ""), int((usage or {}).get("total_tokens") or 0)
+        # 空完成防御（与 agent_speak / generate 同纪律）：部分网关偶发
+        # "连上了但零内容"的完成。控制类调用若静默返回空串，下游会把失败
+        # 当正常——实例：溯源社撰写人拿到空 JSON → 引言/结论全空 → 整场
+        # 报告降级成汇编稿。指数退避整轮重试，耗尽仍空交由调用方兜底。
+        EMPTY_RETRY_MAX = 2
+        used = 0
+        resp = None
+        for attempt in range(EMPTY_RETRY_MAX + 1):
+            resp, usage, stopped = await native_round(
+                cfg, payload, None, temperature, sid,
+                token_event=f"{prefix}internal",
+                reasoning_event=f"{prefix}internal",
+                stream_events=False)          # 控制流不打字机
+            used += int((usage or {}).get("total_tokens") or 0)
+            if stopped:
+                raise RuntimeError("stopped")
+            if str(resp.content or "").strip():
+                return str(resp.content), used
+            if attempt < EMPTY_RETRY_MAX:
+                logger.warning("llm_text empty completion (attempt %d/%d) "
+                               "model=%s", attempt + 1, EMPTY_RETRY_MAX,
+                               cfg.model_id)
+                await asyncio.sleep(0.5 * (2 ** attempt))
+        return str(resp.content or ""), used
     # 回退路径：测试假服务（与主图 generate 的回退条件一致）
     import asyncio as _asyncio
     model = await _asyncio.to_thread(ctx.llm_service.get_chat_model,

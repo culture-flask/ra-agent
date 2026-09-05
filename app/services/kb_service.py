@@ -110,6 +110,14 @@ def _safe_filename(name: str) -> str:
 # 每库最多保留的文档数（超过删最旧，防重复膨胀与召回稀释）
 ARCHIVE_KEEP_DOCS = 10
 
+# 团队 → 本团队自动沉淀库名（知识飞轮）：各团队只读自己往期的方案/报告，
+# 三支团队互相隔离（辩论式看不到研讨式/深度调研的沉淀库，反之亦然）
+TEAM_ARCHIVE_KB_NAMES = {
+    "debate": "辩论式agent纪要",
+    "seminar": "研讨式agent纪要",
+    "deep_research": "深度调研agent纪要",
+}
+
 
 class KBService:
     """两级知识库管理：元数据在 Postgres，chunk 在本地盘，向量在 Chroma。"""
@@ -262,17 +270,19 @@ class KBService:
                 and user_id not in (kb.retrieval_disabled_users or []))
 
     def list_queryable_kbs(self, user_id: str | None,
-                           include_archives: bool = True) -> list[KnowledgeBase]:
+                           team: str | None = None) -> list[KnowledgeBase]:
         """对话可检索的库：可见性基础上排除该用户自己禁用的（per-user）。
 
-        include_archives=False 额外排除多 agent 自动沉淀库（kind='archive'，
-        如辩论式agent纪要/研讨式agent纪要）——普通对话的检索目录不应主动翻旧方案，
-        沉淀库只服务多 agent 团队的研读/调研与知识库检索工具（知识飞轮）。"""
+        沉淀库（kind='archive'）按团队隔离：
+        - team=None（普通对话/未声明身份）→ 只见普通库，沉淀库全部不可见：
+          普通对话的检索目录不主动翻旧方案（安全默认，漏设也不泄）
+        - team=debate/seminar/deep_research → 普通库 + 仅本团队的沉淀库
+          （知识飞轮：团队研读/调研自己往期的产出）"""
         kbs = [kb for kb in self.list_kbs(user_id)
                if self.kb_queryable(kb, user_id)]
-        if not include_archives:
-            kbs = [kb for kb in kbs if kb.kind != "archive"]
-        return kbs
+        archive_name = TEAM_ARCHIVE_KB_NAMES.get(team) if team else None
+        return [kb for kb in kbs
+                if kb.kind != "archive" or kb.name == archive_name]
 
     def set_retrieval(self, kb_id: str, user_id: str,
                       enabled: bool) -> KnowledgeBase:

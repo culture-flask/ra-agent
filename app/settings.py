@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     data_dir: Path = Path("./data")
+    output_dir: Path = Path("./output")   # 多 agent 产出文件（save_document/export_bibtex）
     database_url: str = "postgresql+psycopg://ra:ra@localhost:5432/ra_agent"
     redis_url: str = "redis://localhost:6379/0"
     vector_store_provider: str = "chroma"
@@ -72,6 +73,23 @@ class Settings(BaseSettings):
         {"id": "visitor", "name": "访问学者", "temperature": 0.9},
     ])
 
+    # ---------- 溯源社（深度调研式多 agent） ----------
+    deep_research_scout_tool_loop_max: int = 8      # 初调阶段工具子循环上限
+    deep_research_min_sections: int = 3             # 章节数下限（快速模式固定 3）
+    deep_research_max_sections: int = 5             # 章节数上限
+    deep_research_chapter_min_words: int = 800      # 单章草稿字数下限
+    deep_research_chapter_max_words: int = 1500     # 单章草稿字数上限
+    deep_research_tool_loop_max: int = 10           # 分章深研工具子循环上限
+    deep_research_revise_tool_loop_max: int = 5     # 修订阶段工具子循环上限（低于深研：只补缺口）
+    deep_research_token_budget: int = 20000000      # 单场总 token 预算（硬熔断；publish 不受阻断）
+    deep_research_roles: list = Field(default_factory=lambda: [
+        {"id": "researcher",  "name": "课题研究员", "temperature": 0.4},
+        {"id": "planner",     "name": "研究编辑",   "temperature": 0.3},
+        {"id": "reviewer",    "name": "审稿人",     "temperature": 0.2},
+        {"id": "reviser",     "name": "修订员",     "temperature": 0.3},
+        {"id": "writer",      "name": "报告撰写人", "temperature": 0.4},
+    ])
+
     @classmethod
     def load(cls) -> "Settings":
         """加载配置。优先级： 环境变量/.env > settings.ymal > 类默认值
@@ -89,6 +107,7 @@ class Settings(BaseSettings):
                 "host" : raw["app"]["host"],
                 "port" : raw["app"]["port"],
                 "data_dir" : raw["app"]["data_dir"],
+                "output_dir" : raw.get("app", {}).get("output_dir", "./output"),
                 "database_url" : raw["database"]["url"],
                 "redis_url": raw["redis"]["url"],
                 "vector_store_provider": raw["vector_store"]["provider"],
@@ -125,6 +144,15 @@ class Settings(BaseSettings):
                 "seminar_cards_per_scholar": raw.get("seminar", {}).get("cards_per_scholar", 2),
                 "seminar_token_budget": raw.get("seminar", {}).get("token_budget", 20000000),
                 "seminar_roles": raw.get("seminar", {}).get("roles", []),
+                "deep_research_scout_tool_loop_max": raw.get("deep_research", {}).get("scout_tool_loop_max", 8),
+                "deep_research_min_sections": raw.get("deep_research", {}).get("min_sections", 3),
+                "deep_research_max_sections": raw.get("deep_research", {}).get("max_sections", 5),
+                "deep_research_chapter_min_words": raw.get("deep_research", {}).get("chapter_min_words", 800),
+                "deep_research_chapter_max_words": raw.get("deep_research", {}).get("chapter_max_words", 1500),
+                "deep_research_tool_loop_max": raw.get("deep_research", {}).get("tool_loop_max", 10),
+                "deep_research_revise_tool_loop_max": raw.get("deep_research", {}).get("revise_tool_loop_max", 5),
+                "deep_research_token_budget": raw.get("deep_research", {}).get("token_budget", 20000000),
+                "deep_research_roles": raw.get("deep_research", {}).get("roles", []),
             }
             for key, value in yaml_values.items():
                 if key not in merged.model_fields_set:

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from langchain_core.utils.function_calling import convert_to_openai_function
 
+from app.core.team_ctx import get_agent_team
 from app.core.tracing import Tracer
 from app.mcp.host import MCPHost
 from app.services.kb_service import join_document_text
@@ -123,12 +124,13 @@ def _native_tool_specs() -> list[dict]:
                 "把一段 Markdown 内容保存为用户文件区的文档文件。"
                 "适用于头脑风暴撰稿人保存：最终科研方案、分节草稿、"
                 "辩论纪要、参考文献清单。文件名必须以 .md 结尾。"
-                "同名文件会被覆盖——重写前请确认。"),
+                "系统会自动在文件名前加「日期-时分」时间戳，无需自己加。"),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "filename": {"type": "string",
-                                 "description": "文件名，如 research-proposal.md"},
+                                 "description": "中文主题名，如 神经区分器研读报告.md"
+                                 "（系统落盘时自动加日期时间前缀，不要自己加）"},
                     "content": {"type": "string",
                                 "description": "Markdown 全文"},
                 },
@@ -146,7 +148,9 @@ def _native_tool_specs() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "filename": {"type": "string",
-                                 "description": "输出文件名，如 refs.bib"},
+                                 "description": "输出文件名（中文主题名），"
+                                 "如 多模态RAG可靠性文献.bib"
+                                 "（系统落盘时自动加日期时间前缀，不要自己加）"},
                     "entries": {"type": "array", "items": {"type": "object"},
                                 "description": "引文列表，每条含 "
                                 "title/authors(list)/year/venue"},
@@ -163,7 +167,9 @@ async def _list_kb_files(args: dict, user_id: str, kb_service) -> dict:
 
     带显式 file_count。
     """
-    kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id)
+    # 团队身份决定沉淀库可见性：普通对话(team=None)只普通库；团队只见自己的
+    kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id,
+                                  team=get_agent_team())
     out = []
     for kb in kbs:
         docs = await asyncio.to_thread(kb_service.list_documents, kb.kb_id)
@@ -190,8 +196,9 @@ async def _get_local_document(args: dict, user_id: str, kb_service) -> dict:
         return {"error": "缺少必要参数 kb_id / file_name"
                         "（不确定文件名时先调 list_kb_files）"}
 
-    # 权限：必须是当前用户可检索的库（禁检索的库取不了原文）
-    kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id)
+    # 权限：必须是当前用户可检索的库（禁检索的库取不了原文；沉淀库按团队隔离）
+    kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id,
+                                  team=get_agent_team())
     kb = next((k for k in kbs if k.kb_id == kb_id), None)
     if kb is None:
         return {"error": f"知识库 {kb_id} 不存在或当前用户不可检索"}
@@ -252,7 +259,9 @@ async def _search_knowledge_base(args: dict, user_id: str, kb_service) -> dict:
         k = 3
     kb_name = (args.get("kb_name") or "").strip()
 
-    kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id)
+    # 沉淀库按团队隔离：普通对话(team=None)搜不到沉淀库，团队只搜自己的
+    kbs = await asyncio.to_thread(kb_service.list_queryable_kbs, user_id,
+                                  team=get_agent_team())
     if kb_name:                              # 限定单库：精确匹配 → 大小写容错
         kbs = [kb for kb in kbs if kb.name == kb_name] \
             or [kb for kb in kbs if kb.name.lower() == kb_name.lower()]
@@ -286,32 +295,54 @@ async def _search_knowledge_base(args: dict, user_id: str, kb_service) -> dict:
     return out
 
 
-_BS_DOCS_SUBDIR = "brainstorm"      # settings.data_dir 下的子目录
+def _user_dir_name(user_id: str) -> str:
+    """user_id → 用户名（查 users 表）：产出目录用人可读的用户名而非 uuid。
+
+    username 注册时只限长度不限字符集，统一把目录不安全字符替换为 "_"；
+    查不到（假服务/异常）回退 user_id，保证始终能落盘。
+    """
+    from app.core.db import SessionLocal
+    from app.models.entities import User
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+    safe = re.sub(r"[^\w\-\u4e00-\u9fff.]", "_", user.username if user else "")
+    return safe.strip("._") or user_id
+
+
+async def _write_user_file(filename: str, content: str, user_id: str) -> dict:
+    """产出文件统一落盘点：<output_dir>/<用户名>/<时间戳-文件名>。
+
+    产出文件与系统数据（向量库/chunk 等）分离存放：data 目录是数据库/
+    索引的领地，agent 产出统一进 output 目录（yaml 可配 output_dir）。
+    防路径穿越（文件名白名单字符集）；user_id 由 call() 注入解析目录——
+    LLM 看不到也伪造不了身份，只能写自己的目录，天然防越权。
+    文件名由系统自动加「日期-时分」前缀（北京时间）：LLM 只起主题名，
+    命名职责分离 + 精确到分钟，避免同日同名互相覆盖。
+    """
+    # 文件名白名单：字母数字-_中点；防 ../ 与系统保留名
+    if not re.fullmatch(r"[\w\-\u4e00-\u9fff.]+", filename) or ".." in filename:
+        return {"error": "文件名只能包含中英文/数字/下划线/连字符/点"}
+    # 剥掉 LLM 可能自己带的日期(时分)前缀，再统一加系统时间戳
+    filename = re.sub(r"^\d{8}(?:-\d{4})?[-_]", "", filename, count=1)
+    filename = f"{datetime.now():%Y%m%d-%H%M}-{filename}"
+    from app.settings import Settings
+    user_dir = Path(Settings.load().output_dir) / \
+        await asyncio.to_thread(_user_dir_name, user_id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    path = user_dir / filename
+    await asyncio.to_thread(path.write_text, content, encoding="utf-8")
+    return {"saved": True, "filename": filename,
+            "path": str(path), "chars": len(content)}
 
 
 async def _save_document(args: dict, user_id: str, kb_service) -> dict:
-    """实现：把 Markdown 内容写入 <data_dir>/brainstorm/<user_id>/<filename>。
-
-    防路径穿越（文件名白名单字符集）；user_id 隔离目录——
-    各用户只能写自己的目录，天然防越权。
-    """
+    """实现：把 Markdown 内容写入 <output_dir>/<用户名>/<filename>（强制 .md）。"""
     filename = str(args.get("filename") or "").strip()
-    content = args.get("content") or ""
     if not filename:
         return {"error": "filename 不能为空"}
     if not filename.endswith(".md"):
         filename += ".md"
-    # 文件名白名单：字母数字-_中点；防 ../ 与系统保留名
-    if not re.fullmatch(r"[\w\-\u4e00-\u9fff.]+", filename) or ".." in filename:
-        return {"error": "文件名只能包含中英文/数字/下划线/连字符/点"}
-
-    from app.settings import Settings
-    data_dir = Path(Settings.load().data_dir) / _BS_DOCS_SUBDIR / user_id
-    data_dir.mkdir(parents=True, exist_ok=True)
-    path = data_dir / filename
-    await asyncio.to_thread(path.write_text, content, encoding="utf-8")
-    return {"saved": True, "filename": filename,
-            "path": str(path), "chars": len(content)}
+    return await _write_user_file(filename, str(args.get("content") or ""), user_id)
 
 
 def _bibtex_key(title: str, year) -> str:
@@ -357,8 +388,7 @@ async def _export_bibtex(args: dict, user_id: str, kb_service) -> dict:
     if not isinstance(entries, list) or not entries:
         return {"error": "entries 不能为空"}
     bib = _render_bibtex(entries[:100])       # 上限 100 条：防超长输出
-    result = await _save_document({"filename": filename, "content": bib},
-                                  user_id, kb_service)
+    result = await _write_user_file(filename, bib, user_id)  # 保 .bib 后缀
     return {**result, "entry_count": len(entries[:100])}
 
 

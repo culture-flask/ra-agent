@@ -839,6 +839,9 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
             <button class="bs-team-btn" data-bs-team="debate">
               <span class="bt-title"><svg class="bt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>争鸣社 · 辩论式多 Agent</span>
               <span class="bt-sub">百家争鸣：四辩手立场碰撞、质疑辩护，主持人调度收敛出科研方案。<br>适合有争议、需要正反碰撞决断的议题</span></button>
+            <button class="bs-team-btn" data-bs-team="deep_research">
+              <span class="bt-title"><svg class="bt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/><path d="M11 8v6M8 11h6"/></svg>溯源社 · 深度调研式多 Agent</span>
+              <span class="bt-sub">多源取证 + 六维审稿 + 三轮收敛：产出带完整引用的结构化研究报告。<br>适合需要可核查、多来源支撑的深度课题</span></button>
           </div>
           <!-- 团队详细介绍（点选后显示） -->
           <div class="card bs-team-intro" id="bs-team-intro" hidden></div>
@@ -849,6 +852,16 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
               <label>科研议题</label>
               <textarea class="input" id="bs-topic" rows="3"
                 placeholder="例：多模态RAG在科研文献综述中的可靠性提升"></textarea>
+            </div>
+            <div class="field">
+              <label>参考附件（可选）</label>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <button class="btn sm" id="bs-attach-btn" type="button"
+                        title="上传文件供全体角色研读（txt/md/pdf/docx，可多选）">+ 附件</button>
+                <input type="file" id="bs-file" multiple accept=".txt,.md,.pdf,.docx" hidden>
+                <span class="hint" style="font-size:12px;color:var(--muted)">单文件 ≤20MB；解析为纯文本后拼进议题，供各角色调研时引用</span>
+              </div>
+              <div id="bs-attach-bar" style="margin-top:8px"></div>
             </div>
             <div class="field">
               <label id="bs-roles-label">参赛角色（点卡片可关闭，至少保留 2 个）</label>
@@ -919,6 +932,8 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
       </div>
       <div class="bs-bottombar">
         <button class="btn sm" id="bs-new" title="回到发起面板，开一场新的头脑风暴">+ 新场次</button>
+        <button class="btn sm" id="bs-rerun" style="display:none"
+                title="复用本场议题与角色配置，清空记录后从头再跑一次">↻ 重跑本场</button>
         <select class="input" id="bs-history" style="width:340px"><option value="">历史场次（选择即回放）…</option></select>
         <div class="spacer"></div>
         <span class="muted mono" id="bs-sid" style="font-size:11px"></span>
@@ -1678,7 +1693,7 @@ function renderMessages() {
   $$("#messages [data-regen]").forEach(el => el.onclick = regenerateLast);
   $$("#messages [data-fb]").forEach(el => el.onclick = () =>
     sendFeedback(+el.dataset.fb, +el.dataset.fbv));
-  box.scrollTop = box.scrollHeight;
+  scrollMessagesBottom(true);          // 全量渲染（切会话/新消息）：回底部并恢复跟随
 }
 
 function stepsHTML(steps) {
@@ -1790,6 +1805,22 @@ function msgHTML(m, i, isLast) {
       ${citesHTML(m.retrievals)}${actions}</div></div></div>`;
 }
 
+/* ---------------- 滚动跟随：钉住才自动下滚 ----------------
+   流式输出期间每次 patch 都把容器拉到底会打断用户翻阅历史。
+   约定：视口处于底部附近（≤60px）视为"钉住"，跟随新内容自动下滚；
+   用户向上滚动即脱离钉住，停止强制下滚，滚回底部自动恢复跟随。 */
+let chatPinned = true;
+$("#messages").addEventListener("scroll", () => {
+  const box = $("#messages");
+  chatPinned = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+});
+function scrollMessagesBottom(force = false) {
+  if (force) chatPinned = true;           // 切会话/发消息：无条件回底部并恢复跟随
+  if (!chatPinned) return;
+  const box = $("#messages");
+  box.scrollTop = box.scrollHeight;
+}
+
 /* 流式渲染：只更新最后一条消息节点 */
 function patchLastMsg(msg) {
   const nodes = $$("#messages .msg");
@@ -1804,7 +1835,7 @@ function patchLastMsg(msg) {
   $$("[data-fb]", newNode).forEach(el => { el.dataset.fb = realIdx;
     el.onclick = () => sendFeedback(realIdx, +el.dataset.fbv); });
   if (!msg._streaming) renderMathIn(newNode);   /* 流式期间跳过 KaTeX，结束时渲染一次 */
-  $("#messages").scrollTop = $("#messages").scrollHeight;
+  scrollMessagesBottom();                       // 仅钉住时跟随；用户上翻不强制拉底
 }
 
 /* ---------------- 对话附件：上传解析 → 暂存 file_id → 随消息发送 ---------------- */
@@ -2134,6 +2165,7 @@ function handleChatEvent(ev, asst, stepByTrace) {
 
 /* ================= 知识库 ================= */
 const EMBED_OPTIONS = [
+  { provider: "modelscope", label: "modelscope qwen3-embedding:8b（dim 4096 · 魔搭社区云端服务，需api key）", model: "Qwen/Qwen3-Embedding-8B", dim: 4096, base: "https://api-inference.modelscope.cn/v1" },
   { provider: "ollama", label: "Ollama qwen3-embedding:8b（dim 4096 · 本地服务）", model: "qwen3-embedding:8b", dim: 4096, base: "http://100.85.4.71:11434/v1" },
   { provider: "ollama", label: "Ollama qwen3-embedding:0.6b（dim 4096 · 本地服务）", model: "qwen3-embedding:0.6b", dim: 4096, base: "http://100.85.4.71:11434/v1" },
   { provider: "local", label: "本地轻量模型 mini（dim 384 · 离线）", model: "mini", dim: 384, base: "" },
@@ -3281,16 +3313,38 @@ const SEM_ROLES = [
 ];
 const SEM_META = { chair: { name: "主席", color: "#6f6f76" },
                    rapporteur: { name: "执笔人", color: "#2b5fd9" } };
+const DR_ROLES = [
+  { id: "researcher", name: "课题研究员", temperature: 0.4, color: "#0f7b4d",
+    desc: "取证：多源检索、来源池维护、分章草稿" },
+  { id: "planner", name: "研究编辑", temperature: 0.3, color: "#8a6d3b",
+    desc: "结构：提炼核心观点、规划章节大纲" },
+  { id: "reviewer", name: "审稿人", temperature: 0.2, color: "#be185d",
+    desc: "把关：六维审查，PASS / REVISE 判定" },
+  { id: "reviser", name: "修订员", temperature: 0.3, color: "#b45309",
+    desc: "修补：逐条回应审稿意见，不改动未批评部分" },
+  { id: "writer", name: "报告撰写人", temperature: 0.4, color: "#2b5fd9",
+    desc: "首尾：引言、结论、目录、参考文献" },
+];
+const DR_META = { publisher: { name: "发布员", color: "#6f6f76" } };
 const bsAgentMeta = id => {
-  const sem = state.bs?.team === "seminar";
-  return (sem ? SEM_META : BS_META)[id]
-    || (sem ? SEM_ROLES : BS_ROLES).find(r => r.id === id)
-    || { name: id, color: "#6f6f76" };
+  const p = state.bs?.team === "seminar" ? { roles: SEM_ROLES, meta: SEM_META }
+    : state.bs?.team === "deep_research" ? { roles: DR_ROLES, meta: DR_META }
+    : { roles: BS_ROLES, meta: BS_META };
+  return p.meta[id] || p.roles.find(r => r.id === id)
+         || { name: id, color: "#6f6f76" };
 };
-/* 两支团队的品牌图标（与静态团队卡片里的 SVG 保持一致） */
+/* 团队 → API 端点前缀（新增团队在此登记一行即可） */
+const BS_TEAM_API = {
+  debate: "/api/v1/brainstorm",
+  seminar: "/api/v1/seminar",
+  deep_research: "/api/v1/deep-research",
+};
+const bsApi = p => (BS_TEAM_API[state.bs?.team] || BS_TEAM_API.debate) + p;
+/* 团队的品牌图标（与静态团队卡片里的 SVG 保持一致） */
 const BS_TEAM_ICON = {
   debate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>',
   seminar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
+  deep_research: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/><path d="M11 8v6M8 11h6"/></svg>',
 };
 const BS_TEAM_INTRO = {
   debate: {
@@ -3312,6 +3366,16 @@ const BS_TEAM_INTRO = {
     fit: "适合：进入新领域、寻找研究方向的开放探索。访问学者的跨领域迁移是本场灵魂——"
         + "开题时由主席按议题选定源领域。",
     flow: "流程：开题（选定邻近领域）→ 四路并行研读 → 4 场汇报+问答 → 构想工作坊 → 独立评审 → 成稿",
+  },
+  deep_research: {
+    name: "溯源社 · 深度调研式多 Agent（格物溯源）",
+    icon: BS_TEAM_ICON.deep_research,
+    body: "模拟一支专业研究团队：课题研究员先做广泛初调，建立研究摘要与来源池；"
+        + "研究编辑据此规划 3-5 章大纲；随后逐章深入——研究员分章取证、审稿人六维独立审稿、"
+        + "修订员逐条修订（最多 3 轮强制收敛）；最后报告撰写人补上引言/结论/目录/参考文献，"
+        + "发布员零 LLM 装配成稿。全程来源池增量去重，后章复用前章已确认来源。",
+    fit: "适合：需要多源取证、带引用、可核查的结构化研究报告。",
+    flow: "流程：初调 → 大纲 → 逐章（深研→审稿⇄修订，最多 3 轮）→ 报告框架 → 成稿",
   },
 };
 
@@ -3337,18 +3401,61 @@ state.bs = {
   evidence: [], tools: [],
   replayed: false,                          // 当前流内容来自历史回放（只读）
 };
+state.bsFiles = [];   // 发起面板待发附件（{name,status,file_id?}），随发起消耗
+
+/* ---------- 发起面板附件：复用主链路 /chat/files 上传解析 ----------
+   后端把文本暂存 _CHAT_FILES 返回 file_id；发起时随 body.attachments
+   传入，由后端展开为 [附件：名] 块拼进议题。样式复用 chat 的 .att-chip。 */
+function bsRenderFiles() {
+  $("#bs-attach-bar").innerHTML = (state.bsFiles || []).map((f, i) => {
+    const cls = f.status === "ok" ? "ok" : f.status === "err" ? "err" : "";
+    const mark = f.status === "ok" ? "✓" : f.status === "err" ? "✕" : "…";
+    return `<span class="att-chip ${cls}" title="${esc(f.error || f.name)}">${mark} ${esc(f.name)}<span class="x" data-bsf="${i}" title="移除">✕</span></span>`;
+  }).join("");
+  $$("#bs-attach-bar [data-bsf]").forEach(el => el.onclick = () => {
+    state.bsFiles.splice(+el.dataset.bsf, 1);
+    bsRenderFiles();
+  });
+}
+
+async function uploadBsFiles(fileList) {
+  const fresh = [...fileList].map(f => ({ name: f.name, status: "uploading" }));
+  state.bsFiles.push(...fresh);
+  bsRenderFiles();
+  try {
+    const fd = new FormData();
+    [...fileList].forEach(f => fd.append("files", f, f.name));
+    // 后端按上传顺序逐文件返回：成功含 file_id，失败含 error
+    const r = await api("/api/v1/chat/files", { method: "POST", body: fd });
+    (r.files || []).forEach((res, i) => {
+      const item = fresh[i];
+      if (!item) return;
+      if (res.file_id) { item.status = "ok"; item.file_id = res.file_id; }
+      else { item.status = "err"; item.error = res.error || "解析失败"; }
+    });
+  } catch (e) {
+    fresh.forEach(f => { f.status = "err"; f.error = e.message; });
+    toast("附件上传失败：" + e.message, "err");
+  }
+  bsRenderFiles();
+}
 
 /* ---------- 启动面板 ---------- */
 function bsRenderRoles() {
-  const isSem = state.bs.team === "seminar";
-  const ROLES = isSem ? SEM_ROLES : BS_ROLES;
-  $("#bs-setup-title").innerHTML =
-    (BS_TEAM_ICON[isSem ? "seminar" : "debate"] || "")
-    + `<span>${isSem ? "发起一场格致会讲" : "发起一场头脑风暴"}</span>`;
-  $("#bs-roles-label").textContent = isSem
-    ? "与会学者（点卡片可关闭，至少保留 2 个）"
-    : "参赛角色（点卡片可关闭，至少保留 2 个）";
-  $("#bs-rounds-row").hidden = isSem;   // 会讲议程由学者数确定，无轮数概念
+  const team = state.bs.team;
+  const pack = team === "seminar"
+    ? { roles: SEM_ROLES, icon: BS_TEAM_ICON.seminar, title: "发起一场格致会讲",
+        label: "与会学者（点卡片可关闭，至少保留 2 个）", rounds: false }
+    : team === "deep_research"
+    ? { roles: DR_ROLES, icon: BS_TEAM_ICON.deep_research, title: "发起一场深度调研",
+        label: "调研成员（点卡片可关闭，至少保留 2 个）", rounds: false }
+    : { roles: BS_ROLES, icon: BS_TEAM_ICON.debate, title: "发起一场头脑风暴",
+        label: "参赛角色（点卡片可关闭，至少保留 2 个）", rounds: true };
+  const ROLES = pack.roles;
+  $("#bs-setup-title").innerHTML = (pack.icon || "") + `<span>${pack.title}</span>`;
+  $("#bs-roles-label").textContent = pack.label;
+  // 轮数行是争鸣社专属：会讲议程由学者数确定、溯源社章节数由后端配置确定
+  $("#bs-rounds-row").hidden = !pack.rounds;
   $("#bs-roles").innerHTML = ROLES.map(r => `
     <div class="bs-role" id="bs-role-${r.id}" data-role-card="${r.id}">
       <input type="checkbox" checked data-bs-role="${r.id}">
@@ -3398,7 +3505,10 @@ async function bsStart() {
   if (state.bs.running) return;
   const topic = $("#bs-topic").value.trim();
   if (!topic) return toast("请先输入科研议题", "err");
-  const ROLES = state.bs.team === "seminar" ? SEM_ROLES : BS_ROLES;
+  if ((state.bsFiles || []).some(f => f.status === "uploading"))
+    return toast("附件还在解析中，稍候再开始", "err");
+  const ROLES = state.bs.team === "seminar" ? SEM_ROLES
+              : state.bs.team === "deep_research" ? DR_ROLES : BS_ROLES;
   const roles = $$("#bs-roles input[data-bs-role]:checked").map(cb => {
     const id = cb.dataset.bsRole, meta = ROLES.find(r => r.id === id);
     const t = parseFloat($(`input[data-bs-temp="${id}"]`).value);
@@ -3415,7 +3525,13 @@ async function bsStart() {
   const budget = parseInt($("#bs-budget").value);
   const tokenBudget = Number.isFinite(budget) ? Math.max(10000, budget) : null;
 
-  const sid = "bs-" + uuid();
+  const sid = (state.bs.team === "deep_research" ? "dr-" : "bs-") + uuid();
+  await bsLaunch(topic, roles, sid, maxRounds, tokenBudget);
+}
+
+/* 发起与重跑共用的启动器：重跑传已有 session_id——后端检测到同 session
+   重跑会自动清旧 checkpoint、复位会话状态（api 层 run_graph 的重跑分支） */
+async function bsLaunch(topic, roles, sid, maxRounds, tokenBudget) {
   bsPinned = true;
   state.bs = { running: true, sid, abort: new AbortController(),
                evidence: [], tools: [], plan: null, replayed: false,
@@ -3434,15 +3550,26 @@ async function bsStart() {
   $("#bs-tool-count").textContent = "";
   $("#bs-sid").textContent = sid;
   $("#bs-stop").style.display = "";
+  bsSyncRerun();
   bsStatus("主持人解析议题中…");
 
-  const isSem = state.bs.team === "seminar";
+  const atts = (state.bsFiles || []).filter(f => f.status === "ok")
+                                 .map(f => f.file_id);
+  state.bsFiles = [];                      // 附件随本场消耗（file_id 为服务端进程内暂存）
+  bsRenderFiles();
   const body = { session_id: sid, topic, token_budget: tokenBudget, roles };
-  if (!isSem) body.max_rounds = maxRounds;    // 会讲议程由学者数确定
-  const endpoint = isSem ? "/api/v1/seminar/stream" : "/api/v1/brainstorm/stream";
+  if (atts.length) body.attachments = atts;   // 后端展开为 [附件：名] 块拼进议题
+  if (state.bs.team === "debate") body.max_rounds = maxRounds;   // 辩论轮数：争鸣社专属（溯源社章节数由后端配置决定）
+  const endpoint = bsApi("/stream");
   try {
     await bsStream(sid, endpoint, body);
   } finally { bsResetButtons(); }
+}
+
+/* 重跑按钮显隐：有场次且未在运行才可重跑 */
+function bsSyncRerun() {
+  $("#bs-rerun").style.display =
+    state.bs.sid && !state.bs.running ? "" : "none";
 }
 
 function bsResetButtons() {
@@ -3451,6 +3578,7 @@ function bsResetButtons() {
   $("#bs-stop").disabled = false; $("#bs-stop").textContent = "停止";
   $("#bs-setup").hidden = false;                 // 本场结束：启动面板回来，便于连续开场
   bsLoadHistory();                              // 刷新历史场次下拉
+  bsSyncRerun();                                // 场次已定：可重跑本场
 }
 
 /* ---------- SSE 读取（与 chat 流同一解析骨架） ---------- */
@@ -3485,7 +3613,7 @@ async function bsStream(sid, endpoint, body) {
           toast(ev.error || "头脑风暴运行失败", "err");
           continue;
         }
-        if (/^(bs_|sem_)/.test(String(ev.type))) bsHandleEvent(ev);
+        if (/^(bs_|sem_|dr_)/.test(String(ev.type))) bsHandleEvent(ev);
       }
     }
   }
@@ -3497,11 +3625,13 @@ async function bsStream(sid, endpoint, body) {
    收得到 token/工具事件，其余气泡永远停在占位文案（真实事故）。 */
 const bsPhaseLabel = { research: "独立调研", debate: "辩论发言", synthesis: "成稿",
   read: "独立研读", present: "汇报", qa: "承接问答", ideate: "构想提案",
-  improve: "改进构想", review: "独立评审" };
+  improve: "改进构想", review: "独立评审",
+  scout: "初步调研", plan: "规划大纲", write: "分章深研",
+  revise: "按意见修订", frame: "报告框架" };
 const bsLiveOf = agent => (state.bs.live || {})[agent];
 
 function bsHandleEvent(ev) {
-  const suffix = ev.type.replace(/^(bs_|sem_)/, "");   // bs_/sem_ 双前缀统一分发
+  const suffix = ev.type.replace(/^(bs_|sem_|dr_)/, "");   // bs_/sem_/dr_ 三前缀统一分发
   switch (suffix) {
     case "prepare":
       if (ev.topic_restatement !== undefined) {
@@ -3680,7 +3810,12 @@ function bsHandleEvent(ev) {
       break;
     }
 
-    case "review": {                          // 会讲：某学者的独立评分并入卡片角标
+    case "review": {
+      if (ev.verdict !== undefined) {          // 溯源社：审稿判定（会讲评分无此字段，靠 payload 区分）
+        bsStatus(`第 ${ev.chapter} 章第 ${ev.round} 轮审稿：${ev.verdict === "PASS" ? "通过" : "退回修订"}`);
+        break;
+      }
+      // 会讲：某学者的独立评分并入卡片角标
       (ev.scores || []).forEach(sc => {
         const c = (state.bs.cards || []).find(x => x.card_id === sc.card_id);
         if (c) {
@@ -3695,6 +3830,32 @@ function bsHandleEvent(ev) {
     case "ranking": {                         // 会讲：聚合排序 → 卡片墙重排
       state.bs.ranking = ev.ranking || [];
       bsRenderCards();
+      break;
+    }
+
+    /* ---------- 溯源社（深度调研）专属事件 ---------- */
+    case "scout": {                           // 初调完成
+      bsStatus(`初调完成：研究摘要 ${ev.chars || 0} 字，来源池 ${ev.sources || 0} 条`
+             + (ev.failed ? `（降级：${ev.reason || "调用失败"}）` : ""));
+      break;
+    }
+    case "sources": {                         // 来源池增量去重
+      if (ev.added) bsStatus(`来源池 +${ev.added}，共 ${ev.total} 条`);
+      break;
+    }
+    case "chapter_done": {                    // 某章归档（审稿通过或第3轮熔断）
+      bsStatus(ev.skipped ? `第 ${ev.chapter} 章跳过（草稿为空）`
+        : `第 ${ev.chapter} 章完成：${ev.title || ""}（${ev.chars} 字 / ${ev.sources} 来源）`);
+      break;
+    }
+    case "frame": {                           // 报告框架完成
+      bsStatus(`报告框架完成：引言 ${ev.intro} 字、结论 ${ev.conclusion} 字`);
+      break;
+    }
+    case "report": {                          // 终稿装配完成
+      bsStatus(`报告完成：${ev.chapters} 章 / ${ev.sources} 条参考文献 / ${ev.chars} 字`
+             + (ev.fallback ? "（框架降级为纯代码装配）" : "")
+             + (ev.budget_exhausted ? "（预算耗尽，后续章节已截断）" : ""));
       break;
     }
 
@@ -3743,6 +3904,11 @@ function bsHandleEvent(ev) {
     }
 
     case "plan": {
+      if (ev.content === undefined) {          // 溯源社：大纲规划（争鸣社成稿才有 content）
+        if (ev.sections)
+          bsStatus(`大纲确定：${ev.title} —— 共 ${ev.sections.length} 章（${ev.sections.join("、")}）`);
+        break;
+      }
       const plan = ev.content || "";
       $("#bs-plan-wrap").hidden = false;
       $("#bs-plan-body").innerHTML = md(plan);
@@ -3791,9 +3957,8 @@ function bsScroll(force) {
 async function bsStop() {
   const btn = $("#bs-stop");
   btn.disabled = true; btn.textContent = "停止中…";
-  const isSem = state.bs.team === "seminar";
   try {
-    await api(isSem ? "/api/v1/seminar/stop" : "/api/v1/brainstorm/stop",
+    await api(bsApi("/stop"),
               { method: "POST",
                 body: JSON.stringify({ session_id: state.bs.sid }) });
   } catch (e) { toast(e.message, "err"); }
@@ -3803,11 +3968,9 @@ async function bsStop() {
 async function bsLoadHistory() {
   const sel = $("#bs-history");
   const cur = sel.value;
-  const isSem = state.bs.team === "seminar";
   let rows = [];
   try {
-    const r = await api(isSem ? "/api/v1/seminar/sessions"
-                              : "/api/v1/brainstorm/sessions");
+    const r = await api(bsApi("/sessions"));
     rows = r.sessions || [];
   } catch { /* 后端不可达时保留现状 */ }
   const st = { running: "进行中", done: "已完成", stopped: "已停止", failed: "失败" };
@@ -3819,9 +3982,9 @@ async function bsLoadHistory() {
 async function bsReplay(sid) {
   if (state.bs.running) return toast("当前正在运行一场头脑风暴", "err");
   const isSem = state.bs.team === "seminar";
+  const isDr = state.bs.team === "deep_research";
   let d;
-  try { d = await api((isSem ? "/api/v1/seminar/" : "/api/v1/brainstorm/")
-                      + encodeURIComponent(sid)); }
+  try { d = await api(bsApi("/") + encodeURIComponent(sid)); }
   catch (e) { return toast(e.message, "err"); }
   bsPinned = true;
   state.bs = { running: false, sid, abort: null, evidence: [], tools: [],
@@ -3841,6 +4004,7 @@ async function bsReplay(sid) {
   $("#bs-tool-count").textContent = "";
   $("#bs-sid").textContent = sid + (d.status === "running" ? " · 进行中（刷新可见最新）" : "");
   $("#bs-stop").style.display = d.status === "running" ? "" : "none";
+  bsSyncRerun();
   bsStatus(`历史回放 · ${d.status === "running" ? "该场次仍在进行，以下为当前进度" :
             { done: "已完成", stopped: "用户中途停止（汇编稿）", failed: "异常结束" }[d.status] || d.status}`,
             d.status === "running" ? "" : "ok");
@@ -3888,8 +4052,38 @@ async function bsReplay(sid) {
     if ((d.idea_ranking || []).length)
       bsHandleEvent({ type: "ranking", ranking: d.idea_ranking });
   }
-  // 成稿
-  const proposal = d.final_proposal;
+  // 溯源社专属：初调摘要 / 各章草稿 + 审稿记录 / 引言结论（回放）。
+  // 审稿气泡按章穿插在对应章节之后（与实际时序一致）；没有归档章节时
+  // （停止/熔断降级）审稿记录也要可见，不能让审稿人从回放里消失。
+  if (isDr) {
+    if (d.scouting_brief)
+      put("researcher", "scout", undefined, d.scouting_brief);
+    if (d.outline && d.outline.title)
+      put("planner", "plan", undefined,
+          `### 报告大纲：《${d.outline.title}》\n\n`
+          + (d.outline.sections || []).map(s =>
+              `${s.index}. **${s.title}**${s.rationale ? " —— " + s.rationale : ""}`
+            ).join("\n"));
+    const reviews = d.review_log || [];
+    const putReview = r => put("reviewer", "review", r.round,
+        r.content || `（第 ${r.round} 轮判定：${r.verdict || "?"}）`);
+    if ((d.chapters || []).length) {
+      (d.chapters || []).forEach(c => {
+        put("researcher", "write", undefined,
+            `## 第${c.index}章 ${c.title || ""}\n\n${c.content || ""}`);
+        reviews.filter(r => (r.chapter || 0) === (c.index || 0))
+               .sort((a, b) => (a.round || 0) - (b.round || 0))
+               .forEach(putReview);
+      });
+    } else {
+      reviews.forEach(putReview);
+    }
+    if (d.introduction || d.conclusion)
+      put("writer", "frame", undefined,
+          `${d.introduction || ""}\n\n---\n\n${d.conclusion || ""}`);
+  }
+  // 成稿（争鸣社/会讲：final_proposal；溯源社：final_report）
+  const proposal = d.final_report || d.final_proposal;
   if (proposal) bsHandleEvent({ type: "plan", content: proposal });
   else $("#bs-plan-wrap").hidden = true;
 }
@@ -3977,6 +4171,8 @@ function bsSetTeam(t) {
   $("#bs-sid").textContent = "";
   $("#bs-stop").style.display = "none";
   $("#bs-topic").focus();
+  state.bsFiles = []; bsRenderFiles();   // 切换团队：清空附件列表
+  bsSyncRerun();
 }
 
 function bsEnter() {
@@ -3995,6 +4191,7 @@ function bsEnter() {
     $("#bs-qa-wrap").hidden = true;
   }
   bsQAHint();
+  bsSyncRerun();
 }
 
 /* 团队按钮：点击才展开发起面板（bsSetTeam 内含介绍/重置逻辑） */
@@ -4101,7 +4298,7 @@ async function bsAsk() {
   try {
     const headers = { "Content-Type": "application/json" };
     if (store.token) headers["Authorization"] = "Bearer " + store.token;
-    const base = state.bs.team === "seminar" ? "/api/v1/seminar" : "/api/v1/brainstorm";
+    const base = bsApi("");
     const res = await fetch(store.base +
       `${base}/${encodeURIComponent(state.bs.sid)}/ask`, {
       method: "POST", headers, body: JSON.stringify({ question: q }) });
@@ -4151,6 +4348,11 @@ $("#bs-start").onclick = () => bsStart().catch(e => {
   bsStatus("连接失败：" + e.message, "bad"); toast(e.message, "err");
 });
 $("#bs-stop").onclick = bsStop;
+$("#bs-attach-btn").onclick = () => $("#bs-file").click();
+$("#bs-file").onchange = function () {
+  if (this.files.length) uploadBsFiles(this.files);
+  this.value = "";                     // 清空选择，允许再次上传同名文件
+};
 $("#bs-plan-copy").onclick = () => copyText(state.bs.plan || "", "方案已复制");
 $("#bs-plan-export").onclick = () => bsDownload(
   "brainstorm-" + (state.bs.sid || "proposal") + ".md", state.bs.plan || "");
@@ -4160,8 +4362,7 @@ async function bsOpenHistory(sid) {
     // 回放会重绘群聊区，不能与进行中的流混写：询问是否停止当前场次
     if (!confirm("当前场次仍在运行。停止它并回放选中的历史场次？")) return;
     try {
-      await api(state.bs.team === "seminar"
-                ? "/api/v1/seminar/stop" : "/api/v1/brainstorm/stop",
+      await api(bsApi("/stop"),
         { method: "POST",
           body: JSON.stringify({ session_id: state.bs.sid }) });
     } catch { /* 停止标记失败也无妨：下面仍等待流自然结束 */ }
@@ -4175,6 +4376,23 @@ async function bsOpenHistory(sid) {
   await bsReplay(sid);
 }
 $("#bs-history").onchange = () => bsOpenHistory($("#bs-history").value);
+
+/* 重跑本场：复用 session_id，议题/角色取自会话详情——后端检测到同 session
+   重跑会自动清旧 checkpoint、复位 DB 行，前端只需按普通发起重新连流。
+   轮数/预算/模式未持久化，走后端默认值。 */
+$("#bs-rerun").onclick = async () => {
+  if (!state.bs.sid || state.bs.running)
+    return toast("没有可重跑的场次", "err");
+  let d;
+  try { d = await api(bsApi("/") + encodeURIComponent(state.bs.sid)); }
+  catch (e) { return toast(e.message, "err"); }
+  if (d.status === "running")
+    return toast("该场次仍在进行中，先停止再重跑", "err");
+  if (!d.topic) return toast("原议题缺失，无法重跑", "err");
+  if (!confirm("重跑将清空本场全部记录并从头开始；"
+               + "轮数/预算等参数使用默认值。确认？")) return;
+  await bsLaunch(d.topic, d.roles || [], state.bs.sid);
+};
 
 /* 回到发起面板：清空流视图与运行状态，随时可开新场次 */
 function bsShowSetup() {
@@ -4197,14 +4415,15 @@ function bsShowSetup() {
   $("#bs-sid").textContent = "";
   $("#bs-stop").style.display = "none";
   $("#bs-topic").focus();
+  state.bsFiles = []; bsRenderFiles();   // 新场次：清空附件列表
   bsLoadHistory();
+  bsSyncRerun();
 }
 $("#bs-new").onclick = async () => {
   if (state.bs.running) {
     if (!confirm("当前场次仍在运行。停止它并开新场次？")) return;
     try {
-      await api(state.bs.team === "seminar"
-                ? "/api/v1/seminar/stop" : "/api/v1/brainstorm/stop",
+      await api(bsApi("/stop"),
         { method: "POST",
           body: JSON.stringify({ session_id: state.bs.sid }) });
     } catch { }

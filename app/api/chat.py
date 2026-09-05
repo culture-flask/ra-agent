@@ -13,6 +13,7 @@ from app.core.db import SessionLocal
 from app.core.deps import get_current_user
 from app.core.events import clear_event_sink, set_event_sink
 from app.core.logging import get_logger
+from app.core.team_ctx import set_agent_team
 from app.core.tokens import estimate_tokens
 from app.graph.nodes import (
     extract_memory_node,
@@ -288,6 +289,7 @@ async def chat(req: ChatRequest, request: Request,
     rewind=true（重新生成）：先回退到最后一条用户消息，不追加新消息。
     身份取自 Bearer token（P0-1）。
     """
+    set_agent_team(None)     # 普通对话：原生工具也检索不到多 agent 沉淀库
     uid = user.id
     graph = request.app.state.graph
     clear_stop(req.session_id)                 # 上一轮残留的停止标记不带入本轮
@@ -326,6 +328,7 @@ async def chat_stream(req: ChatRequest, request: Request,
     config，该模式拿不到逐 token 回调），因此用事件总线更可靠。
     身份取自 Bearer token；前端用 fetch+getReader 消费，可带 header。
     """
+    set_agent_team(None)     # 普通对话：原生工具也检索不到多 agent 沉淀库
     uid = user.id
     graph = request.app.state.graph
     sink: asyncio.Queue = asyncio.Queue()

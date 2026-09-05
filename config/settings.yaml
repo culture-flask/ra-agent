@@ -3,6 +3,7 @@ app:
   host: 0.0.0.0  # 监听所有网卡，外部可访问
   port: 8000
   data_dir: ./data  # 本地文件（Chroma 向量库等）统一放这里
+  output_dir: ./output  # 多 agent 产出文件（方案/报告/BibTeX）单独存放，与系统数据分离
 
 database:
   url: postgresql+psycopg://ra:ra@localhost:5432/ra_agent
@@ -20,9 +21,9 @@ tracing:
 
 llm:
   system_default:
-    provider: opencodego
-    base_url: https://opencode.ai/zen/go/v1
-    model_id: deepseek-v4-flash
+    provider: SenseNova
+    base_url: https://token.sensenova.cn/v1
+    model_id: sensenova-6.8-flash-lite
   retry:             # 调用失败退避重试：限流/5xx/网络错误指数退避重试
     max_retries: 10
     base_delay: 1.0 # 首次重试等 1s，之后 2s / 4s（含随机抖动）
@@ -80,7 +81,7 @@ brainstorm:
   debate_tool_rounds: 1         # 辩论阶段前几轮还允许调工具（防无限调研不辩论）
   token_budget: 20000000        # 单场总 token 预算默认值（硬熔断；前端发起时按场可调）
   position_max_chars: 500       # 立场书长度上限
-  transcript_window: 6          # 辩论上下文携带的最近发言条数
+  transcript_window: 8          # 辩论上下文携带的最近发言条数
   roles:                        # 角色目录（id 固定四选一，name/temperature 可调）
     - {id: innovator, name: 创新者, temperature: 0.9}
     - {id: critic, name: 批评者, temperature: 0.4}
@@ -99,3 +100,20 @@ seminar:
     - {id: theorist, name: 理论家, temperature: 0.6}
     - {id: experimentalist, name: 实验家, temperature: 0.4}
     - {id: visitor, name: 访问学者, temperature: 0.9}
+
+# 溯源社（深度调研式多 agent）
+deep_research:
+  scout_tool_loop_max: 8        # 初调阶段工具子循环上限
+  min_sections: 3               # 章节数下限（快速模式固定 3）
+  max_sections: 5               # 章节数上限
+  chapter_min_words: 800        # 单章草稿字数下限
+  chapter_max_words: 1500       # 单章草稿字数上限
+  tool_loop_max: 10             # 分章深研工具子循环上限
+  revise_tool_loop_max: 5       # 修订阶段工具子循环上限（低于深研：只补缺口）
+  token_budget: 20000000        # 单场总 token 预算默认值（硬熔断；publish 不受预算阻断）
+  roles:
+    - {id: researcher, name: 课题研究员, temperature: 0.4}
+    - {id: planner, name: 研究编辑, temperature: 0.3}
+    - {id: reviewer, name: 审稿人, temperature: 0.2}
+    - {id: reviser, name: 修订员, temperature: 0.3}
+    - {id: writer, name: 报告撰写人, temperature: 0.4}

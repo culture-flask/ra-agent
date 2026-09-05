@@ -372,32 +372,32 @@ def github_search(query: str, top_k: int = 5) -> list[dict]:
     return out
 
 
-@mcp.tool()
-def search_datasets(query: str, top_k: int = 5) -> list[dict]:
-    """在 HuggingFace 检索公开数据集（免费无密钥）。
+# @mcp.tool()
+# def search_datasets(query: str, top_k: int = 5) -> list[dict]:
+#     """在 HuggingFace 检索公开数据集（免费无密钥）。
 
-    适合：评估「该研究需要的数据是否现成可得」、找标准评测集（benchmark）。
-    返回数据集名/下载量/点赞数/最近更新/简介（英文检索效果最佳）。
-    """
-    q = query.strip()
-    if not q:
-        raise ValueError("query 不能为空")
-    k = _clamp_k(top_k)
-    r = httpx.get(HF_DATASETS_API, params={"search": q, "limit": k},
-                  timeout=_TIMEOUT)
-    r.raise_for_status()
-    out = []
-    for d in r.json()[:k]:
-        out.append({
-            "dataset": d.get("id", ""),
-            "downloads": d.get("downloads") or 0,
-            "likes": d.get("likes") or 0,
-            "last_modified": d.get("lastModified"),
-            "description": (d.get("description") or "")[:300],
-            "url": f"https://huggingface.co/datasets/{d.get('id', '')}",
-            "source": "huggingface",
-        })
-    return out
+#     适合：评估「该研究需要的数据是否现成可得」、找标准评测集（benchmark）。
+#     返回数据集名/下载量/点赞数/最近更新/简介（英文检索效果最佳）。
+#     """
+#     q = query.strip()
+#     if not q:
+#         raise ValueError("query 不能为空")
+#     k = _clamp_k(top_k)
+#     r = httpx.get(HF_DATASETS_API, params={"search": q, "limit": k},
+#                   timeout=_TIMEOUT)
+#     r.raise_for_status()
+#     out = []
+#     for d in r.json()[:k]:
+#         out.append({
+#             "dataset": d.get("id", ""),
+#             "downloads": d.get("downloads") or 0,
+#             "likes": d.get("likes") or 0,
+#             "last_modified": d.get("lastModified"),
+#             "description": (d.get("description") or "")[:300],
+#             "url": f"https://huggingface.co/datasets/{d.get('id', '')}",
+#             "source": "huggingface",
+#         })
+#     return out
 
 
 @mcp.tool()
