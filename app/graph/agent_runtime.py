@@ -26,6 +26,35 @@ from app.graph.nodes import WorkflowContext
 logger = get_logger("agent_runtime")
 
 
+async def _persist_usage(state: dict, cfg, usage: dict | None) -> None:
+    """多 agent 团队的单轮 LLM 用量落库（llm_usage 表，与主图 generate 同表
+    同粒度），供 /usage/summary 报表——团队调用此前不入报表。
+
+    best-effort：线程池异步写，失败只记日志，绝不影响研讨/辩论流程；
+    usage=None（langchain 回退路径拿不到用量）静默跳过。"""
+    if not usage or not int(usage.get("total_tokens") or 0):
+        return
+
+    def _write() -> None:
+        try:
+            from app.core.db import SessionLocal
+            from app.models.entities import LLMUsage
+            with SessionLocal() as db:
+                db.add(LLMUsage(
+                    user_id=state["user_id"],
+                    session_id=str(state.get("session_id") or "")[:64],
+                    model=str(getattr(cfg, "model_id", "") or "chat"),
+                    input_tokens=int(usage.get("input_tokens") or 0),
+                    output_tokens=int(usage.get("output_tokens") or 0),
+                    total_tokens=int(usage.get("total_tokens") or 0),
+                    cached_tokens=int(usage.get("cached_tokens") or 0)))
+                db.commit()
+        except Exception as e:
+            logger.warning("agent usage persist failed (不影响流程): %s", e)
+
+    await asyncio.to_thread(_write)
+
+
 def effective_cfg(ctx: WorkflowContext, user_id: str):
     """生效 LLM 配置（用户配置 > 系统默认）；测试假服务无此方法 → None
     → 各帮助函数回退 langchain 路径。与主图 _native_cfg 同语义。"""
@@ -93,6 +122,7 @@ async def llm_text(ctx: WorkflowContext, state: dict,
                 reasoning_event=f"{prefix}internal",
                 stream_events=False)          # 控制流不打字机
             used += int((usage or {}).get("total_tokens") or 0)
+            await _persist_usage(state, cfg, usage)
             if stopped:
                 raise RuntimeError("stopped")
             if str(resp.content or "").strip():
@@ -181,6 +211,7 @@ async def agent_speak(ctx: WorkflowContext, state: dict,
                                                            extra, prefix)
         round_idx += 1
         used += int((usage or {}).get("total_tokens") or 0)
+        await _persist_usage(state, cfg, usage)
         text_out = str(resp.content or "")
         calls = getattr(resp, "tool_calls", None)
         if stopped:

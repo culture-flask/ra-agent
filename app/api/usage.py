@@ -34,6 +34,7 @@ async def usage_summary(request: Request,
                     func.sum(LLMUsage.input_tokens).label("inp"),
                     func.sum(LLMUsage.output_tokens).label("outp"),
                     func.sum(LLMUsage.total_tokens).label("tot"),
+                    func.sum(LLMUsage.cached_tokens).label("cached"),
                     func.count().label("calls"),
                 ).where(LLMUsage.user_id == user.id,
                         LLMUsage.created_at >= since)
@@ -45,20 +46,23 @@ async def usage_summary(request: Request,
     raw = await run_in_threadpool(_query)
 
     days_out: dict[str, dict] = {}
-    grand = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0}
+    grand = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+             "cached_tokens": 0, "calls": 0}
     for row in raw:
         date = str(row["d"])
         day = days_out.setdefault(date, {
             "date": date, "models": [],
             "totals": {"input_tokens": 0, "output_tokens": 0,
-                       "total_tokens": 0, "calls": 0}})
+                       "total_tokens": 0, "cached_tokens": 0, "calls": 0}})
         item = {"model": row["model"],
                 "input_tokens": int(row["inp"] or 0),
                 "output_tokens": int(row["outp"] or 0),
                 "total_tokens": int(row["tot"] or 0),
+                "cached_tokens": int(row["cached"] or 0),
                 "calls": int(row["calls"] or 0)}
         day["models"].append(item)
-        for k in ("input_tokens", "output_tokens", "total_tokens", "calls"):
+        for k in ("input_tokens", "output_tokens", "total_tokens",
+                  "cached_tokens", "calls"):
             day["totals"][k] += item[k]
             grand[k] += item[k]
 

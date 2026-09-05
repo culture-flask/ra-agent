@@ -417,6 +417,12 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0;background:var(--
 .tbl tr.expander{cursor:pointer}
 .tbl tr.expander:hover{background:var(--chip)}
 .tbl tr.detail td{background:var(--panel)}
+
+/* 用量统计视图：汇总卡 + 按天×模型明细表 */
+.usage-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+.u-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.u-card .u-num{font-size:22px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1.2}
+.u-card .u-label{font-size:12px;color:var(--muted);margin-top:4px}
 .tbl pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:10px 12px;font-size:12px;
   overflow:auto;max-height:220px;margin:4px 0;border:1px solid var(--line)}
 .mono{font-family:"SFMono-Regular",ui-monospace,Consolas,Monaco,monospace;font-size:12px}
@@ -819,6 +825,22 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
         <span class="muted" style="font-size:12.5px">LLM / 工具 / 检索调用全链路日志（ToolCallLog）</span>
       </div>
       <div id="trace-list"></div>
+    </section>
+    <!-- 用量统计 -->
+    <section class="view" id="view-usage">
+      <div class="toolbar">
+        <select class="input" id="usage-days" style="width:140px">
+          <option value="7">近 7 天</option>
+          <option value="30" selected>近 30 天</option>
+          <option value="90">近 90 天</option>
+          <option value="365">近一年</option>
+        </select>
+        <button class="btn" id="usage-refresh">刷新</button>
+        <div class="spacer"></div>
+        <span class="muted" style="font-size:12.5px">当前用户的 LLM token 用量 · 按天 × 模型聚合（含全部对话与多 agent 调用）</span>
+      </div>
+      <div id="usage-cards" class="usage-cards"></div>
+      <div id="usage-list"></div>
     </section>
     <!-- 头脑风暴 -->
     <section class="view" id="view-brainstorm">
@@ -1294,6 +1316,8 @@ const VIEWS = [
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a7 7 0 017 7c0 2.4-1.2 4.2-2.6 5.7-.9 1-1.4 2-1.4 3.3H9c0-1.3-.5-2.3-1.4-3.3C6.2 14.2 5 12.4 5 10a7 7 0 017-7z"/><path d="M9 21h6"/></svg>' },
   { id: "trace", name: "调用追踪", sub: "ToolCallLog · LLM / 工具 / 检索调用日志",
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>' },
+  { id: "usage", name: "用量统计", sub: "Token 用量报表 · 按天 × 模型 · 调用次数汇总",
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>' },
 ];
 function buildNav() {
   $("#nav").innerHTML = VIEWS.map(v =>
@@ -1313,6 +1337,7 @@ function switchView(id) {
   if (id === "llm") loadLLMView();
   if (id === "memory") loadMemories();
   if (id === "trace") loadTraces();
+  if (id === "usage") loadUsage();
   if (id === "chat") { renderSessions(); renderMessages(); }
   if (id === "brainstorm") bsEnter();
 }
@@ -3216,6 +3241,62 @@ async function loadTraces() {
   });
 }
 
+/* ================= 用量统计 ================= */
+let usageDays = 30;
+async function loadUsage() {
+  const cards = $("#usage-cards"), box = $("#usage-list");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  let data;
+  try { data = await api("/api/v1/usage/summary?days=" + usageDays); }
+  catch (e) { cards.innerHTML = ""; box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  const g = data.grand || {};
+  const fmt = n => (n || 0).toLocaleString();
+  // 汇总卡：输入拆分「未命中 + 缓存命中」（命中 ⊆ 输入，缓存价通常低一个量级）
+  const cached = g.cached_tokens || 0;
+  const uncached = (g.input_tokens || 0) - cached;
+  const inpPct = (g.input_tokens || 0) ? Math.round(cached / g.input_tokens * 100) : 0;
+  cards.innerHTML = `
+    <div class="u-card"><div class="u-num">${fmt(g.total_tokens)}</div><div class="u-label">总 tokens（近 ${data.days} 天）</div></div>
+    <div class="u-card"><div class="u-num">${fmt(uncached)}</div><div class="u-label">输入 · 未命中</div></div>
+    <div class="u-card"><div class="u-num">${fmt(cached)}</div><div class="u-label">输入 · 缓存命中（占输入 ${inpPct}%）</div></div>
+    <div class="u-card"><div class="u-num">${fmt(g.output_tokens)}</div><div class="u-label">输出 tokens</div></div>
+    <div class="u-card"><div class="u-num">${fmt(g.calls)}</div><div class="u-label">LLM 调用次数</div></div>`;
+  // 明细表：每天一组，组内每模型一行；日期列只在组首行显示
+  const items = data.items || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="empty"><div class="big">暂无用量数据</div>发起一次对话后，这里会按天 × 模型统计 token 用量</div>';
+    return;
+  }
+  let rows = "";
+  for (const day of items) {
+    day.models.forEach((m, i) => {
+      const mCached = m.cached_tokens || 0;
+      const mUncached = (m.input_tokens || 0) - mCached;
+      rows += `<tr>
+        <td class="muted mono">${i === 0 ? esc(day.date) : ""}</td>
+        <td class="mono">${esc(m.model)}</td>
+        <td class="mono" style="text-align:right">${fmt(mUncached)}</td>
+        <td class="mono" style="text-align:right">${fmt(mCached)}</td>
+        <td class="mono" style="text-align:right">${fmt(m.output_tokens)}</td>
+        <td class="mono" style="text-align:right"><b>${fmt(m.total_tokens)}</b></td>
+        <td class="mono" style="text-align:right">${m.calls}</td></tr>`;
+    });
+  }
+  box.innerHTML = `<table class="tbl"><tr>
+    <th style="width:110px">日期</th><th>模型</th>
+    <th style="width:130px;text-align:right">输入 · 未命中</th>
+    <th style="width:130px;text-align:right">输入 · 缓存命中</th>
+    <th style="width:120px;text-align:right">输出 tokens</th>
+    <th style="width:120px;text-align:right">总计</th>
+    <th style="width:90px;text-align:right">调用次数</th></tr>${rows}
+    <tr><td colspan="2"><b>合计（近 ${data.days} 天）</b></td>
+    <td class="mono" style="text-align:right"><b>${fmt(uncached)}</b></td>
+    <td class="mono" style="text-align:right"><b>${fmt(cached)}</b></td>
+    <td class="mono" style="text-align:right"><b>${fmt(g.output_tokens)}</b></td>
+    <td class="mono" style="text-align:right"><b>${fmt(g.total_tokens)}</b></td>
+    <td class="mono" style="text-align:right"><b>${fmt(g.calls)}</b></td></tr>`;
+}
+
 /* ================= 弹窗 ================= */
 function openModal(html) {
   $("#modal-box").innerHTML = html;
@@ -3272,6 +3353,8 @@ $("#llm-fetch-models").onclick = fetchLLMModels;
 $("#llm-save").onclick = saveLLMConfig;
 $("#memory-refresh").onclick = loadMemories;
 $("#trace-query").onclick = loadTraces;
+$("#usage-refresh").onclick = loadUsage;
+$("#usage-days").onchange = e => { usageDays = +e.target.value; loadUsage(); };
 $("#trace-current").onclick = () => {
   $("#trace-session").value = state.active;      // 一键填入当前聊天会话
   loadTraces();
