@@ -767,6 +767,11 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
             <label>Provider（厂商分类）</label>
             <select class="input" id="llm-provider"></select>
           </div>
+          <div class="field" id="llm-provider-custom-row" hidden>
+            <label>Provider 名称（自定义端点）</label>
+            <input class="input mono" id="llm-provider-custom" maxlength="32"
+              placeholder="留空 = custom">
+          </div>
           <div class="field"><label>Base URL</label><input class="input mono" id="llm-base-url"></div>
           <div class="field">
             <label>API Key</label>
@@ -800,6 +805,35 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
         <div class="card">
           <div class="section-t" style="margin-top:0">我的配置</div>
           <div id="llm-config-list"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <div class="section-t" style="margin-top:0">嵌入模型默认配置（可选）</div>
+        <div class="hint" style="font-size:12px;color:var(--muted);margin-bottom:12px">
+          优先级：知识库设置的嵌入模型 &gt; 此处的用户级配置 &gt; 系统默认。
+          建库时未显式指定嵌入模型则按此配置固化进库；修改不影响已建库（向量维度安全，存量库可重建换模型）。
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+          <div class="field"><label>快捷预置</label>
+            <select class="input" id="emb-preset">
+              <option value="">— 选择预置自动填充 —</option>
+            </select></div>
+          <div class="field"><label>Provider</label>
+            <input class="input mono" id="emb-provider" placeholder="如 modelscope / ollama / siliconflow"></div>
+          <div class="field"><label>Model ID</label>
+            <input class="input mono" id="emb-model-id" placeholder="如 qwen3-embedding:8b"></div>
+          <div class="field"><label>向量维度 dim</label>
+            <input class="input mono" id="emb-dim" type="number" min="1" placeholder="如 4096"></div>
+          <div class="field"><label>Base URL（自定义端点必填）</label>
+            <input class="input mono" id="emb-base-url" placeholder="OpenAI 兼容端点，如 http://host:8080/v1"></div>
+          <div class="field"><label>API Key（可选）</label>
+            <input class="input mono" id="emb-api-key" type="password" placeholder="加密落库，仅回显掩码"></div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:6px;align-items:center">
+          <button class="btn primary" id="emb-save">保存嵌入配置</button>
+          <button class="btn danger" id="emb-delete">清除（回落系统默认）</button>
+          <span class="muted" id="emb-status" style="font-size:12px"></span>
         </div>
       </div>
     </section>
@@ -2193,6 +2227,7 @@ const EMBED_OPTIONS = [
   { provider: "modelscope", label: "modelscope qwen3-embedding:8b（dim 4096 · 魔搭社区云端服务，需api key）", model: "Qwen/Qwen3-Embedding-8B", dim: 4096, base: "https://api-inference.modelscope.cn/v1" },
   { provider: "ollama", label: "Ollama qwen3-embedding:8b（dim 4096 · 本地服务）", model: "qwen3-embedding:8b", dim: 4096, base: "http://100.85.4.71:11434/v1" },
   { provider: "ollama", label: "Ollama qwen3-embedding:0.6b（dim 4096 · 本地服务）", model: "qwen3-embedding:0.6b", dim: 4096, base: "http://100.85.4.71:11434/v1" },
+  { provider: "siliconflow", label: "siliconflow qwen3-embedding:8b（dim 4096 · 硅基流动云端服务，需api key）", model: "Qwen/Qwen3-Embedding-8B", dim: 4096, base: "https://api.siliconflow.cn/v1/embeddings" },
   { provider: "local", label: "本地轻量模型 mini（dim 384 · 离线）", model: "mini", dim: 384, base: "" },
   { provider: "__custom__", label: "自定义…", model: "", dim: 0, base: "" },
 ];
@@ -2877,7 +2912,39 @@ function parseCtxWindow(raw) {
   return +raw;
 }
 
+/* ---------------- 用户级嵌入配置 ---------------- */
+const EMBED_PRESETS = [
+  { provider: "modelscope", label: "modelscope qwen3-embedding:8b（dim 4096 · 魔搭社区云端服务，需api key）",
+    model: "Qwen/Qwen3-Embedding-8B", dim: 4096, base: "https://api-inference.modelscope.cn/v1" },
+  { provider: "ollama", label: "Ollama qwen3-embedding:8b（dim 4096 · 本地服务）",
+    model: "qwen3-embedding:8b", dim: 4096, base: "http://127.0.0.1:11434/v1" },
+  { provider: "ollama", label: "Ollama qwen3-embedding:0.6b（dim 4096 · 本地服务）",
+    model: "qwen3-embedding:0.6b", dim: 4096, base: "http://127.0.0.1:11434/v1" },
+  { provider: "siliconflow", label: "siliconflow qwen3-embedding:8b（dim 4096 · 硅基流动云端服务，需api key）",
+    model: "Qwen/Qwen3-Embedding-8B", dim: 4096, base: "https://api.siliconflow.cn/v1/embeddings" },
+];
+async function loadEmbeddingConfig() {
+  try {
+    const data = await api("/api/v1/llm/embedding-config");
+    $("#emb-preset").innerHTML = '<option value="">— 选择预置自动填充 —</option>' +
+      EMBED_PRESETS.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join("") +
+      '<option value="custom">custom（自定义端点，手动填写）</option>';
+    const c = data.config;
+    $("#emb-provider").value = c ? c.provider : "";
+    $("#emb-model-id").value = c ? c.model_id : "";
+    $("#emb-dim").value = c ? c.dim : "";
+    $("#emb-base-url").value = c && c.base_url ? c.base_url : "";
+    $("#emb-api-key").value = "";
+    $("#emb-api-key").placeholder = c && c.api_key_masked
+      ? `已设置（${c.api_key_masked}），留空沿用` : "加密落库，仅回显掩码";
+    $("#emb-status").textContent = c
+      ? `已配置：${c.provider}/${c.model_id}（dim ${c.dim}）`
+      : `未配置，建库回落系统默认（${data.system_default.provider}/${data.system_default.model_id}）`;
+  } catch (e) { $("#emb-status").textContent = e.message; }
+}
+
 async function loadLLMView() {
+  loadEmbeddingConfig();
   try {
     state.providers = await api("/api/v1/llm/providers");
   } catch (e) { toast(e.message, "err"); return; }
@@ -2886,6 +2953,7 @@ async function loadLLMView() {
     `<option value="${esc(p)}">${esc(p)}</option>`).join("") +
     '<option value="__custom__">custom（自定义端点）</option>';
   sel.onchange = () => {
+    $("#llm-provider-custom-row").hidden = sel.value !== "__custom__";
     const p = state.providers[sel.value];
     if (p) $("#llm-base-url").value = p.base_url || "";
   };
@@ -3066,6 +3134,9 @@ async function deleteLLMConfig(id) {
 
 async function fetchLLMModels() {
   const provider = $("#llm-provider").value;
+  // 自定义端点：用户填了 provider 名称就用它（仅作展示分类，不影响请求），否则回落 "custom"
+  const provName = provider === "__custom__"
+    ? ($("#llm-provider-custom").value.trim() || "custom") : provider;
   const base_url = $("#llm-base-url").value.trim();
   const api_key = $("#llm-api-key").value.trim();
   const chips = $("#llm-model-chips");
@@ -3074,7 +3145,7 @@ async function fetchLLMModels() {
   try {
     const models = await api("/api/v1/llm/models", {
       method: "POST", body: JSON.stringify({
-        provider: provider === "__custom__" ? "custom" : provider, base_url, api_key
+        provider: provName, base_url, api_key
       })
     });
     if (!models.length) { chips.innerHTML = '<span class="muted">该 provider 未返回模型列表</span>'; return; }
@@ -3090,10 +3161,12 @@ async function fetchLLMModels() {
 
 async function saveLLMConfig() {
   const provider = $("#llm-provider").value;
+  const provName = provider === "__custom__"     // 自定义名称优先，留空回落 custom
+    ? ($("#llm-provider-custom").value.trim() || "custom") : provider;
   const cw = parseCtxWindow($("#llm-ctx-window").value.trim());
   if (Number.isNaN(cw)) return;
   const body = {
-    provider: provider === "__custom__" ? "custom" : provider,
+    provider: provName,
     base_url: $("#llm-base-url").value.trim(),
     model_id: $("#llm-model-id").value.trim(),
     api_key: $("#llm-api-key").value.trim(),
@@ -3355,6 +3428,40 @@ $("#memory-refresh").onclick = loadMemories;
 $("#trace-query").onclick = loadTraces;
 $("#usage-refresh").onclick = loadUsage;
 $("#usage-days").onchange = e => { usageDays = +e.target.value; loadUsage(); };
+$("#emb-save").onclick = async () => {
+  try {
+    await api("/api/v1/llm/embedding-config", { method: "PUT", body: JSON.stringify({
+      provider: $("#emb-provider").value,
+      model_id: $("#emb-model-id").value.trim(),
+      dim: +$("#emb-dim").value,
+      base_url: $("#emb-base-url").value.trim() || null,
+      api_key: $("#emb-api-key").value || null }) });
+    toast("嵌入配置已保存", "ok"); loadEmbeddingConfig();
+  } catch (e) { toast(e.message, "err"); }
+};
+$("#emb-preset").onchange = e => {
+  const v = e.target.value;
+  if (v === "custom") {          // 清空预置填充的数据，回到手动填写
+    $("#emb-provider").value = "";
+    $("#emb-model-id").value = "";
+    $("#emb-dim").value = "";
+    $("#emb-base-url").value = "";
+    $("#emb-provider").focus();
+    return;
+  }
+  if (v === "") return;
+  const p = EMBED_PRESETS[+v];
+  $("#emb-provider").value = p.provider;
+  $("#emb-model-id").value = p.model;
+  $("#emb-dim").value = p.dim;
+  $("#emb-base-url").value = p.base;
+};
+$("#emb-delete").onclick = async () => {
+  try {
+    await api("/api/v1/llm/embedding-config", { method: "DELETE" });
+    toast("已清除，建库回落系统默认", "ok"); loadEmbeddingConfig();
+  } catch (e) { toast(e.message, "err"); }
+};
 $("#trace-current").onclick = () => {
   $("#trace-session").value = state.active;      // 一键填入当前聊天会话
   loadTraces();

@@ -250,7 +250,8 @@ async def cancel_rebuild(kb_id: str, request: Request):
 
 @router.patch("/kbs/{kb_id}/embedding")
 async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,
-                              request: Request):
+                              request: Request,
+                              user: User = Depends(get_current_user)):
     """修改知识库的嵌入配置（provider/model/端点/密钥），创建后随时可改。
 
     已入库的向量不会重新嵌入：若换了模型，接口返回的 embedding_mismatch
@@ -262,7 +263,8 @@ async def update_kb_embedding(kb_id: str, req: KBEmbeddingUpdateRequest,
             request.app.state.kb_service.update_embedding,
             kb_id, provider=req.embedding_provider,
             model_id=req.embedding_model_id, dim=req.embedding_dim,
-            base_url=req.embedding_base_url, api_key=req.embedding_api_key)
+            base_url=req.embedding_base_url, api_key=req.embedding_api_key,
+            user_id=user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _kb_dict(kb)

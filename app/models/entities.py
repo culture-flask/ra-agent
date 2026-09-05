@@ -126,6 +126,25 @@ class LLMUsage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class UserEmbeddingConfig(Base):
+    """用户级嵌入模型默认配置（每用户一条，user_id 即主键）。
+
+    建库未显式指定嵌入模型时优先于系统默认（resolve_embedding_meta），
+    建库即固化进 KB 的 embedding_* 列——修改本配置不影响存量库（维度安全）。
+    api_key AES-256 加密落库（同 UserLLMConfig 纪律）。
+    """
+    __tablename__ = "user_embedding_config"
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32))                  # cloud 名 | local | 任意自建端点名
+    model_id: Mapped[str] = mapped_column(String(128))
+    dim: Mapped[int] = mapped_column(Integer)
+    base_url: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    api_key: Mapped[str | None] = mapped_column(String(512), nullable=True)   # 加密
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
+                                                 default=utcnow, onupdate=utcnow)
+
+
 class Feedback(Base):
     """用户反馈：点赞/点踩一条回答（P3-19 反馈闭环）。
 

@@ -132,6 +132,16 @@ async def lifespan(app: FastAPI):
         conn.execute(text("UPDATE kbs SET kind = 'archive' "
                           "WHERE name IN ('辩论式agent纪要', '研讨式agent纪要') "
                           "AND kind = 'user'"))
+        # 用户级嵌入模型默认配置（每用户一条）：建库缺省时优先于系统默认
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS user_embedding_config ("
+            "user_id VARCHAR(36) PRIMARY KEY, "
+            "provider VARCHAR(32) NOT NULL, "
+            "model_id VARCHAR(128) NOT NULL, "
+            "dim INTEGER NOT NULL, "
+            "base_url VARCHAR(256), "
+            "api_key VARCHAR(512), "
+            "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now())"))
 
     # --- 编排层装配（图 + 知识库 + LLM）---
     kb_service = KBService(settings)

@@ -27,6 +27,7 @@ from app.core.db import SessionLocal
 from app.core.events import emit
 from app.core.logging import get_logger
 from app.models import KnowledgeBase
+from app.models.entities import UserEmbeddingConfig
 from app.services.parsing import parse_file_pages
 
 logger = get_logger("kb_service")
@@ -142,12 +143,25 @@ class KBService:
     def resolve_embedding_meta(self, provider: str | None = None,
                                model_id: str | None = None,
                                dim: int | None = None,
-                               base_url: str | None = None) -> EmbeddingMeta:
-        """解析嵌入模型：缺省用配置默认；可显式指定 provider/model_id/dim（每库标注）。
+                               base_url: str | None = None,
+                               user_id: str | None = None) -> EmbeddingMeta:
+        """解析嵌入模型，优先级：显式指定 > 用户级配置 > 系统默认。
 
-        任意 OpenAI 兼容端点（llama.cpp / vLLM 等）无需进配置白名单——
-        只要显式给出 base_url + model_id + dim，按云端协议直接接入。
+        - 显式指定（建库/重建/改配置请求带 provider）完全生效，可叠加
+          单项覆盖（如 cloud provider 只换 model_id）；
+        - 全部缺省时查用户级嵌入配置（每用户一条），再退系统默认——
+          避免默认端点失效拖垮建库；
+        - 任意 OpenAI 兼容端点（llama.cpp / vLLM 等）无需进配置白名单——
+          只要显式给出 base_url + model_id + dim，按云端协议直接接入。
         """
+        if provider is None and user_id:
+            uc = self.get_user_embedding_config(user_id)
+            if uc:      # 用户级整体接管（显式传的单项仍可覆盖）
+                return EmbeddingMeta(
+                    provider=uc["provider"],
+                    model_id=model_id or uc["model_id"],
+                    dim=dim or uc["dim"],
+                    base_url=base_url or uc["base_url"])
         provider = provider or self._settings.embedding_default_provider
         if provider == "local":
             return EmbeddingMeta(provider="local", model_id=model_id or "mini",
@@ -165,6 +179,69 @@ class KBService:
                              model_id=model_id or cloud["model_id"],
                              dim=dim or cloud["dim"],
                              base_url=base_url or cloud["base_url"])
+
+    # ---------- 用户级嵌入配置（每用户一条） ----------
+    def get_user_embedding_config(self, user_id: str) -> dict | None:
+        """当前用户的嵌入默认配置；api_key 解密返回（仅服务端建库用）。"""
+        with SessionLocal() as db:
+            row = db.get(UserEmbeddingConfig, user_id)
+            if not row:
+                return None
+            api_key = None
+            if row.api_key:
+                try:
+                    api_key = self._crypto.decrypt(row.api_key)
+                except Exception as e:
+                    logger.warning("decrypt user embedding key failed: %s", e)
+            return {"provider": row.provider, "model_id": row.model_id,
+                    "dim": row.dim, "base_url": row.base_url,
+                    "api_key": api_key}
+
+    def set_user_embedding_config(self, user_id: str, provider: str,
+                                  model_id: str, dim: int,
+                                  base_url: str | None = None,
+                                  api_key: str | None = None) -> dict:
+        """保存用户级嵌入默认配置。保存前先解析校验（provider 合法 /
+        自定义端点字段齐全），dim 必填——它是向量空间兼容性的硬约束。"""
+        provider = (provider or "").strip()
+        model_id = (model_id or "").strip()
+        base_url = (base_url or "").strip() or None
+        if not provider or not model_id or not dim or int(dim) <= 0:
+            raise ValueError("provider / model_id / dim 必填（dim 为正整数）")
+        dim = int(dim)
+        if provider != "local" and provider not in self._settings.embedding_cloud \
+                and not base_url:
+            raise ValueError("自定义端点必须提供 base_url")
+        # 校验解析一次：provider/local/自定义三条路径都走得通才算合法
+        self.resolve_embedding_meta(provider, model_id, dim, base_url)
+        with SessionLocal() as db:
+            row = db.get(UserEmbeddingConfig, user_id)
+            if not row:
+                row = UserEmbeddingConfig(user_id=user_id, provider=provider,
+                                          model_id=model_id, dim=dim,
+                                          base_url=base_url,
+                                          api_key=self._crypto.encrypt(api_key)
+                                          if api_key else None)
+                db.add(row)
+            else:
+                row.provider, row.model_id, row.dim = provider, model_id, dim
+                row.base_url = base_url
+                if api_key is not None:      # 空串=清除；None=保持不变
+                    row.api_key = self._crypto.encrypt(api_key) if api_key else None
+            db.commit()
+        logger.info("user=%s embedding default config saved: %s/%s dim=%s",
+                    user_id, provider, model_id, dim)
+        return self.get_user_embedding_config(user_id)
+
+    def delete_user_embedding_config(self, user_id: str) -> bool:
+        """清除用户级嵌入默认配置（回落系统默认）。"""
+        with SessionLocal() as db:
+            row = db.get(UserEmbeddingConfig, user_id)
+            if not row:
+                return False
+            db.delete(row)
+            db.commit()
+        return True
 
     def _vector_store(self, kb: KnowledgeBase):
         cloud_cfg = self._settings.embedding_cloud.get(kb.embedding_provider, {})
@@ -202,10 +279,16 @@ class KBService:
                   kind: str = "user") -> KnowledgeBase:
         """建库：写 Postgres（固化嵌入模型标注），有文本则同步入库。
 
-        可显式指定嵌入模型（provider/model_id/dim）与专用 base_url/api_key，
-        缺省用配置默认。description 为知识库介绍（LLM 选库参考，API 层必填）。
+        可显式指定嵌入模型（provider/model_id/dim）与专用 base_url/api_key；
+        全部缺省时按「用户级配置 > 系统默认」解析。api_key 未传时沿用用户级
+        配置的密钥（如有）。description 为知识库介绍（LLM 选库参考，API 层必填）。
         """
-        meta = self.resolve_embedding_meta(provider, model_id, dim, base_url)
+        meta = self.resolve_embedding_meta(provider, model_id, dim, base_url,
+                                           user_id=user_id)
+        if not api_key:
+            uc = self.get_user_embedding_config(user_id) if user_id else None
+            if uc:
+                api_key = uc.get("api_key")
         with SessionLocal() as db:
             kb = KnowledgeBase(
                 kb_id=uuid.uuid4().hex[:12], name=name, scope=scope,
@@ -754,7 +837,8 @@ class KBService:
         new_model = model_id or kb.embedding_model_id
         new_dim = dim or kb.embedding_dim
         new_base = kb.embedding_base_url if base_url is None else (base_url.strip() or None)
-        meta = self.resolve_embedding_meta(new_provider, new_model, new_dim, new_base)
+        meta = self.resolve_embedding_meta(new_provider, new_model, new_dim,
+                                           new_base, user_id=user_id)
         with SessionLocal() as db:
             row = db.get(KnowledgeBase, kb_id)
             row.embedding_provider = meta.provider

@@ -174,3 +174,66 @@ async def update_config(config_id: str, req: LLMConfigUpdateRequest,
     if not ok:
         raise HTTPException(status_code=404, detail="config not found")
     return {"updated": config_id}
+
+
+# ---------- 用户级嵌入模型默认配置 ----------
+class EmbeddingConfigRequest(BaseModel):
+    """用户级嵌入默认配置：建库未显式指定嵌入时优先于系统默认。"""
+    provider: str = Field(min_length=1, max_length=32)
+    model_id: str = Field(min_length=1, max_length=128)
+    dim: int = Field(ge=1, le=100_000)
+    base_url: str | None = Field(default=None, max_length=256)
+    api_key: str | None = Field(default=None, max_length=256)   # None=保持不变
+
+    @field_validator("provider", "model_id")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("不能为空")
+        return v
+
+
+@router.get("/embedding-config")
+async def get_embedding_config(request: Request,
+                               user: User = Depends(get_current_user)):
+    """当前用户的嵌入默认配置（api_key 只回掩码）+ 可选 provider 目录。"""
+    settings = request.app.state.settings
+    svc = request.app.state.kb_service
+    cfg = await run_in_threadpool(svc.get_user_embedding_config, user.id)
+    masked = None
+    if cfg and cfg.get("api_key"):
+        masked = _mask(cfg["api_key"])
+    return {"config": None if not cfg else {
+                "provider": cfg["provider"], "model_id": cfg["model_id"],
+                "dim": cfg["dim"], "base_url": cfg["base_url"],
+                "api_key_masked": masked},
+            "providers": sorted(settings.embedding_cloud.keys()) + ["local", "custom"],
+            "system_default": {"provider": settings.embedding_default_provider,
+                               "model_id": settings.embedding_default_model}}
+
+
+@router.put("/embedding-config")
+async def save_embedding_config(req: EmbeddingConfigRequest, request: Request,
+                                user: User = Depends(get_current_user)):
+    """保存用户级嵌入默认配置（每用户一条，upsert）。
+
+    api_key 语义：None=保持旧值；空串=清除；有值=加密更新。"""
+    try:
+        cfg = await run_in_threadpool(
+            request.app.state.kb_service.set_user_embedding_config,
+            user.id, req.provider, req.model_id, req.dim,
+            req.base_url, req.api_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"saved": True,
+            "api_key_masked": _mask(cfg["api_key"]) if cfg.get("api_key") else None}
+
+
+@router.delete("/embedding-config")
+async def delete_embedding_config(request: Request,
+                                  user: User = Depends(get_current_user)):
+    """清除用户级嵌入默认配置（建库缺省回落系统默认）。"""
+    removed = await run_in_threadpool(
+        request.app.state.kb_service.delete_user_embedding_config, user.id)
+    return {"deleted": removed}
