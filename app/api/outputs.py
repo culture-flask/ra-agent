@@ -63,6 +63,27 @@ async def saved_files(request: Request, session_id: str = Query(min_length=1),
     return await run_in_threadpool(_query)
 
 
+@router.get("/all")
+async def list_all(request: Request, user: User = Depends(get_current_user)):
+    """列出本人产出目录的全部文件：name / size / mtime（最近修改优先）。
+
+    前端「笔记和文件」视图用；下载仍走 /download（白名单 + 目录钳制）。"""
+    user_dir = await _user_dir(request, user.id)
+
+    def _list() -> list[dict]:
+        if not user_dir.is_dir():
+            return []
+        files = []
+        for p in user_dir.iterdir():
+            if not p.is_file():
+                continue
+            st = p.stat()
+            files.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
+        return sorted(files, key=lambda f: f["mtime"], reverse=True)
+
+    return await run_in_threadpool(_list)
+
+
 @router.get("/download")
 async def download(request: Request, name: str = Query(min_length=1),
                    user: User = Depends(get_current_user)):

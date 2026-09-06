@@ -1,9 +1,12 @@
 """知识库 ：建库/列表/检索 + 多格式文档上传（后台异步入库）。"""
 
+import re
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.core.cancel import request_cancel
@@ -99,6 +102,17 @@ async def _get_kb(request: Request, kb_id: str):
         raise HTTPException(status_code=404, detail="kb not found")
 
 
+async def _require_kb_visible(request: Request, kb_id: str, user: User):
+    """可见性闸门：私有库仅属主可访问（与 delete_kb 的属主判断同语义）。
+
+    取源文档列表/下载原件这类"读内容"的端点必须过这道闸，
+    不能只靠前端列表过滤（list_kbs 已按可见性过滤，但按 id 直连绕不过）。"""
+    kb = await _get_kb(request, kb_id)
+    if kb.scope == "private" and kb.owner_user_id and kb.owner_user_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden: not kb owner")
+    return kb
+
+
 @router.post("/kbs")
 async def create_kb(req: KBCreateRequest, request: Request,
                     user: User = Depends(get_current_user)):
@@ -166,10 +180,39 @@ class KBDeleteRequest(BaseModel):
 
 
 @router.get("/kbs/{kb_id}/files")
-async def list_kb_files(kb_id: str, request: Request):
+async def list_kb_files(kb_id: str, request: Request,
+                        user: User = Depends(get_current_user)):
     """该库的源文件列表：原始文件名、片段数、页码范围（删除管理用）。"""
-    kb = await _get_kb(request, kb_id)
+    kb = await _require_kb_visible(request, kb_id, user)
     return await run_in_threadpool(request.app.state.kb_service.list_documents, kb.kb_id)
+
+
+# 归档源文件名形如 {doc_id}__原始文件名，doc_id 是内容哈希（十六进制）——
+# 白名单校验天然排除路径穿越；下载时按 doc_id 前缀在归档目录反查，不信任客户端传的文件名
+_DOC_ID_RE = re.compile(r"^[0-9a-f]{6,64}$")
+
+
+@router.get("/kbs/{kb_id}/docs/{doc_id}/download")
+async def download_kb_doc(kb_id: str, doc_id: str, request: Request,
+                          user: User = Depends(get_current_user)):
+    """下载知识库源文档的归档原件（data/docs/{kb_id}/{doc_id}__文件名）。"""
+    if not _DOC_ID_RE.fullmatch(doc_id):
+        raise HTTPException(status_code=400, detail="非法 doc_id")
+    kb = await _require_kb_visible(request, kb_id, user)
+
+    def _find() -> Path | None:
+        kb_docs = Path(request.app.state.settings.data_dir) / "docs" / kb.kb_id
+        if not kb_docs.is_dir():
+            return None
+        hits = sorted(kb_docs.glob(f"{doc_id}__*"))
+        return hits[0] if hits else None
+
+    path = await run_in_threadpool(_find)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="源文件不存在")
+    # 归档名带 doc_id__ 前缀，下载还原为原始文件名
+    orig_name = path.name.split("__", 1)[1] if "__" in path.name else path.name
+    return FileResponse(path, filename=orig_name)
 
 
 @router.post("/kbs/{kb_id}/documents/delete")

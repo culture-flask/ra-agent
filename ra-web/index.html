@@ -101,6 +101,13 @@ html[data-theme="dark"] .btn.danger:hover{background:rgba(248,113,113,.08)}
 .badge.core{background:var(--user-green);color:#fff}
 .badge.short{background:transparent;color:var(--btn-blue);border:1.5px dashed rgba(43,95,217,.5)}
 html[data-theme="dark"] .badge.short{color:#93b4f8;border-color:rgba(122,162,248,.5)}
+/* 长期记忆分层卡片：核心 / 短期各自成节 */
+.mem-tier{padding:14px 18px;margin-bottom:14px}
+.mem-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;margin-bottom:10px}
+.mem-tier-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mem-tier-t{font-size:14px;font-weight:650;color:var(--ink)}
+.mem-empty{padding:18px 4px;font-size:12.5px}
 /* "我禁检索"：红底白字 + 外圈 + 呼吸动画，与 公共/就绪 等状态徽章明显区分 */
 .badge.disable{background:var(--danger);color:#fff;border:1.5px solid var(--bg);box-shadow:0 0 0 1.5px var(--danger);animation:disable-pulse 1.6s ease-in-out infinite}
 @keyframes disable-pulse{0%,100%{box-shadow:0 0 0 1.5px var(--danger)}50%{box-shadow:0 0 0 4px rgba(220,38,38,.28)}}
@@ -292,7 +299,32 @@ html[data-theme="dark"] .bubble code{background:rgba(232,178,58,.13);color:#f0cd
 .bubble hr{border:none;border-top:1px solid var(--line-strong);margin:16px 0}
 /* KaTeX 公式 */
 .katex{font-size:1.05em}
-.katex-display{margin:.6em 0;overflow-x:auto;overflow-y:hidden}
+.katex-display{margin:.6em 0;overflow-x:auto;overflow-y:hidden;padding:2px 0}
+/* KaTeX 降级（未加载/渲染失败）：原文等宽展示 */
+.md-math-raw{font-family:"SFMono-Regular",ui-monospace,Consolas,Monaco,monospace;font-size:.92em;
+  color:var(--ink);white-space:pre-wrap;word-break:break-word}
+/* 气泡/多Agent视图内 Markdown 排版：标题 / 列表 / 引用 / 链接 */
+:is(.bubble,.bs-item .body,.bs-plan-body) :is(h1,h2,h3,h4){font-weight:650;line-height:1.4;margin:16px 0 6px}
+:is(.bubble,.bs-item .body,.bs-plan-body) h1{font-size:1.28em;border-bottom:1px solid var(--line);padding-bottom:6px}
+:is(.bubble,.bs-item .body,.bs-plan-body) h2{font-size:1.16em;border-bottom:1px solid var(--line);padding-bottom:5px}
+:is(.bubble,.bs-item .body,.bs-plan-body) h3{font-size:1.07em}
+:is(.bubble,.bs-item .body,.bs-plan-body) h4{font-size:1em}
+:is(.bubble,.bs-item .body,.bs-plan-body) :is(h1,h2,h3,h4):first-child{margin-top:2px}
+:is(.bubble,.bs-item .body,.bs-plan-body) :is(ul,ol){margin:6px 0;padding-left:1.5em}
+:is(.bubble,.bs-item .body,.bs-plan-body) ul{list-style:disc}
+:is(.bubble,.bs-item .body,.bs-plan-body) ul ul{list-style:circle;margin:2px 0}
+:is(.bubble,.bs-item .body,.bs-plan-body) ol{list-style:decimal}
+:is(.bubble,.bs-item .body,.bs-plan-body) li{margin:3px 0;line-height:1.65}
+:is(.bubble,.bs-item .body,.bs-plan-body) li::marker{color:var(--muted)}
+:is(.bubble,.bs-item .body,.bs-plan-body) li.task{list-style:none;margin-left:-1.35em}
+:is(.bubble,.bs-item .body,.bs-plan-body) .task-box{margin-right:6px}
+:is(.bubble,.bs-item .body,.bs-plan-body) blockquote{margin:8px 0;padding:6px 13px;border-left:3px solid var(--line-strong);
+  background:var(--chip);border-radius:0 8px 8px 0;color:var(--muted)}
+:is(.bubble,.bs-item .body,.bs-plan-body) blockquote p{margin:2px 0}
+:is(.bubble,.bs-item .body,.bs-plan-body) a{color:var(--accent);text-decoration:none}
+:is(.bubble,.bs-item .body,.bs-plan-body) a:hover{text-decoration:underline}
+:is(.bubble,.bs-item .body,.bs-plan-body) del{opacity:.6}
+:is(.bubble,.bs-item .body,.bs-plan-body) img.md-img{max-width:100%;border-radius:8px;margin:4px 0}
 /* 气泡内 GFM 表格 */
 .md-table-wrap{overflow-x:auto;margin:10px 0;border:1px solid var(--line-strong);border-radius:10px;background:var(--surface)}
 .md-table{border-collapse:collapse;width:100%;font-size:12.5px;line-height:1.55}
@@ -418,8 +450,34 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0;background:var(--
 .tbl tr.expander:hover{background:var(--chip)}
 .tbl tr.detail td{background:var(--panel)}
 
-/* 用量统计视图：汇总卡 + 按天×模型明细表 */
+/* 用量统计视图：汇总卡 + 图表 + 按天×模型明细表 */
 .usage-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+/* 图表区：趋势柱状图占宽列，环形图靠右，调用次数横向条形图通栏 */
+.usage-charts{display:grid;grid-template-columns:minmax(0,1.8fr) minmax(0,1fr);gap:12px;margin-bottom:16px}
+.u-chart{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-width:0}
+.u-chart-t{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px}
+.u-chart-t .u-chart-s{font-size:11.5px;font-weight:400;color:var(--muted);margin-left:6px}
+.u-chart .chart-wrap{position:relative;height:270px}
+.u-chart-calls{grid-column:1/-1}
+.u-chart-calls .chart-wrap{height:190px}
+@media (max-width:920px){.usage-charts{grid-template-columns:1fr}}
+/* 笔记和文件：Windows 资源管理器大图标网格 */
+.file-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:6px}
+.file-tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:5px;
+  padding:12px 8px 10px;border-radius:10px;cursor:pointer;text-align:center;
+  border:1px solid transparent;transition:background .12s,border-color .12s}
+.file-tile:hover{background:var(--chip)}
+.file-tile.sel{background:rgba(43,95,217,.12);border-color:rgba(43,95,217,.4)}
+html[data-theme="dark"] .file-tile.sel{background:rgba(122,162,248,.14);border-color:rgba(122,162,248,.45)}
+.file-ic{width:44px;height:52px;flex:none;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.14))}
+.file-name{font-size:12px;line-height:1.4;color:var(--ink);word-break:break-all;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.file-meta{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:100%}
+.file-actions{position:absolute;left:0;right:0;bottom:6px;display:flex;gap:6px;
+  justify-content:center;opacity:0;transition:opacity .12s;pointer-events:none}
+.file-tile:hover .file-actions{opacity:1;pointer-events:auto}
+.file-actions .btn{padding:1px 9px;font-size:11px;box-shadow:var(--shadow-sm)}
 .u-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
 .u-card .u-num{font-size:22px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1.2}
 .u-card .u-label{font-size:12px;color:var(--muted);margin-top:4px}
@@ -758,6 +816,30 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
       <div id="kb-list"></div>
     </section>
 
+    <!-- 笔记和文件：多 Agent 产出 + 知识库源文档 -->
+    <section class="view" id="view-files">
+      <div class="card" style="margin-bottom:16px">
+        <div class="section-t" style="display:flex;align-items:center;gap:10px">
+          产出文件
+          <button class="btn sm" id="files-refresh">刷新</button>
+          <span class="hint" style="font-weight:400;font-size:12px;color:var(--muted)">
+            普通对话、多 Agent 团队（溯源社 / 争鸣社 / 格致会讲）落盘的完整稿与导出件 · output/&lt;用户名&gt;/</span>
+        </div>
+        <div id="outputs-list"></div>
+      </div>
+      <div class="card">
+        <div class="section-t">知识库源文档</div>
+        <div class="field" style="margin:8px 0 12px">
+          <select class="input" id="files-kb" style="max-width:420px">
+            <option value="">选择知识库…</option>
+          </select>
+          <div class="hint" style="font-size:12px;color:var(--muted);margin-top:5px">
+            上传入库时留底的原件（data 归档），仅显示你有权限查看的库</div>
+        </div>
+        <div id="kbdocs-list"></div>
+      </div>
+    </section>
+
     <!-- 模型配置 -->
     <section class="view" id="view-llm">
       <div class="llm-layout">
@@ -864,6 +946,7 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
     <section class="view" id="view-usage">
       <div class="toolbar">
         <select class="input" id="usage-days" style="width:140px">
+          <option value="1">近 1 天</option>
           <option value="7">近 7 天</option>
           <option value="30" selected>近 30 天</option>
           <option value="90">近 90 天</option>
@@ -874,6 +957,20 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
         <span class="muted" style="font-size:12.5px">当前用户的 LLM token 用量 · 按天 × 模型聚合（含全部对话与多 agent 调用）</span>
       </div>
       <div id="usage-cards" class="usage-cards"></div>
+      <div id="usage-charts" class="usage-charts" hidden>
+        <div class="u-chart">
+          <div class="u-chart-t">每日 token 用量<span class="u-chart-s">按 输入·未命中 / 输入·缓存命中 / 输出 堆叠</span></div>
+          <div class="chart-wrap"><canvas id="usage-chart-trend"></canvas></div>
+        </div>
+        <div class="u-chart">
+          <div class="u-chart-t">模型 token 占比<span class="u-chart-s">含调用次数与百分比</span></div>
+          <div class="chart-wrap"><canvas id="usage-chart-pie"></canvas></div>
+        </div>
+        <div class="u-chart u-chart-calls">
+          <div class="u-chart-t">各模型调用次数<span class="u-chart-s">Top 10 · 悬停查看 token 消耗</span></div>
+          <div class="chart-wrap"><canvas id="usage-chart-calls"></canvas></div>
+        </div>
+      </div>
       <div id="usage-list"></div>
     </section>
     <!-- 头脑风暴 -->
@@ -919,10 +1016,6 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
               </div>
               <div id="bs-attach-bar" style="margin-top:8px"></div>
             </div>
-            <div class="field">
-              <label id="bs-roles-label">参赛角色（点卡片可关闭，至少保留 2 个）</label>
-              <div id="bs-roles" class="bs-roles"></div>
-            </div>
             <div class="field" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap" id="bs-rounds-row">
               <label style="margin:0">辩论轮数上限</label>
               <input class="input mono" id="bs-rounds" type="number" min="1" max="6" value="3" style="width:76px">
@@ -933,9 +1026,13 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
               <input class="input mono" id="bs-budget" type="number" min="10000" step="100000" value="20000000" style="width:120px">
               <span class="hint" style="font-size:12px;color:var(--muted)">全场累计超限即熔断：跳过剩余辩论、以已有材料汇编成稿（工具轮多/模型思考多就调大）</span>
             </div>
-            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
               <button class="btn primary" id="bs-start">开始头脑风暴</button>
               <span class="hint" style="font-size:12px;color:var(--muted)">并行独立调研 → 主持人调度多轮辩论 → 撰稿成稿（预计需要 30分钟+）</span>
+            </div>
+            <div class="field">
+              <label id="bs-roles-label">参赛角色（点卡片可关闭，至少保留 2 个）</label>
+              <div id="bs-roles" class="bs-roles"></div>
             </div>
           </div>
           <!-- 群聊流 -->
@@ -1202,72 +1299,200 @@ function fmtTime(iso) {
 }
 function shortId(id) { return id ? String(id).slice(0, 8) : "-"; }
 
-/* ---------------- 轻量 Markdown ---------------- */
-function md(text) {
-  let t = esc(text);
-  const blocks = [];   /* 先提取的块（表格），占位符回填，避免被行级规则破坏 */
-  t = t.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
-    const cleanCode = code.replace(/\n$/, "");
-    let highlighted = cleanCode;
-    if (typeof hljs !== 'undefined') {
-      try {
-        highlighted = lang ? hljs.highlight(cleanCode, { language: lang }).value : hljs.highlightAuto(cleanCode).value;
-      } catch (e) { /* 高亮失败 */ }
-    }
-    return '<pre><code' + (lang ? ' class="language-' + lang + '"' : '') + '>' + highlighted + '</code></pre>';
-  });
-  /* GFM 表格：表头行 + 分隔行（仅含 | - : 空格且至少一个 -）+ 若干数据行 */
-  t = t.replace(/(^[ \t]*\|.+)[ \t]*\n[ \t]*(\|[-: |]*-[-: |]*\|)[ \t]*\n((?:^[ \t]*\|.+[ \t]*(?:\n|$))+)/gm,
-    (m, head, sep, body) => {
-      blocks.push(mdTable(head, sep, body));
-      return "\n\u0000T" + (blocks.length - 1) + "\u0000\n";
-    });
-  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-  t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-  t = t.replace(/^#{1,3}\s*(.+)$/gm, "<b>$1</b>");
-  t = t.replace(/^[-•]\s+(.+)$/gm, "• $1");
-  t = t.replace(/^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$/gm, "\n<hr>\n");   /* --- 分隔线 */
-  const html = t.split(/\n{2,}/).map(p => {
-    const ph = p.trim().match(/^\u0000T(\d+)\u0000$/);
-    if (ph) return blocks[+ph[1]];
-    if (p.trim() === "<hr>") return "<hr>";
-    return "<p>" + p.replace(/\n/g, "<br>") + "</p>";
-  }).join("");
-  return html.replace(/\u0000T(\d+)\u0000/g, (_, i) => blocks[+i]);   /* 段内占位兜底回填 */
-}
-/* GFM 表格渲染：对齐取自分隔行（:---: 居中 / ---: 右对齐），单元格走行内格式 */
-function mdTable(headLine, sepLine, bodyText) {
-  const splitRow = line => line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(c => c.trim());
-  const fmt = c => c.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-  const alignOf = s => /^:.*:$/.test(s) ? "center" : /:$/.test(s) ? "right" : "";
-  const aligns = splitRow(sepLine).map(alignOf);
-  const head = splitRow(headLine);
-  const cell = (c, i, tag) => {
-    const a = aligns[i] ? ' style="text-align:' + aligns[i] + '"' : "";
-    return "<" + tag + a + ">" + fmt(c) + "</" + tag + ">";
-  };
-  const rows = bodyText.replace(/\n$/, "").split("\n").map(line => {
-    const cs = splitRow(line);
-    while (cs.length < head.length) cs.push("");
-    return "<tr>" + cs.slice(0, head.length).map((c, i) => cell(c, i, "td")).join("") + "</tr>";
-  }).join("");
-  return '<div class="md-table-wrap"><table class="md-table"><thead><tr>'
-    + head.map((c, i) => cell(c, i, "th")).join("") + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+/* ---------------- Markdown + KaTeX 公式 ----------------
+   渲染管线（顺序即正确性）：
+   ① 围栏代码 → ② 行内代码 → ③ 公式提取（KaTeX 同步渲染，存为占位符）
+   → ④ HTML 转义 → ⑤ 块级解析（标题/列表/表格/引用/段落）→ ⑥ 行内格式
+   → ⑦ 占位符回填。
+   公式先于转义和 markdown 规则被摘出，因此多行公式（aligned/cases 等）
+   不会被 <br> 拆断、对齐符 & 和 * _ 等不会被行内规则破坏、
+   行内 code 里的 $ 也不会被误当定界符；流式期间每帧同样走完整管线，
+   公式在闭合定界符到达后即渲染。KaTeX 未就绪时降级为原文展示。 */
+const MATH_MACROS = {     /* LLM 常用但 KaTeX 未内置的宏 */
+  "\\bm": "\\boldsymbol{#1}",
+  "\\argmax": "\\operatorname{arg\\,max}",
+  "\\argmin": "\\operatorname{arg\\,min}",
+  "\\RR": "\\mathbb{R}", "\\NN": "\\mathbb{N}", "\\ZZ": "\\mathbb{Z}", "\\EE": "\\mathbb{E}",
+};
+function katexHTML(tex, display) {
+  const K = window.katex;
+  if (!K) return null;
+  try {
+    return K.renderToString(tex, { displayMode: display, throwOnError: false,
+      strict: false, trust: false, macros: Object.assign({}, MATH_MACROS) });
+  } catch (e) { return null; }   /* 渲染失败降级为原文，不影响正文 */
 }
 
-/* KaTeX 公式渲染：仅对非流式的最终内容调用；CDN 加载失败时静默跳过 */
-function renderMathIn(el){
-  if (!el || !window.renderMathInElement) return;
-  try {
-    renderMathInElement(el, { throwOnError: false,
-      ignoredTags: ["script", "noscript", "style", "textarea", "pre", "option"],
-      delimiters: [
-      { left: "$$",  right: "$$",  display: true },
-      { left: "\\[", right: "\\]", display: true },
-      { left: "\\(", right: "\\)", display: false },
-      { left: "$",   right: "$",   display: false },
-    ]});
-  } catch (e) { /* 公式渲染失败不影响正文 */ }
+function md(text) {
+  const blocks = [], inlines = [];
+  const tokB = i => "\u0000B" + i + "\u0000";
+  const tokI = i => "\u0000I" + i + "\u0000";
+  const mathToken = (tex, display) => {
+    const html = katexHTML(tex, display);
+    if (display) { blocks.push(html || '<div class="md-math-raw">' + esc(tex) + "</div>"); return tokB(blocks.length - 1); }
+    inlines.push(html || '<span class="md-math-raw">' + esc(tex) + "</span>"); return tokI(inlines.length - 1);
+  };
+
+  let t = String(text ?? "").replace(/\r\n?/g, "\n").replace(/\u0000/g, "");
+
+  /* ① 围栏代码：在原文上提取（hljs 自带转义；hljs 缺失时手动转义），容忍流式期间未闭合 */
+  t = t.replace(/```([\w+-]*)[ \t]*\n?([\s\S]*?)(?:```|$)/g, (m, lang, code) => {
+    const cleanCode = code.replace(/\n$/, "");
+    let highlighted;
+    if (typeof hljs !== "undefined") {
+      try {
+        highlighted = lang ? hljs.highlight(cleanCode, { language: lang }).value
+                           : hljs.highlightAuto(cleanCode).value;
+      } catch (e) { highlighted = esc(cleanCode); }
+    } else highlighted = esc(cleanCode);
+    blocks.push('<pre><code' + (lang ? ' class="language-' + lang + '"' : "") + ">"
+      + highlighted + "</code></pre>");
+    return "\n" + tokB(blocks.length - 1) + "\n";
+  });
+
+  /* ② 行内代码（先于公式，code 里的 $ 不再被误判） */
+  t = t.replace(/`([^`\n]+)`/g, (m, c) => {
+    inlines.push("<code>" + esc(c) + "</code>"); return tokI(inlines.length - 1);
+  });
+
+  /* ③ 公式提取：display（可跨行）→ inline；文本中的 \$ 字面量先摘除再还原 */
+  t = t.replace(/\$\$([\s\S]+?)\$\$/g, (m, tex) => "\n" + mathToken(tex.trim(), true) + "\n");
+  t = t.replace(/\\\[([\s\S]+?)\\\]/g, (m, tex) => "\n" + mathToken(tex.trim(), true) + "\n");
+  t = t.replace(/\\begin\{(equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|eqnarray\*?|split|cases|array|aligned|matrix|pmatrix|bmatrix|vmatrix|Bmatrix|Vmatrix|smallmatrix)\}([\s\S]*?)\\end\{\1\}/g,
+    (m, env, body) => "\n" + mathToken("\\begin{" + env + "}" + body + "\\end{" + env + "}", true) + "\n");
+  t = t.replace(/\\\(([\s\S]+?)\\\)/g, (m, tex) => mathToken(tex.trim(), false));
+  t = t.replace(/\\\$/g, "\u0001");
+  t = t.replace(/\$([^$\n]+?)\$(?!\d)/g, (m, tex) => {
+    if (!tex.trim() || /^\s|\s$/.test(tex)) return m;   /* 定界内侧有空格 → 普通文本（价格等） */
+    return mathToken(tex.replace(/\u0001/g, "\\$"), false);
+  });
+  t = t.replace(/\u0001/g, "$");
+
+  /* ④ 转义（占位符只含控制字符与数字，不受影响） */
+  t = esc(t);
+
+  /* ⑥ 行内格式：图片/链接存为占位符（防 href 被后续规则破坏），再走文本规则 */
+  const inline = s => {
+    const keep = html => { inlines.push(html); return tokI(inlines.length - 1); };
+    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) =>
+      /^(https?:|mailto:|data:image\/)/i.test(url)
+        ? keep('<img class="md-img" src="' + url + '" alt="' + alt + '" loading="lazy">') : m);
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, txt, url) =>
+      /^(https?:|mailto:)/i.test(url)
+        ? keep('<a href="' + url + '" target="_blank" rel="noopener">' + txt + "</a>") : m);
+    s = s.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+    s = s.replace(/\*\*\*([^*\n]+?)\*\*\*/g, "<b><i>$1</i></b>");
+    s = s.replace(/\*\*([^*\n]+?)\*\*/g, "<b>$1</b>");
+    s = s.replace(/\*([^*\s](?:[^*\n]*[^*\s])?)\*/g, "<i>$1</i>");
+    s = s.replace(/(^|[\s(（])((?:https?:\/\/)[^\s<)）]+)/g, (m, pre, url) => {
+      const tm = url.match(/[.,;:!?。，、；！？：]+$/);   /* 句尾标点不属于链接 */
+      if (tm) url = url.slice(0, tm.index);
+      return pre + keep('<a href="' + url + '" target="_blank" rel="noopener">' + url + "</a>")
+        + (tm ? tm[0] : "");
+    });
+    return s;
+  };
+
+  /* GFM 表格：对齐取自分隔行（:---: 居中 / ---: 右对齐），单元格走行内格式 */
+  const mdTable = (headLine, sepLine, bodyText) => {
+    const splitRow = line => line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(c => c.trim());
+    const alignOf = s => /^:.*:$/.test(s) ? "center" : /:$/.test(s) ? "right" : "";
+    const aligns = splitRow(sepLine).map(alignOf);
+    const head = splitRow(headLine);
+    const cell = (c, i, tag) => {
+      const a = aligns[i] ? ' style="text-align:' + aligns[i] + '"' : "";
+      return "<" + tag + a + ">" + inline(c) + "</" + tag + ">";
+    };
+    const rows = bodyText.replace(/\n$/, "").split("\n").map(line => {
+      const cs = splitRow(line);
+      while (cs.length < head.length) cs.push("");
+      return "<tr>" + cs.slice(0, head.length).map((c, i) => cell(c, i, "td")).join("") + "</tr>";
+    }).join("");
+    return '<div class="md-table-wrap"><table class="md-table"><thead><tr>'
+      + head.map((c, i) => cell(c, i, "th")).join("") + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+  };
+
+  /* 列表：两级嵌套（≥2 空格缩进为子项）、有序/无序混排、任务清单 [x] */
+  const buildList = items => {
+    const base = Math.min(...items.map(x => x.indent));
+    let html = "", depth = -1;
+    const tags = [], liOpen = [];
+    const closeLi = () => { if (liOpen[depth]) { html += "</li>"; liOpen[depth] = false; } };
+    for (const it of items) {
+      const lv = (it.indent - base) >= 2 ? 1 : 0;
+      const tag = it.ordered ? "ol" : "ul";
+      if (lv > depth) {                       /* 进入子列表：挂在当前打开的 li 内 */
+        html += "<" + tag + (it.ordered && it.num && it.num !== 1 ? ' start="' + it.num + '"' : "") + ">";
+        tags.push(tag); liOpen.push(false); depth = lv;
+      } else if (lv < depth) {                /* 回到顶层 */
+        closeLi(); html += "</" + tags.pop() + ">"; liOpen.pop(); depth = lv;
+      } else if (depth >= 0) {
+        closeLi();
+        if (tags[depth] !== tag) { html += "</" + tags[depth] + "><" + tag + ">"; tags[depth] = tag; }
+      }
+      const tk = it.text.match(/^\[( |x|X)\]\s*(.*)$/);
+      html += "<li" + (tk ? ' class="task"' : "") + ">"
+        + (tk ? '<span class="task-box">' + (tk[1] === " " ? "☐" : "☑") + "</span>" : "")
+        + inline(tk ? tk[2] : it.text);
+      liOpen[depth] = true;
+    }
+    while (depth >= 0) { closeLi(); html += "</" + tags.pop() + ">"; liOpen.pop(); depth--; }
+    return html;
+  };
+
+  /* ⑤ 块级解析 */
+  const isB = s => { const m = s.trim().match(/^\u0000B(\d+)\u0000$/); return m ? +m[1] : -1; };
+  const blockStart = (line, next) => !line.trim() || isB(line) >= 0
+    || /^\s*#{1,6}\s+\S/.test(line)
+    || /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)
+    || (/^\s*\|.+\|\s*$/.test(line) && next !== undefined && /^\s*\|[-: |]*-[-: |]*\|\s*$/.test(next))
+    || /^\s*&gt;/.test(line)                                       /* esc 后的 ">"：引用块 */
+    || /^(\s*)([-*+•]|\d+[.)])\s+\S/.test(line);
+  const out = [];
+  const lines = t.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i], bi = isB(line);
+    if (bi >= 0) { out.push(blocks[bi]); i++; continue; }          /* 代码块/公式块等占位行 */
+    if (!line.trim()) { i++; continue; }
+    let m;
+    if ((m = line.match(/^\s*(#{1,6})\s+(.+?)\s*#*\s*$/))) {
+      const lv = Math.min(m[1].length, 4);
+      out.push("<h" + lv + ">" + inline(m[2]) + "</h" + lv + ">"); i++; continue;
+    }
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { out.push("<hr>"); i++; continue; }
+    if (/^\s*\|.+\|\s*$/.test(line) && i + 1 < lines.length
+        && /^\s*\|[-: |]*-[-: |]*\|\s*$/.test(lines[i + 1])) {     /* GFM 表格 */
+      let j = i + 2;
+      while (j < lines.length && /^\s*\|/.test(lines[j])) j++;
+      out.push(mdTable(line, lines[i + 1], lines.slice(i + 2, j).join("\n")));
+      i = j; continue;
+    }
+    if (/^\s*&gt;/.test(line)) {                                   /* 引用块（esc 后的 >） */
+      const buf = [];
+      while (i < lines.length && /^\s*&gt;/.test(lines[i])) buf.push(lines[i].replace(/^\s*&gt;\s?/, "")), i++;
+      out.push("<blockquote><p>" + buf.map(inline).join("<br>") + "</p></blockquote>"); continue;
+    }
+    if ((m = line.match(/^(\s*)([-*+•]|\d+[.)])\s+(.*)$/))) {      /* 列表（连续项聚合） */
+      const items = [];
+      while (i < lines.length && (m = lines[i].match(/^(\s*)([-*+•]|\d+[.)])\s+(.*)$/))) {
+        items.push({ indent: m[1].replace(/\t/g, "  ").length, ordered: /\d/.test(m[2]),
+                     num: parseInt(m[2], 10) || 0, text: m[3] });
+        i++;
+      }
+      out.push(buildList(items)); continue;
+    }
+    {                                                              /* 段落：遇到下一个块级起始即止 */
+      const buf = [];
+      while (i < lines.length && !blockStart(lines[i], lines[i + 1])) buf.push(lines[i]), i++;
+      out.push("<p>" + buf.map(inline).join("<br>") + "</p>");
+    }
+  }
+
+  /* ⑦ 占位符回填（覆盖表格单元格、引用块等所有嵌入位置） */
+  return out.join("")
+    .replace(/\u0000B(\d+)\u0000/g, (_, n) => blocks[+n] ?? "")
+    .replace(/\u0000I(\d+)\u0000/g, (_, n) => inlines[+n] ?? "");
 }
 
 /* ================= 鉴权 ================= */
@@ -1344,6 +1569,8 @@ const VIEWS = [
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 21h4M12 3a6 6 0 00-4 10.5c.7.6 1 1.4 1 2.5h6c0-1.1.3-1.9 1-2.5A6 6 0 0012 3z"/></svg>' },
   { id: "kb", name: "知识库", sub: "建库 / 上传文档 / 检索测试 / 换嵌入模型重建",
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>' },
+  { id: "files", name: "笔记和文件", sub: "多 Agent 产出文件 · 知识库源文档 · 在线查看 / 下载",
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>' },
   { id: "llm", name: "模型配置", sub: "用户自定义 LLM · provider 分类 · 一键获取模型列表",
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/><path d="M4 12h-2M22 12h-2M12 4V2M12 22v-2"/></svg>' },
   { id: "memory", name: "长期记忆", sub: "跨会话用户记忆 · 自动抽取 · 写入前审核",
@@ -1368,6 +1595,7 @@ function switchView(id) {
   $("#view-sub").textContent = meta.sub;
   $("#session-zone").classList.toggle("show", id === "chat");
   if (id === "kb") loadKBs();
+  if (id === "files") loadFiles();
   if (id === "llm") loadLLMView();
   if (id === "memory") loadMemories();
   if (id === "trace") loadTraces();
@@ -1747,7 +1975,6 @@ function renderMessages() {
   }
   box.innerHTML = msgs.map((m, i) =>
     msgHTML(m, i, i === msgs.length - 1 && m.role === "assistant")).join("");
-  renderMathIn(box);
   $$("#messages [data-fork]").forEach(el => el.onclick = () => forkSession(+el.dataset.fork));
   $$("#messages [data-regen]").forEach(el => el.onclick = regenerateLast);
   $$("#messages [data-fb]").forEach(el => el.onclick = () =>
@@ -1880,21 +2107,31 @@ function scrollMessagesBottom(force = false) {
   box.scrollTop = box.scrollHeight;
 }
 
-/* 流式渲染：只更新最后一条消息节点 */
+/* 流式渲染：只更新最后一条消息节点。
+   rAF 节流：SSE token 事件可达每秒数十次，md() 全量重渲（含 KaTeX 同步渲染）
+   一帧最多执行一次，足够打字机观感 */
+let _patchPending = null, _patchQueued = false;
 function patchLastMsg(msg) {
-  const nodes = $$("#messages .msg");
-  const last = nodes[nodes.length - 1];
-  if (!last) return;
-  const wrap = document.createElement("div");
-  wrap.innerHTML = msgHTML(msg, -1, true);    // 最后一条：始终带"重新生成"入口（失败/流结束时可用）
-  const newNode = wrap.firstChild;
-  last.replaceWith(newNode);
-  $$("[data-regen]", newNode).forEach(el => el.onclick = regenerateLast);
-  const realIdx = getMsgs().length - 1;
-  $$("[data-fb]", newNode).forEach(el => { el.dataset.fb = realIdx;
-    el.onclick = () => sendFeedback(realIdx, +el.dataset.fbv); });
-  if (!msg._streaming) renderMathIn(newNode);   /* 流式期间跳过 KaTeX，结束时渲染一次 */
-  scrollMessagesBottom();                       // 仅钉住时跟随；用户上翻不强制拉底
+  _patchPending = msg;
+  if (_patchQueued) return;
+  _patchQueued = true;
+  requestAnimationFrame(() => {
+    _patchQueued = false;
+    const m = _patchPending; _patchPending = null;
+    if (!m) return;
+    const nodes = $$("#messages .msg");
+    const last = nodes[nodes.length - 1];
+    if (!last) return;
+    const wrap = document.createElement("div");
+    wrap.innerHTML = msgHTML(m, -1, true);    // 最后一条：始终带"重新生成"入口（失败/流结束时可用）
+    const newNode = wrap.firstChild;
+    last.replaceWith(newNode);
+    $$("[data-regen]", newNode).forEach(el => el.onclick = regenerateLast);
+    const realIdx = getMsgs().length - 1;
+    $$("[data-fb]", newNode).forEach(el => { el.dataset.fb = realIdx;
+      el.onclick = () => sendFeedback(realIdx, +el.dataset.fbv); });
+    scrollMessagesBottom();                   // 仅钉住时跟随；用户上翻不强制拉底
+  });
 }
 
 /* ---------------- 对话附件：上传解析 → 暂存 file_id → 随消息发送 ---------------- */
@@ -3197,48 +3434,60 @@ async function loadMemories() {
       对话中提及的研究主题 / 偏好 / 背景会在对话结束后自动抽取写入</div>`;
     return;
   }
-  const sel = new Set();                                   // 勾选待删除的 key
-  const coreCount = rows.filter(m => m.tier === "core").length;
-  box.innerHTML = `
-    <div class="mem-toolbar">
-      <span class="muted">核心 ${coreCount} 条注入每轮对话 · 短期 ${rows.length - coreCount} 条不注入（14 天未更新自动清除）· 上限 50 条，超限自动主题压缩</span>
-      <button class="btn sm danger" id="mem-del-sel" disabled>删除选中</button>
-    </div>
-    <table class="tbl"><tr><th style="width:30px"></th><th style="width:190px">记忆键</th>
-      <th>内容</th><th style="width:92px">层级</th><th style="width:140px">最近使用</th>
-      <th style="width:190px">操作</th></tr>` +
-    rows.map(m => {
-      let v = m.value;
-      if (v && typeof v === "object" && "v" in v) v = v.v;
-      else if (typeof v === "object") v = JSON.stringify(v, null, 1);
-      const badge = m.tier === "core"
-        ? '<span class="badge core">核心</span>' : '<span class="badge short">短期</span>';
-      const tierBtn = m.tier === "core"
-        ? `<button class="btn sm" data-demote="${esc(m.key)}" title="不注入对话，14 天未更新自动清除">降为短期</button>`
-        : `<button class="btn sm" data-promote="${esc(m.key)}" title="常驻并注入每轮对话">置顶核心</button>`;
-      return `<tr>
-        <td><input type="checkbox" data-mkey="${esc(m.key)}"></td>
-        <td class="mono">${esc(m.key)}${m.topic ? `<div class="muted" style="font-size:11px">${esc(m.topic)}</div>` : ""}</td>
-        <td>${esc(v)}</td>
-        <td>${badge}</td>
-        <td class="muted">${m.last_used_at ? fmtTime(m.last_used_at) : "-"}</td>
-        <td>${tierBtn} <button class="btn sm danger" data-del="${esc(m.key)}">删除</button></td>
-      </tr>`;
-    }).join("") + "</table>";
-  const selBtn = $("#mem-del-sel");
+  /* 分层成节：核心 / 短期各自成卡查看与批量操作（层级即分节，省去层级列） */
+  const core = rows.filter(m => m.tier === "core");
+  const short = rows.filter(m => m.tier !== "core");
+  const section = (tier, title, desc, list) => {
+    const body = list.length ? `<table class="tbl"><tr><th style="width:30px"></th><th style="width:190px">记忆键</th>
+        <th>内容</th><th style="width:140px">最近使用</th>
+        <th style="width:190px">操作</th></tr>` +
+      list.map(m => {
+        let v = m.value;
+        if (v && typeof v === "object" && "v" in v) v = v.v;
+        else if (typeof v === "object") v = JSON.stringify(v, null, 1);
+        const tierBtn = tier === "core"
+          ? `<button class="btn sm" data-demote="${esc(m.key)}" title="不注入对话，14 天未更新自动清除">降为短期</button>`
+          : `<button class="btn sm" data-promote="${esc(m.key)}" title="常驻并注入每轮对话">置顶核心</button>`;
+        return `<tr>
+          <td><input type="checkbox" data-mtier="${tier}" data-mkey="${esc(m.key)}"></td>
+          <td class="mono">${esc(m.key)}${m.topic ? `<div class="muted" style="font-size:11px">${esc(m.topic)}</div>` : ""}</td>
+          <td>${esc(v)}</td>
+          <td class="muted">${m.last_used_at ? fmtTime(m.last_used_at) : "-"}</td>
+          <td>${tierBtn} <button class="btn sm danger" data-del="${esc(m.key)}">删除</button></td>
+        </tr>`;
+      }).join("") + "</table>"
+      : '<div class="mem-empty muted">该层级暂无记忆</div>';
+    return `<div class="card mem-tier">
+      <div class="mem-toolbar">
+        <div class="mem-tier-head"><span class="mem-tier-t">${title}</span>
+          <span class="muted" style="font-size:12px">${list.length} 条 · ${desc}</span></div>
+        <button class="btn sm danger" id="mem-del-${tier}" disabled>删除选中</button>
+      </div>${body}</div>`;
+  };
+  box.innerHTML =
+    section("core", "核心记忆", "注入每轮对话 · 上限 50 条，超限自动主题压缩", core)
+    + section("short", "短期记忆", "不注入对话 · 14 天未更新自动清除", short);
+  /* 勾选批量删除：两节各自独立计数与确认 */
+  const sels = { core: new Set(), short: new Set() };
+  const selBtns = { core: $("#mem-del-core"), short: $("#mem-del-short") };
   const refreshSel = () => {
-    selBtn.disabled = !sel.size;
-    selBtn.textContent = sel.size ? `删除选中(${sel.size})` : "删除选中";
+    for (const t of ["core", "short"]) {
+      selBtns[t].disabled = !sels[t].size;
+      selBtns[t].textContent = sels[t].size ? `删除选中(${sels[t].size})` : "删除选中";
+    }
   };
   $$("#memory-list [data-mkey]").forEach(cb => cb.onchange = () => {
-    cb.checked ? sel.add(cb.dataset.mkey) : sel.delete(cb.dataset.mkey);
+    const set = sels[cb.dataset.mtier];
+    cb.checked ? set.add(cb.dataset.mkey) : set.delete(cb.dataset.mkey);
     refreshSel();
   });
-  selBtn.onclick = async () => {
-    if (!confirm(`确定删除选中的 ${sel.size} 条记忆？不可恢复。`)) return;
+  for (const t of ["core", "short"]) selBtns[t].onclick = async () => {
+    const set = sels[t];
+    if (!set.size) return;
+    if (!confirm(`确定删除选中的 ${set.size} 条${t === "core" ? "核心" : "短期"}记忆？不可恢复。`)) return;
     try {
       await api(`/api/v1/memories/delete`,
-        { method: "POST", body: JSON.stringify({ keys: [...sel] }) });
+        { method: "POST", body: JSON.stringify({ keys: [...set] }) });
       loadMemories();
     } catch (e) { toast(e.message, "err"); }
   };
@@ -3314,6 +3563,156 @@ async function loadTraces() {
   });
 }
 
+/* ================= 笔记和文件 =================
+   两栏数据：① output/<用户名>/ 产出文件（GET /outputs/all）
+   ② 知识库源文档归档（GET /kbs/{id}/files 列表 + /docs/{doc_id}/download 取原件）。
+   鉴权只认 Bearer header，下载/预览都用带凭证的 blob fetch（不做裸 <a href>）。 */
+const FILE_TEXT_RE = /\.(md|markdown|txt|bib|tex|json|csv|tsv|log|yaml|yml|xml|html|css|js|ts|py|sh|ini|sql)$/i;
+const humanSize = n => n >= (1 << 20) ? (n / (1 << 20)).toFixed(1) + " MB"
+  : n >= 1024 ? (n / 1024).toFixed(1) + " KB" : (n || 0) + " B";
+async function apiRaw(path) {
+  const headers = {};
+  if (store.token) headers["Authorization"] = "Bearer " + store.token;
+  let res;
+  try { res = await fetch(store.base + path, { headers }); }
+  catch (e) { throw new Error("无法连接后端 " + store.base + "（" + e.message + "）"); }
+  if (!res.ok) {
+    let detail = "";
+    try { detail = (await res.json()).detail || ""; } catch { /* 非 JSON 错误体 */ }
+    throw new Error("HTTP " + res.status + (detail ? "：" + detail : ""));
+  }
+  return res;
+}
+async function fetchFileBlob(path) {
+  const blob = await (await apiRaw(path)).blob();
+  const url = URL.createObjectURL(blob);
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);   // 下载/预览窗口够了再回收
+  return url;
+}
+/* 查看：文本类弹窗预览，PDF/图片开新标签，其余类型转为下载 */
+async function viewFile(path, name) {
+  try {
+    if (FILE_TEXT_RE.test(name)) {
+      const text = await (await apiRaw(path)).text();
+      openModal(`<div class="section-t" style="word-break:break-all">查看 · ${esc(name)}</div>
+        <pre class="mono" style="max-height:70vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12.5px">${esc(text)}</pre>`);
+    } else if (/\.(pdf|png|jpe?g|gif|webp|svg)$/i.test(name)) {
+      const url = await fetchFileBlob(path);
+      window.open(url, "_blank");
+    } else {
+      toast("该类型不支持在线预览，已转为下载", "");
+      await downloadFile(path, name);
+    }
+  } catch (e) { toast("查看失败：" + e.message, "err"); }
+}
+async function downloadFile(path, name) {
+  try {
+    const url = await fetchFileBlob(path);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+  } catch (e) { toast("下载失败：" + e.message, "err"); }
+}
+/* 文件类型图标：文档底形 + 按扩展名着色的角标（Windows 资源管理器大图标风） */
+function fileIconSVG(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  const GROUPS = {
+    "md": ["#5b6776", "MD"], "markdown": ["#5b6776", "MD"], "txt": ["#5b6776", "TXT"],
+    "log": ["#5b6776", "LOG"], "ini": ["#5b6776", "INI"],
+    "bib": ["#7c5cf0", "BIB"], "tex": ["#7c5cf0", "TEX"],
+    "pdf": ["#e05252", "PDF"],
+    "doc": ["#2b5fd9", "DOC"], "docx": ["#2b5fd9", "DOC"],
+    "xls": ["#0f7b4d", "XLS"], "xlsx": ["#0f7b4d", "XLS"], "csv": ["#0f7b4d", "CSV"], "tsv": ["#0f7b4d", "TSV"],
+    "png": ["#26a69a", "IMG"], "jpg": ["#26a69a", "IMG"], "jpeg": ["#26a69a", "IMG"],
+    "gif": ["#26a69a", "IMG"], "webp": ["#26a69a", "IMG"], "svg": ["#26a69a", "IMG"],
+    "py": ["#b45309", "PY"], "js": ["#b45309", "JS"], "ts": ["#b45309", "TS"],
+    "sh": ["#b45309", "SH"], "json": ["#64748b", "JSON"], "yaml": ["#64748b", "YML"],
+    "yml": ["#64748b", "YML"], "xml": ["#64748b", "XML"], "sql": ["#64748b", "SQL"],
+    "html": ["#e97f0f", "HTML"], "css": ["#e97f0f", "CSS"],
+  };
+  const [color, label] = GROUPS[ext] || ["#9aa0a6", (ext || "FILE").slice(0, 4).toUpperCase()];
+  return `<svg class="file-ic" viewBox="0 0 44 52" aria-hidden="true">
+    <path d="M7 1.5h21.5L41 14v35.5a1.5 1.5 0 01-1.5 1.5h-31A1.5 1.5 0 017 49.5V3a1.5 1.5 0 011.5-1.5z"
+      fill="var(--surface)" stroke="${color}" stroke-width="1.6"/>
+    <path d="M28.5 1.5V14H41" fill="none" stroke="${color}" stroke-width="1.6"/>
+    <rect x="7" y="33" width="23" height="14" rx="2.5" fill="${color}"/>
+    <text x="18.5" y="43.2" text-anchor="middle" font-size="8" font-weight="700"
+      fill="#fff" font-family="ui-monospace,Consolas,monospace">${esc(label)}</text>
+  </svg>`;
+}
+/* 文件瓦片：图标 + 文件名（≤3 行截断）+ 元信息；悬停浮出 查看/下载 */
+const fileTile = (name, meta, path, canView) => `
+  <div class="file-tile" data-tile data-can-view="${canView ? 1 : 0}"
+    data-view-name="${esc(name)}" data-dl-path="${esc(path)}" data-dl-name="${esc(name)}"
+    title="${esc(name)}${meta ? " · " + esc(meta) : ""}">
+    ${fileIconSVG(name)}
+    <div class="file-name">${esc(name)}</div>
+    ${meta ? `<div class="file-meta">${esc(meta)}</div>` : ""}
+    <div class="file-actions">
+      ${canView ? `<button class="btn sm" data-view-path="${esc(path)}" data-view-name="${esc(name)}">查看</button>` : ""}
+      <button class="btn sm" data-dl-path="${esc(path)}" data-dl-name="${esc(name)}">下载</button>
+    </div>
+  </div>`;
+function bindFileOps(root) {
+  $$("[data-tile]", root).forEach(t => t.onclick = () =>
+    t.dataset.canView === "1" ? viewFile(t.dataset.dlPath, t.dataset.viewName)
+                              : downloadFile(t.dataset.dlPath, t.dataset.viewName));
+  $$("[data-view-path]", root).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    await viewFile(b.dataset.viewPath, b.dataset.viewName);
+  });
+  $$("[data-dl-path]", root).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    await downloadFile(b.dataset.dlPath, b.dataset.dlName);
+  });
+}
+async function loadFiles() {
+  const box = $("#outputs-list");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  let files;
+  try { files = await api("/api/v1/outputs/all"); }
+  catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; files = null; }
+  if (files) {
+    if (!files.length) {
+      box.innerHTML = '<div class="empty">暂无产出文件 · 多 Agent 团队成稿 / 导出 BibTeX 后这里会出现完整文档</div>';
+    } else {
+      box.innerHTML = '<div class="file-grid">' + files.map(f =>
+        fileTile(f.name,
+                 `${humanSize(f.size)} · ${f.mtime ? fmtTime(new Date(f.mtime * 1000).toISOString()) : "-"}`,
+                 "/api/v1/outputs/download?name=" + encodeURIComponent(f.name), true)
+      ).join("") + "</div>";
+    }
+    bindFileOps(box);
+  }
+  /* 知识库下拉：复用 /kbs 可见性过滤，私人库/沉淀库带标注 */
+  const sel = $("#files-kb");
+  let kbs = [];
+  try { kbs = await api("/api/v1/kbs"); } catch { /* 下拉保持现状 */ }
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">选择知识库…</option>' + (kbs || []).map(k =>
+    `<option value="${esc(k.kb_id)}">${esc(k.name)}（${k.scope === "private" ? "私人" : "公共"}${k.kind && k.kind !== "user" ? " · 沉淀库" : ""}）</option>`).join("");
+  if (cur) sel.value = cur;
+  if (sel.value) loadKbDocs(sel.value);
+  else $("#kbdocs-list").innerHTML = '<div class="empty">选择知识库后展示其源文档</div>';
+}
+async function loadKbDocs(kbId) {
+  const box = $("#kbdocs-list");
+  if (!kbId) { box.innerHTML = '<div class="empty">选择知识库后展示其源文档</div>'; return; }
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  let docs;
+  try { docs = await api(`/api/v1/kbs/${encodeURIComponent(kbId)}/files`); }
+  catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!docs.length) { box.innerHTML = '<div class="empty">该库暂无源文档</div>'; return; }
+  box.innerHTML = '<div class="file-grid">' + docs.map(d =>
+    fileTile(d.filename || d.doc_id + "（旧数据无文件名）",
+             `${d.chunks} 片段${d.pages && d.pages.length ? " · 第" + d.pages.join("-") + "页" : ""}`,
+             `/api/v1/kbs/${encodeURIComponent(kbId)}/docs/${encodeURIComponent(d.doc_id)}/download`,
+             !!d.filename)
+  ).join("") + "</div>";
+  bindFileOps(box);
+}
+$("#files-kb").onchange = e => loadKbDocs(e.target.value);
+$("#files-refresh").onclick = loadFiles;
+
 /* ================= 用量统计 ================= */
 let usageDays = 30;
 async function loadUsage() {
@@ -3334,6 +3733,8 @@ async function loadUsage() {
     <div class="u-card"><div class="u-num">${fmt(cached)}</div><div class="u-label">输入 · 缓存命中（占输入 ${inpPct}%）</div></div>
     <div class="u-card"><div class="u-num">${fmt(g.output_tokens)}</div><div class="u-label">输出 tokens</div></div>
     <div class="u-card"><div class="u-num">${fmt(g.calls)}</div><div class="u-label">LLM 调用次数</div></div>`;
+  usageLastData = data;
+  renderUsageCharts(data);
   // 明细表：每天一组，组内每模型一行；日期列只在组首行显示
   const items = data.items || [];
   if (!items.length) {
@@ -3370,6 +3771,113 @@ async function loadUsage() {
     <td class="mono" style="text-align:right"><b>${fmt(g.calls)}</b></td></tr>`;
 }
 
+/* ---------- 图表：每日堆叠柱状 / 模型占比环形 / 调用次数横向条形 ----------
+   Chart.js 为页尾异步 CDN 资源：未加载完成或加载失败时图表区整体隐藏，
+   汇总卡与明细表不受影响；切换主题时以新主题色重绘。 */
+let usageLastData = null;
+const usageCharts = {};
+const USG_COLORS = {
+  uncached: "rgba(47,111,79,.78)",   // 输入·未命中：绿
+  cached:   "rgba(56,132,255,.72)",  // 输入·缓存命中：蓝
+  output:   "rgba(233,151,22,.80)",  // 输出：琥珀
+};
+const USG_PIE = ["rgba(47,111,79,.85)", "rgba(56,132,255,.80)", "rgba(233,151,22,.85)",
+  "rgba(157,80,187,.80)", "rgba(224,82,82,.80)", "rgba(38,166,154,.85)",
+  "rgba(93,109,224,.80)", "rgba(150,150,160,.55)"];
+function renderUsageCharts(data) {
+  const wrap = $("#usage-charts");
+  if (!wrap) return;
+  if (!window.Chart || !data || !(data.items || []).length) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  Object.values(usageCharts).forEach(c => c && c.destroy());
+  const cs = getComputedStyle(document.documentElement);
+  const muted = cs.getPropertyValue("--muted").trim() || "#777";
+  Chart.defaults.color = muted;
+  Chart.defaults.borderColor = "rgba(128,128,128,.15)";
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  const fmtTick = v => v >= 1e6 ? (v / 1e6).toFixed(1).replace(/\.0$/, "") + "M"
+    : v >= 1e3 ? Math.round(v / 1e3) + "k" : String(v);
+
+  /* 每日堆叠柱状图：输入未命中 + 缓存命中 + 输出（日期升序） */
+  const days = [...data.items].sort((a, b) => a.date < b.date ? -1 : 1);
+  const labels = days.map(d => d.date.slice(5));
+  const cachedA = days.map(d => d.models.reduce((s, m) => s + (m.cached_tokens || 0), 0));
+  const uncachedA = days.map(d => d.models.reduce((s, m) => s + ((m.input_tokens || 0) - (m.cached_tokens || 0)), 0));
+  const outA = days.map(d => d.models.reduce((s, m) => s + (m.output_tokens || 0), 0));
+  const callsA = days.map(d => d.models.reduce((s, m) => s + (m.calls || 0), 0));
+  usageCharts.trend = new Chart($("#usage-chart-trend"), {
+    type: "bar",
+    data: { labels, datasets: [
+      { label: "输入·未命中", data: uncachedA, backgroundColor: USG_COLORS.uncached, stack: "t", borderRadius: 3, maxBarThickness: 42 },
+      { label: "输入·缓存命中", data: cachedA, backgroundColor: USG_COLORS.cached, stack: "t", borderRadius: 3, maxBarThickness: 42 },
+      { label: "输出", data: outA, backgroundColor: USG_COLORS.output, stack: "t", borderRadius: 3, maxBarThickness: 42 },
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, pointStyle: "circle" } },
+        tooltip: { callbacks: { afterBody(items) {
+          const i = items[0].dataIndex;
+          return `合计 ${(uncachedA[i] + cachedA[i] + outA[i]).toLocaleString()} tokens · ${callsA[i]} 次调用`;
+        } } },
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false } },
+        y: { stacked: true, beginAtZero: true, ticks: { callback: fmtTick } },
+      },
+    },
+  });
+
+  /* 按模型聚合（环形图 + 调用条形图共用） */
+  const byModel = {};
+  for (const d of data.items) for (const m of d.models) {
+    const b = byModel[m.model] || (byModel[m.model] = { total: 0, calls: 0 });
+    b.total += m.total_tokens || 0; b.calls += m.calls || 0;
+  }
+  const models = Object.entries(byModel).sort((a, b) => b[1].total - a[1].total);
+
+  /* 模型 token 占比环形图：Top 7 + 其他 */
+  const TOP = 7;
+  const top = models.slice(0, TOP);
+  const restTotal = models.slice(TOP).reduce((s, [, v]) => s + v.total, 0);
+  const restCalls = models.slice(TOP).reduce((s, [, v]) => s + v.calls, 0);
+  const pieData = top.map(([, v]) => v.total).concat(restTotal ? [restTotal] : []);
+  const pieCalls = top.map(([, v]) => v.calls).concat(restTotal ? [restCalls] : []);
+  usageCharts.pie = new Chart($("#usage-chart-pie"), {
+    type: "doughnut",
+    data: { labels: top.map(([n]) => n).concat(restTotal ? ["其他"] : []),
+            datasets: [{ data: pieData, backgroundColor: USG_PIE, borderWidth: 0, hoverOffset: 6 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "58%",
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, pointStyle: "circle" } },
+        tooltip: { callbacks: { label(ctx) {
+          const total = pieData.reduce((s, v) => s + v, 0) || 1;
+          return ` ${(ctx.parsed).toLocaleString()} tokens · ${(ctx.parsed / total * 100).toFixed(1)}% · ${pieCalls[ctx.dataIndex]} 次`;
+        } } },
+      },
+    },
+  });
+
+  /* 各模型调用次数横向条形图：Top 10 降序 */
+  const byCalls = Object.entries(byModel).sort((a, b) => b[1].calls - a[1].calls).slice(0, 10);
+  usageCharts.calls = new Chart($("#usage-chart-calls"), {
+    type: "bar",
+    data: { labels: byCalls.map(([n]) => n),
+            datasets: [{ data: byCalls.map(([, v]) => v.calls), backgroundColor: "rgba(56,132,255,.65)", borderRadius: 4, maxBarThickness: 18 }] },
+    options: {
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label(ctx) {
+          const [, v] = byCalls[ctx.dataIndex];
+          return ` ${v.calls} 次 · ${v.total.toLocaleString()} tokens`;
+        } } } },
+      scales: { x: { beginAtZero: true, ticks: { precision: 0 } }, y: { grid: { display: false } } },
+    },
+  });
+}
+
 /* ================= 弹窗 ================= */
 function openModal(html) {
   $("#modal-box").innerHTML = html;
@@ -3398,7 +3906,7 @@ document.addEventListener("keydown", e => {
 
 /* ================= 事件绑定 ================= */
 applyTheme(theme.value);
-$("#theme-toggle").onclick = () => { const next = theme.value === "light" ? "dark" : "light"; theme.value = next; applyTheme(next); };
+$("#theme-toggle").onclick = () => { const next = theme.value === "light" ? "dark" : "light"; theme.value = next; applyTheme(next); renderUsageCharts(usageLastData); };
 $("#tab-login").onclick = () => setAuthMode("login");
 $("#tab-register").onclick = () => setAuthMode("register");
 $("#auth-submit").onclick = submitAuth;
@@ -4585,24 +5093,19 @@ $("#bs-plan-export").onclick = () => bsDownload(
   "brainstorm-" + (state.bs.sid || "proposal") + ".md", state.bs.plan || "");
 async function bsOpenHistory(sid) {
   if (!sid) return;
-  if (state.bs.running) {
-    // 回放会重绘群聊区，不能与进行中的流混写：询问是否停止当前场次
-    if (!confirm("当前场次仍在运行。停止它并回放选中的历史场次？")) return;
-    try {
-      await api(bsApi("/stop"),
-        { method: "POST",
-          body: JSON.stringify({ session_id: state.bs.sid }) });
-    } catch { /* 停止标记失败也无妨：下面仍等待流自然结束 */ }
-    for (let i = 0; i < 40 && state.bs.running; i++)
-      await new Promise(r => setTimeout(r, 500));   // 最多等 20s 收尾
-    if (state.bs.running) {
-      toast("当前场次仍在收尾，稍后再试回放", "err");
-      return;
-    }
-  }
+  // 回放会重绘群聊区，不能与进行中的流混写：先收尾当前场次（确认停止并等待）
+  if (!await bsLeaveSession()) return;
   await bsReplay(sid);
 }
-$("#bs-history").onchange = () => bsOpenHistory($("#bs-history").value);
+$("#bs-history").onchange = async () => {
+  const sid = $("#bs-history").value;
+  if (sid) return bsOpenHistory(sid);
+  /* 选回占位项「历史场次…」= 离开当前场次，回到新场次发起界面 */
+  if (!state.bs.sid) return;                        // 本就在发起界面，无场次可退
+  const ok = await bsLeaveSession();
+  if (!ok) { $("#bs-history").value = state.bs.sid; return; }   // 用户取消/未收尾：下拉复位
+  bsShowSetup();
+};
 
 /* 重跑本场：复用 session_id，议题/角色取自会话详情——后端检测到同 session
    重跑会自动清旧 checkpoint、复位 DB 行，前端只需按普通发起重新连流。
@@ -4646,19 +5149,27 @@ function bsShowSetup() {
   bsLoadHistory();
   bsSyncRerun();
 }
-$("#bs-new").onclick = async () => {
+/* 离开当前场次前的收尾：运行中则确认停止并等待流结束。
+   返回 false 表示用户取消或未能收尾，调用方应留在当前场次 */
+async function bsLeaveSession() {
+  if (!state.bs.running) return true;
+  if (!confirm("当前场次仍在运行。停止它并离开？")) return false;
+  try {
+    await api(bsApi("/stop"),
+      { method: "POST",
+        body: JSON.stringify({ session_id: state.bs.sid }) });
+  } catch { /* 停止标记失败也无妨：下面仍等待流自然结束 */ }
+  for (let i = 0; i < 40 && state.bs.running; i++)
+    await new Promise(r => setTimeout(r, 500));   // 最多等 20s 收尾
   if (state.bs.running) {
-    if (!confirm("当前场次仍在运行。停止它并开新场次？")) return;
-    try {
-      await api(bsApi("/stop"),
-        { method: "POST",
-          body: JSON.stringify({ session_id: state.bs.sid }) });
-    } catch { }
-    for (let i = 0; i < 40 && state.bs.running; i++)
-      await new Promise(r => setTimeout(r, 500));
-    if (state.bs.running) return toast("当前场次仍在收尾，稍后再试", "err");
+    toast("当前场次仍在收尾，稍后再试", "err");
+    return false;
   }
-  bsShowSetup();
+  return true;
+}
+
+$("#bs-new").onclick = async () => {
+  if (await bsLeaveSession()) bsShowSetup();
 };
 
 /* ================= 启动 ================= */
@@ -4680,11 +5191,12 @@ $("#bs-new").onclick = async () => {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/markdown.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
-/* KaTeX 加载完成后，对当前已渲染的历史消息补一次公式渲染（主脚本先于本脚本执行） */
+/* KaTeX 为页尾异步 CDN 资源：若首屏渲染时仍未就绪（公式已降级为原文），
+   加载完成后对当前会话消息重渲一次补上公式 */
 window.addEventListener("load", function () {
-  if (window.renderMathInElement && typeof renderMessages === "function"
+  if (window.katex && typeof renderMessages === "function"
       && !document.getElementById("app").hidden) renderMessages();
 });
 </script>
