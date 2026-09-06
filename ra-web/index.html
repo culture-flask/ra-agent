@@ -1087,8 +1087,11 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
         <button class="btn sm" id="bs-new" title="回到发起面板，开一场新的头脑风暴">+ 新场次</button>
         <button class="btn sm" id="bs-rerun" style="display:none"
                 title="复用本场议题与角色配置，清空记录后从头再跑一次">↻ 重跑本场</button>
+        <button class="btn sm" id="bs-rerun-writer" style="display:none"
+                title="只重新生成最终成稿（调研/辩论结果沿用本场），适合仅成稿失败或想换稿重写">✍ 仅重跑执笔人</button>
         <select class="input" id="bs-history" style="width:340px"><option value="">历史场次（选择即回放）…</option></select>
         <div class="spacer"></div>
+        <span class="sess-tokens" id="bs-token-total" style="display:none" title="本场全部 LLM 调用的 token 消耗合计（落库统计）"></span>
         <span class="muted mono" id="bs-sid" style="font-size:11px"></span>
         <button class="btn danger" id="bs-stop" style="display:none">停止</button>
       </div>
@@ -4247,6 +4250,7 @@ async function bsLaunch(topic, roles, sid, maxRounds, tokenBudget) {
   $("#bs-ev-count").textContent = "";
   $("#bs-tool-count").textContent = "";
   $("#bs-sid").textContent = sid;
+  bsRenderTokenTotal(null);          // 新一场开始：清掉上一场的总消耗
   $("#bs-stop").style.display = "";
   bsSyncRerun();
   bsStatus("主持人解析议题中…");
@@ -4266,8 +4270,26 @@ async function bsLaunch(topic, roles, sid, maxRounds, tokenBudget) {
 
 /* 重跑按钮显隐：有场次且未在运行才可重跑 */
 function bsSyncRerun() {
-  $("#bs-rerun").style.display =
-    state.bs.sid && !state.bs.running ? "" : "none";
+  const show = state.bs.sid && !state.bs.running ? "" : "none";
+  $("#bs-rerun").style.display = show;
+  $("#bs-rerun-writer").style.display = show;
+}
+
+/* 总 token 消耗：整场结束或回放完成后展示（stats.tokens 为落库统计，
+   含本场全部 LLM 调用；追问与执笔人重跑的增量不在其中） */
+function bsRenderTokenTotal(stats) {
+  const el = $("#bs-token-total");
+  const n = (stats || {}).tokens || 0;
+  if (!n) { el.style.display = "none"; return; }
+  el.innerHTML = "本场 tokens · <b>" + n.toLocaleString() + "</b>";
+  el.style.display = "";
+}
+async function bsShowTokenTotal(sid) {
+  if (!sid) { bsRenderTokenTotal(null); return; }
+  try {
+    const d = await api(bsApi("/") + encodeURIComponent(sid));
+    bsRenderTokenTotal(d.stats);
+  } catch { /* 详情不可达时不显示，不打扰 */ }
 }
 
 function bsResetButtons() {
@@ -4304,6 +4326,7 @@ async function bsStream(sid, endpoint, body) {
         if (ev.type === "done") {
           bsStatus(state.bs.team === "seminar" ? "本场会讲已结束"
                    : "本场头脑风暴已结束", "ok");
+          bsShowTokenTotal(sid);            // 整场完成：展示总 token 消耗
           continue;
         }
         if (ev.type === "error") {
@@ -4702,6 +4725,7 @@ async function bsReplay(sid) {
   $("#bs-ev-count").textContent = "";
   $("#bs-tool-count").textContent = "";
   $("#bs-sid").textContent = sid + (d.status === "running" ? " · 进行中（刷新可见最新）" : "");
+  bsRenderTokenTotal(d.stats);       // 回放/重跑前展示本场总消耗
   $("#bs-stop").style.display = d.status === "running" ? "" : "none";
   bsSyncRerun();
   bsStatus(`历史回放 · ${d.status === "running" ? "该场次仍在进行，以下为当前进度" :
@@ -4868,6 +4892,7 @@ function bsSetTeam(t) {
     $("#bs-card-count").textContent = "";
   }
   $("#bs-sid").textContent = "";
+  bsRenderTokenTotal(null);          // 切换团队：清掉上一团队场次的徽标
   $("#bs-stop").style.display = "none";
   $("#bs-topic").focus();
   state.bsFiles = []; bsRenderFiles();   // 切换团队：清空附件列表
@@ -5124,6 +5149,41 @@ $("#bs-rerun").onclick = async () => {
   await bsLaunch(d.topic, d.roles || [], state.bs.sid);
 };
 
+/* 仅重跑执笔人：先回放本场上下文，再接执笔环节的直播流。
+   调研/辩论/评审等中间产物沿用 checkpoint，不重跑不计费 */
+$("#bs-rerun-writer").onclick = async () => {
+  if (!state.bs.sid || state.bs.running)
+    return toast("没有可重跑的场次", "err");
+  const sid = state.bs.sid;
+  if (!confirm("仅重跑执笔人：沿用本场调研/辩论结果，重新生成最终成稿"
+               + "（覆盖当前稿子，其余记录不变）。确认？")) return;
+  try { await bsReplay(sid); }                 // 先铺上下文气泡
+  catch { /* 回放失败也继续尝试直播 */ }
+  state.bs = { running: true, sid, abort: new AbortController(),
+               evidence: [], tools: [], plan: null, replayed: false,
+               liveTools: {}, live: {}, qa: [], team: state.bs.team,
+               insights: [], openQs: [], cards: [], ranking: [] };
+  $("#bs-plan-wrap").hidden = true;            // 旧成稿隐藏，等新 plan 事件重渲
+  $("#bs-qa-list").innerHTML = "";
+  $("#bs-sid").textContent = sid + " · 执笔人重跑中";
+  $("#bs-stop").style.display = "";
+  bsSyncRerun();
+  bsStatus("执笔人重写中：沿用本场中间产物，仅重新成稿…");
+  try {
+    await bsStream(sid, bsApi("/rerun-writer"), { session_id: sid });
+    bsStatus("执笔人重跑完成：成稿已更新", "ok");
+  } catch (e) {
+    toast("执笔人重跑失败：" + e.message, "err");
+  } finally {
+    // 不复用 bsResetButtons：重跑完仍停留在本场视图，不弹回发起面板
+    state.bs.running = false;
+    $("#bs-stop").style.display = "none";
+    $("#bs-stop").disabled = false; $("#bs-stop").textContent = "停止";
+    bsLoadHistory();                            // 刷新历史场次（状态/成稿已更新）
+    bsSyncRerun();
+  }
+};
+
 /* 回到发起面板：清空流视图与运行状态，随时可开新场次 */
 function bsShowSetup() {
   state.bs = { running: false, sid: null, abort: null, evidence: [], tools: [],
@@ -5143,6 +5203,7 @@ function bsShowSetup() {
   $("#bs-ev-count").textContent = "";
   $("#bs-tool-count").textContent = "";
   $("#bs-sid").textContent = "";
+  bsRenderTokenTotal(null);          // 离开场次：总消耗徽标一并清掉
   $("#bs-stop").style.display = "none";
   $("#bs-topic").focus();
   state.bsFiles = []; bsRenderFiles();   // 新场次：清空附件列表

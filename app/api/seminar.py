@@ -28,7 +28,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.graph.agent_runtime import effective_cfg as _effective_cfg, role_cfg as _role_cfg
 from app.graph.native_llm import native_round
 from app.graph.seminar import (SCHOLAR_IDS, _cards_digest, _insight_digest,
-                               _notes_digest, SCHOLAR_ORIENTATION)
+                               _notes_digest, SCHOLAR_ORIENTATION,
+                               make_rapporteur_node)
 from app.graph.workflow import aget_state_retry
 from app.models import BrainstormSession, KnowledgeBase, User, utcnow
 
@@ -420,6 +421,99 @@ async def seminar_ask(session_id: str, req: SeminarAskRequest,
         try:
             yield _sse({"type": "ask_start", "agent": agent_id,
                         "model": getattr(cfg, "model_id", "") or ""})
+            while True:
+                ev = await sink.get()
+                t = ev.get("type")
+                if t == "__done__":
+                    break
+                if t == "__error__":
+                    yield _sse({"type": "error", "error": ev.get("error", "")})
+                    break
+                yield _sse(ev)
+            yield _sse({"type": "done"})
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+# ---------- 仅重跑执笔人（与 brainstorm.rerun-writer 同构） ----------
+#
+# 会讲的失败也常只发生在最后执笔环节：从 checkpoint 恢复笔记/洞见池/
+# 构想卡/评分，只重跑 rapporteur 节点，成稿经 aupdate_state 回写。
+
+def _mark_running(session_id: str) -> None:
+    with SessionLocal() as db:
+        row = db.get(BrainstormSession, session_id)
+        if row is not None:
+            row.status = "running"
+            row.updated_at = utcnow()
+            db.commit()
+
+
+@router.post("/rerun-writer")
+async def seminar_rerun_writer(req: StopRequest, request: Request,
+                               user: User = Depends(get_current_user)):
+    """SSE：只重跑执笔人。事件流与 /stream 相同（sem_ 前缀 → done）。"""
+    set_agent_team("seminar")
+    uid = user.id
+    sid = req.session_id
+    with SessionLocal() as db:
+        row = db.get(BrainstormSession, sid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if row.user_id != uid:
+        raise HTTPException(status_code=403, detail="not seminar owner")
+    if row.status == "running":
+        raise HTTPException(status_code=409, detail="场次进行中，稍后再试")
+    topic = row.topic
+
+    graph = request.app.state.seminar_graph
+    config = {"configurable": {"thread_id": sid}}
+    snap = await aget_state_retry(graph, config)
+    values = dict((snap.values or {}) if snap else {})
+    if not (values.get("reading_notes") or values.get("qa_transcript")
+            or values.get("card_registry")):
+        raise HTTPException(status_code=404, detail=
+            "该场次没有可用的中间状态（未完成研读/汇报），请整场重跑")
+
+    await run_in_threadpool(_mark_running, sid)
+    sink: asyncio.Queue = asyncio.Queue()
+
+    async def run_writer():
+        set_event_sink(sink)
+        clear_stop(sid)
+        try:
+            state = {**values, "stopped": False}
+            rapporteur = make_rapporteur_node(request.app.state.workflow_ctx)
+            update = await rapporteur(state)
+            merged = {**values, **update}
+            await run_in_threadpool(_finish_session, uid, sid, merged)
+            if not merged.get("stopped"):
+                await run_in_threadpool(_archive_report_to_kb, uid, sid,
+                                        topic,
+                                        str(merged.get("final_proposal") or ""))
+            try:
+                await graph.aupdate_state(config, update, as_node="rapporteur")
+            except Exception as e:
+                logger.warning("seminar rerun-writer update_state: %s", e)
+            await sink.put({"type": "__done__"})
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(run_in_threadpool(
+                    _fail_session, uid, sid, "client disconnected"))
+            raise
+        except Exception as e:
+            logger.warning("seminar rerun-writer failed: %s", e)
+            await run_in_threadpool(_fail_session, uid, sid, str(e))
+            await sink.put({"type": "__error__", "error": str(e)})
+        finally:
+            clear_event_sink()
+
+    async def event_gen():
+        task = asyncio.create_task(run_writer())
+        try:
             while True:
                 ev = await sink.get()
                 t = ev.get("type")

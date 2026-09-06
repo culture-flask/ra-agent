@@ -27,7 +27,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.graph.agent_runtime import effective_cfg as _effective_cfg, role_cfg as _role_cfg
 from app.graph.native_llm import native_round
-from app.graph.deep_research import DR_ROLE_IDS
+from app.graph.deep_research import (DR_ROLE_IDS, make_write_frame_node,
+                                     publish_node)
 from app.graph.workflow import aget_state_retry
 from app.models import BrainstormSession, KnowledgeBase, User, utcnow
 
@@ -413,6 +414,102 @@ async def dr_ask(session_id: str, req: DRAskRequest,
             yield _sse({"type": "ask_start", "agent": agent_id,
                         "name": role_name,
                         "model": getattr(cfg, "model_id", "") or ""})
+            while True:
+                ev = await sink.get()
+                t = ev.get("type")
+                if t == "__done__":
+                    break
+                if t == "__error__":
+                    yield _sse({"type": "error", "error": ev.get("error", "")})
+                    break
+                yield _sse(ev)
+            yield _sse({"type": "done"})
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+# ---------- 仅重跑执笔人（与 brainstorm/seminar rerun-writer 同构） ----------
+#
+# 溯源社的成稿 = write_frame（引言/结论/目录，LLM）+ publish（装配，纯代码）。
+# 从 checkpoint 恢复章节/审稿记录/来源池，只重跑这两步；as_node 记为 publish
+# （成稿链最后节点），详情回放即见新报告。
+
+def _mark_running(session_id: str) -> None:
+    with SessionLocal() as db:
+        row = db.get(BrainstormSession, session_id)
+        if row is not None:
+            row.status = "running"
+            row.updated_at = utcnow()
+            db.commit()
+
+
+@router.post("/rerun-writer")
+async def deep_research_rerun_writer(req: StopRequest, request: Request,
+                                     user: User = Depends(get_current_user)):
+    """SSE：只重跑报告撰写人 + 发布员。事件流与 /stream 相同（dr_ 前缀）。"""
+    set_agent_team("deep_research")
+    uid = user.id
+    sid = req.session_id
+    with SessionLocal() as db:
+        row = db.get(BrainstormSession, sid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if row.user_id != uid:
+        raise HTTPException(status_code=403, detail="not session owner")
+    if row.status == "running":
+        raise HTTPException(status_code=409, detail="场次进行中，稍后再试")
+    topic = row.topic
+
+    graph = request.app.state.deep_research_graph
+    config = {"configurable": {"thread_id": sid}}
+    snap = await aget_state_retry(graph, config)
+    values = dict((snap.values or {}) if snap else {})
+    if not (values.get("chapters") or values.get("outline")):
+        raise HTTPException(status_code=404, detail=
+            "该场次没有可用的中间状态（未完成大纲/章节），请整场重跑")
+
+    await run_in_threadpool(_mark_running, sid)
+    sink: asyncio.Queue = asyncio.Queue()
+
+    async def run_writer():
+        set_event_sink(sink)
+        clear_stop(sid)
+        try:
+            state = {**values, "stopped": False}
+            ctx = request.app.state.workflow_ctx
+            update_frame = await make_write_frame_node(ctx)(state)
+            merged = {**values, **update_frame}
+            update_pub = await publish_node(merged)      # 纯代码装配（引用去重）
+            merged.update(update_pub)
+            await run_in_threadpool(_finish_session, uid, sid, merged)
+            if not merged.get("stopped"):
+                await run_in_threadpool(_archive_report_to_kb, uid, sid,
+                                        topic,
+                                        str(merged.get("final_report") or ""))
+            try:
+                await graph.aupdate_state(
+                    config, {**update_frame, **update_pub}, as_node="publish")
+            except Exception as e:
+                logger.warning("deep_research rerun-writer update_state: %s", e)
+            await sink.put({"type": "__done__"})
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(run_in_threadpool(
+                    _fail_session, uid, sid, "client disconnected"))
+            raise
+        except Exception as e:
+            logger.warning("deep_research rerun-writer failed: %s", e)
+            await run_in_threadpool(_fail_session, uid, sid, str(e))
+            await sink.put({"type": "__error__", "error": str(e)})
+        finally:
+            clear_event_sink()
+
+    async def event_gen():
+        task = asyncio.create_task(run_writer())
+        try:
             while True:
                 ev = await sink.get()
                 t = ev.get("type")

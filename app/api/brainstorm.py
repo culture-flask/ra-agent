@@ -26,7 +26,7 @@ from app.graph.workflow import aget_state_retry
 from app.graph.brainstorm import (DEBATER_IDS, ROLE_ORIENTATION,
                                   _evidence_digest, _positions_digest,
                                   _recent_transcript, _role_cfg,
-                                  _effective_cfg)
+                                  _effective_cfg, synthesis_node)
 from app.graph.native_llm import native_round
 from app.models import BrainstormSession, KnowledgeBase, User, utcnow
 
@@ -455,6 +455,105 @@ async def brainstorm_ask(session_id: str, req: BrainstormAskRequest,
         try:
             yield _sse({"type": "ask_start", "agent": agent_id,
                         "model": getattr(cfg, "model_id", "") or ""})
+            while True:
+                ev = await sink.get()
+                t = ev.get("type")
+                if t == "__done__":
+                    break
+                if t == "__error__":
+                    yield _sse({"type": "error", "error": ev.get("error", "")})
+                    break
+                yield _sse(ev)
+            yield _sse({"type": "done"})
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+# ---------- 仅重跑执笔人 ----------
+#
+# 失败/不满意常只发生在最后的成稿环节（撰稿人降级汇编、中途停止、稿子
+# 质量不佳），整场重跑会连调研与辩论一起重来，成本全浪费。这里从
+# checkpoint 恢复中间产物，只重跑 synthesis 节点：
+#   - 恢复的状态即原始辩论现场（positions/transcript/moderator_notes）；
+#   - 停止标记以本轮为准（clear_stop），用户可再次中途停止；
+#   - 成稿经 aupdate_state 回写 checkpoint——详情回放以 checkpoint 为
+#     单一事实来源，不回写则旧稿会遮住新稿。
+
+def _mark_running(session_id: str) -> None:
+    """重跑执笔前把场次置回 running（列表态一致，且挡住并发重跑）。"""
+    with SessionLocal() as db:
+        row = db.get(BrainstormSession, session_id)
+        if row is not None:
+            row.status = "running"
+            row.updated_at = utcnow()
+            db.commit()
+
+
+@router.post("/rerun-writer")
+async def brainstorm_rerun_writer(req: StopRequest, request: Request,
+                                  user: User = Depends(get_current_user)):
+    """SSE：只重跑撰稿人。事件流与 /stream 相同（bs_agent_start/bs_token/
+    bs_plan…→ done），前端复用同一渲染管线。"""
+    set_agent_team("debate")
+    uid = user.id
+    sid = req.session_id
+    with SessionLocal() as db:
+        row = db.get(BrainstormSession, sid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if row.user_id != uid:
+        raise HTTPException(status_code=403, detail="not brainstorm owner")
+    if row.status == "running":
+        raise HTTPException(status_code=409, detail="场次进行中，稍后再试")
+    topic = row.topic
+
+    graph = request.app.state.brainstorm_graph
+    config = {"configurable": {"thread_id": sid}}
+    snap = await aget_state_retry(graph, config)
+    values = dict((snap.values or {}) if snap else {})
+    if not (values.get("positions") or values.get("transcript")):
+        raise HTTPException(status_code=404, detail=
+            "该场次没有可用的中间状态（未完成调研/辩论），请整场重跑")
+
+    await run_in_threadpool(_mark_running, sid)
+    sink: asyncio.Queue = asyncio.Queue()
+
+    async def run_writer():
+        set_event_sink(sink)
+        clear_stop(sid)
+        try:
+            state = {**values, "stopped": False}
+            update = await synthesis_node(request.app.state.workflow_ctx, state)
+            merged = {**values, **update}
+            await run_in_threadpool(_finish_session, uid, sid, merged)
+            if not merged.get("stopped"):    # 与主流程同口径：停止的半成品不入库
+                await run_in_threadpool(_archive_proposal_to_kb, uid, sid,
+                                        topic,
+                                        str(merged.get("final_proposal") or ""))
+            try:
+                await graph.aupdate_state(config, update, as_node="synthesis")
+            except Exception as e:           # 回写失败只影响回放，不影响本次成稿
+                logger.warning("brainstorm rerun-writer update_state: %s", e)
+            await sink.put({"type": "__done__"})
+        except asyncio.CancelledError:
+            # SSE 中断 → 复位 failed，避免列表永远"进行中"（与 /stream 同语义）
+            with contextlib.suppress(Exception):
+                await asyncio.shield(run_in_threadpool(
+                    _fail_session, uid, sid, "client disconnected"))
+            raise
+        except Exception as e:
+            logger.warning("brainstorm rerun-writer failed: %s", e)
+            await run_in_threadpool(_fail_session, uid, sid, str(e))
+            await sink.put({"type": "__error__", "error": str(e)})
+        finally:
+            clear_event_sink()
+
+    async def event_gen():
+        task = asyncio.create_task(run_writer())
+        try:
             while True:
                 ev = await sink.get()
                 t = ev.get("type")
