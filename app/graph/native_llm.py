@@ -99,6 +99,16 @@ def usage_from_native(usage) -> dict | None:
 _zero_reasoning_seen: set[str] = set()   # 已记录过"零推理"的端点键（每进程一次）
 
 
+def retry_event_name(token_event: str) -> str:
+    """token 事件名 → 同前缀的 retry 事件名（bs_token → bs_retry，token → retry）。
+
+    重试横幅与 token 同渠道：主对话、三支多 Agent 团队共用一套前端倒计时渲染。"""
+    for p in ("bs_", "sem_", "dr_"):
+        if token_event.startswith(p):
+            return p + "retry"
+    return "retry"
+
+
 def log_zero_reasoning_once(cfg) -> None:
     """整轮零推理内容时记一次日志：帮助区分'模型本就不思考'与'方言字段对不上'
     （如新版 vLLM 改发 reasoning 以外的键）这类静默降级。"""
@@ -115,12 +125,16 @@ async def native_round(cfg, payload, tools, temperature, sid,
                        token_event: str = "token",
                        reasoning_event: str = "reasoning",
                        emit_extra: dict | None = None,
-                       stream_events: bool = True):
+                       stream_events: bool = True,
+                       emit_retry: bool = False):
     """原生 openai SDK 的一轮流式（统一路径）：捕获推理内容。
 
     - reasoning_content 流式 emit(reasoning_event)；主图的工具轮撤回/
       最终轮定格由调用方在轮末处理。
     - 网络层整轮重试：流中断从头重来，已 emit 的半截内容会重复（预期行为）。
+    - emit_retry：不透传内容（stream_events=False）的调用也可单独透出重试
+      事件——溯源社撰写人（write_frame）等"不流式但用户在场"的环节，
+      重试倒计时与失败原因同样要显示。
     - 返回 (AIMessage, usage_dict|None, stopped: bool)。
     """
     extra = emit_extra or {}
@@ -207,6 +221,11 @@ async def native_round(cfg, payload, tools, temperature, sid,
                         "native stream truncated (no finish_reason/usage) "
                         "model=%s partial_chars=%d -- retry once",
                         cfg.model_id, len(partial))
+                    if stream_events or emit_retry:   # 截断重试同样透出（delay=0 立即重试）
+                        emit(retry_event_name(token_event),
+                             {"attempt": attempt + 1, "max": max_retries,
+                              "delay": 0, "error": "响应被网关截断，整轮重试",
+                              **extra})
                     continue
                 logger.warning(
                     "native stream truncated again after retry model=%s "
@@ -224,6 +243,10 @@ async def native_round(cfg, payload, tools, temperature, sid,
             delay = base_delay * (2 ** attempt)
             logger.warning("native llm stream broken (attempt %d/%d) model=%s: %s; retry in %.1fs",
                            attempt + 1, max_retries, cfg.model_id, e, delay)
+            if stream_events or emit_retry:   # 重试倒计时透出（主对话与多 Agent 同一套渲染）
+                emit(retry_event_name(token_event),
+                     {"attempt": attempt + 1, "max": max_retries,
+                      "delay": round(delay), "error": str(e)[:160], **extra})
             import asyncio
             await asyncio.sleep(delay)
     raise RuntimeError("unreachable")

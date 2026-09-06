@@ -20,7 +20,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from app.core.cancel import is_stopped
 from app.core.events import emit
 from app.core.logging import get_logger
-from app.graph.native_llm import native_round, to_openai_tools
+from app.graph.native_llm import native_round, retry_event_name, to_openai_tools
 from app.graph.nodes import WorkflowContext
 
 logger = get_logger("agent_runtime")
@@ -98,9 +98,14 @@ def role_cfg(ctx: WorkflowContext, state: dict, agent_id: str):
 async def llm_text(ctx: WorkflowContext, state: dict,
                    system_prompt: str, human_content: str,
                    temperature: float = 0.2,
-                   prefix: str = "bs_") -> tuple[str, int]:
+                   prefix: str = "bs_",
+                   emit_retry: bool = False,
+                   emit_extra: dict | None = None) -> tuple[str, int]:
     """控制类 LLM 调用（prepare / curate / moderator / merge）：不向前端
-    流式透传，只需最终文本。返回 (文本, token用量)。失败上抛，由调用方降级。"""
+    流式透传，只需最终文本。返回 (文本, token用量)。失败上抛，由调用方降级。
+
+    emit_retry / emit_extra：不流式但"用户在场"的调用（溯源社撰写人
+    write_frame）也透出重试倒计时与失败原因，事件带 agent 路由到气泡。"""
     sid = state["session_id"]
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -120,7 +125,8 @@ async def llm_text(ctx: WorkflowContext, state: dict,
                 cfg, payload, None, temperature, sid,
                 token_event=f"{prefix}internal",
                 reasoning_event=f"{prefix}internal",
-                stream_events=False)          # 控制流不打字机
+                stream_events=False,
+                emit_retry=emit_retry, emit_extra=emit_extra)
             used += int((usage or {}).get("total_tokens") or 0)
             await _persist_usage(state, cfg, usage)
             if stopped:
@@ -128,10 +134,17 @@ async def llm_text(ctx: WorkflowContext, state: dict,
             if str(resp.content or "").strip():
                 return str(resp.content), used
             if attempt < EMPTY_RETRY_MAX:
+                delay = 0.5 * (2 ** attempt)
                 logger.warning("llm_text empty completion (attempt %d/%d) "
                                "model=%s", attempt + 1, EMPTY_RETRY_MAX,
                                cfg.model_id)
-                await asyncio.sleep(0.5 * (2 ** attempt))
+                if emit_retry:            # 空完成重试同样让前端看到
+                    emit(retry_event_name(f"{prefix}x"),
+                         {"attempt": attempt + 1, "max": EMPTY_RETRY_MAX,
+                          "delay": round(delay, 1),
+                          "error": "输出为空，自动重试",
+                          **(emit_extra or {})})
+                await asyncio.sleep(delay)
         return str(resp.content or ""), used
     # 回退路径：测试假服务（与主图 generate 的回退条件一致）
     import asyncio as _asyncio
@@ -175,8 +188,26 @@ async def agent_speak(ctx: WorkflowContext, state: dict,
     - 回退路径：langchain astream + bind_tools；
     - 工具子循环上限 tool_loop_max，防止无限调研不发言/不收敛；
     - 工具预算耗尽仍想调工具 → 追加一轮无工具调用强制产出（强制收尾轮）；
-    - 空完成（零内容零工具调用）指数退避重试（与主图 generate 同语义）。
+    - 空完成（零内容零工具调用）指数退避重试（与主图 generate 同语义）；
+    - 失败外抛前先发 agent_fail 事件（重试耗尽后的最终原因），前端气泡
+      即时红字显示，不再只留一个空白气泡等回放。
     """
+    try:
+        return await _agent_speak_impl(ctx, state, agent_id, system_prompt,
+                                       human_content, temperature, tools,
+                                       tool_loop_max, cfg=cfg, prefix=prefix)
+    except Exception as e:
+        emit(f"{prefix}agent_fail", {"agent": agent_id,
+                                     "error": short_reason(e)})
+        raise
+
+
+async def _agent_speak_impl(ctx: WorkflowContext, state: dict,
+                            agent_id: str, system_prompt: str,
+                            human_content: str, temperature: float,
+                            tools: list | None, tool_loop_max: int,
+                            cfg=None, prefix: str = "bs_") -> tuple[str, int, bool]:
+    """agent_speak 的实现体（失败事件包装见 agent_speak）。"""
     uid, sid = state["user_id"], state["session_id"]
     if cfg is None:                         # 调用方未解析（测试/内部兜底）
         cfg = role_cfg(ctx, state, agent_id)

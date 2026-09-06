@@ -228,7 +228,14 @@ main>header .sub{font-size:12.5px;color:var(--muted);margin-top:1px}
 .view.active{display:block}
 
 /* ---------- 对话视图 ---------- */
-#view-chat{display:none;flex-direction:column;padding:0;overflow:hidden}
+#view-chat{display:none;position:relative;flex-direction:column;padding:0;overflow:hidden}
+/* 回到底部悬浮按钮：用户上翻历史时出现（chatPinned=false） */
+#chat-scroll-btn{position:absolute;right:26px;bottom:168px;z-index:6;width:34px;height:34px;
+  border-radius:50%;border:1px solid var(--line-strong);background:var(--surface);
+  color:var(--ink);font-size:15px;line-height:1;cursor:pointer;box-shadow:var(--shadow-md);
+  opacity:0;pointer-events:none;transition:opacity .15s,border-color .15s}
+#chat-scroll-btn.show{opacity:1;pointer-events:auto}
+#chat-scroll-btn:hover{border-color:var(--accent);color:var(--accent)}
 #view-chat.active{display:flex}
 #messages{flex:1;overflow-y:auto;padding:26px 28px 12px}
 /* 输入框上方一行：检索模式切换 + 运行参数 */
@@ -289,6 +296,13 @@ html[data-theme="dark"] .msg.user .bubble{background:rgba(74,222,128,.12);border
   padding:12px 16px;word-break:break-word;box-shadow:var(--shadow-sm)}
 .bubble pre{background:var(--code-bg);color:var(--code-ink);padding:12px 14px;border-radius:10px;overflow:auto;
   font-size:12.5px;line-height:1.55;margin:8px 0;border:1px solid var(--line)}
+/* 代码块复制按钮：悬停代码块浮现（md() 动态渲染，事件委托处理点击） */
+.md-pre{position:relative}
+.md-copy{position:absolute;top:6px;right:6px;z-index:2;padding:2px 9px;font-size:11px;
+  border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);
+  color:var(--muted);cursor:pointer;opacity:0;transition:opacity .12s}
+pre:hover .md-copy,.md-copy:focus{opacity:1}
+.md-copy:hover{color:var(--ink);border-color:var(--accent)}
 /* 行内代码/引用材料：琥珀色高对比芯片，一眼可辨 */
 .bubble code{background:#fdf3dd;color:#8a5b00;border:1px solid rgba(180,120,20,.3);padding:1px 5px;border-radius:5px;font-size:12.5px;
   font-family:"SFMono-Regular",ui-monospace,Consolas,Monaco,monospace}
@@ -629,6 +643,16 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
 .bs-tool.fail{color:var(--danger);border-color:var(--danger);background:transparent}
 .bs-tool.fail:after{content:" ✕"}
 .bs-reason{margin:4px 0 2px;font-size:11.5px;color:var(--muted)}
+/* 重试倒计时横幅：LLM 网络层重试时显示在气泡正文上方（主对话步骤条/多Agent 气泡共用 .cd） */
+.bs-retry{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0 2px;
+  padding:3px 9px;font-size:11.5px;color:#8a5b00;background:#fdf3dd;
+  border:1px solid rgba(180,120,20,.3);border-radius:7px}
+html[data-theme="dark"] .bs-retry{color:#f0cd7e;background:rgba(232,178,58,.12);
+  border-color:rgba(232,178,58,.26)}
+.bs-retry .cd{font-weight:700;font-variant-numeric:tabular-nums}
+.bs-retry-err{color:var(--muted);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:320px;cursor:help}
+[data-cd]{font-variant-numeric:tabular-nums}
 .bs-reason summary{cursor:pointer;user-select:none}
 .bs-reason .rv{white-space:pre-wrap;max-height:180px;overflow-y:auto;margin-top:6px;
   border-left:2px solid var(--line-strong);padding:4px 10px;background:var(--code-bg);border-radius:0 8px 8px 0}
@@ -785,6 +809,7 @@ html[data-theme="dark"] .warn-banner{background:rgba(245,158,11,.08);border-colo
     <!-- 对话 -->
     <section class="view" id="view-chat">
       <div id="messages"></div>
+      <button id="chat-scroll-btn" type="button" title="回到底部（跟随最新回复）">↓</button>
       <div id="chat-toolbar">
         <div id="retrieval-switch" class="retrieval-switch"></div>
         <label class="rk-input" title="每个知识库检索几条（1~20）">每库 <input id="rk-per" type="number" min="1" max="20"></label>
@@ -1293,6 +1318,49 @@ function fallbackCopy(text, done) {
   ta.remove();
 }
 
+/* ---------- 长任务后台提醒 ---------- */
+/* 标签页不可见时：完成/失败 → 系统通知（已授权时）+ 标题栏闪烁；回到页面即停 */
+const BASE_TITLE = document.title;
+let _titleTimer = null;
+function flashTitle(msg) {
+  if (_titleTimer) return;
+  let on = false;
+  _titleTimer = setInterval(() => {
+    document.title = (on = !on) ? `🔔 ${msg}` : BASE_TITLE;
+  }, 1000);
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && _titleTimer) {
+    clearInterval(_titleTimer); _titleTimer = null;
+    document.title = BASE_TITLE;
+  }
+});
+function notifyBackground(title, body) {
+  if (!document.hidden) return;           // 用户就在页面上：无需打扰
+  flashTitle(body || title);
+  try {
+    if (window.Notification && Notification.permission === "granted")
+      new Notification(title, { body: body || "", tag: "ra-task" });
+  } catch { /* 通知失败不影响主流程 */ }
+}
+function ensureNotifyPermission() {
+  /* 在用户手势（点击发送/开场）里预请求通知授权 */
+  try {
+    if (window.Notification && Notification.permission === "default")
+      Notification.requestPermission();
+  } catch { /* 不支持则仅用标题闪烁 */ }
+}
+
+/* 代码块复制：事件委托（md() 渲染的代码块是动态 HTML） */
+document.addEventListener("click", e => {
+  const btn = e.target.closest("[data-copy-code]");
+  if (!btn) return;
+  const pre = btn.closest("pre");
+  if (!pre) return;
+  const code = pre.querySelector("code");
+  copyText(code ? code.textContent : pre.textContent, "代码已复制");
+});
+
 function fmtTime(iso) {
   if (!iso) return "-";
   const d = new Date(iso);
@@ -1348,7 +1416,9 @@ function md(text) {
                            : hljs.highlightAuto(cleanCode).value;
       } catch (e) { highlighted = esc(cleanCode); }
     } else highlighted = esc(cleanCode);
-    blocks.push('<pre><code' + (lang ? ' class="language-' + lang + '"' : "") + ">"
+    blocks.push('<pre class="md-pre"><button class="md-copy" type="button"'
+      + ' data-copy-code title="复制代码">复制</button>'
+      + "<code" + (lang ? ' class="language-' + lang + '"' : "") + ">"
       + highlighted + "</code></pre>");
     return "\n" + tokB(blocks.length - 1) + "\n";
   });
@@ -1824,7 +1894,17 @@ const STEP_STYLE = {
   llm: { label: "LLM 生成", color: "#1d4ed8" },
   memory_extract: { label: "抽取记忆候选", color: "#6d28d9" },
   memory_save: { label: "写入长期记忆", color: "#6d28d9" },
+  retry: { label: "超时重试", color: "#e97f0f" },
 };
+
+/* 重试倒计时心跳：刷新页面上所有 [data-cd]（聊天步骤条 + 多Agent 重试横幅共用）。
+   到点后显示"重试中…"，直到下一个 token（成功）或失败事件接管 */
+setInterval(() => {
+  $$("[data-cd]").forEach(el => {
+    const left = Math.ceil((+el.dataset.cd - Date.now()) / 1000);
+    el.textContent = left > 0 ? left + "s" : "重试中…";
+  });
+}, 500);
 
 /* 检索模式切换：向量 / 混合(BM25)，选择即时生效（每轮请求都携带） */
 function renderRetrievalSwitch() {
@@ -1980,9 +2060,26 @@ function renderMessages() {
     msgHTML(m, i, i === msgs.length - 1 && m.role === "assistant")).join("");
   $$("#messages [data-fork]").forEach(el => el.onclick = () => forkSession(+el.dataset.fork));
   $$("#messages [data-regen]").forEach(el => el.onclick = regenerateLast);
+  $$("#messages [data-continue]").forEach(el => el.onclick = continueGeneration);
+  $$("#messages [data-copymsg]").forEach(el => el.onclick = () => {
+    const m = getMsgs()[+el.dataset.copymsg];
+    if (m) copyText(m.content, "回答已复制");
+  });
   $$("#messages [data-fb]").forEach(el => el.onclick = () =>
     sendFeedback(+el.dataset.fb, +el.dataset.fbv));
   scrollMessagesBottom(true);          // 全量渲染（切会话/新消息）：回底部并恢复跟随
+  $("#chat-scroll-btn").classList.remove("show");
+}
+
+/* 重试步骤收尾：内容流恢复 → 本轮重试成功（倒计时停止，标绿） */
+function resolveRetrySteps(asst) {
+  (asst.steps || []).forEach(s => {
+    if (s.kind === "retry" && s.status === "running") {
+      s.status = "ok";
+      s.deadline = 0;
+      s.desc = "重试成功，继续生成";
+    }
+  });
 }
 
 function stepsHTML(steps) {
@@ -1992,12 +2089,14 @@ function stepsHTML(steps) {
     const statusIcon = s.status === "running" ? '<span class="badge orange pulse">执行中</span>'
       : s.status === "fail" ? '<span class="badge red">失败</span>'
       : s.status === "ok" ? '<span class="badge green">完成</span>' : "";
+    const cd = s.deadline ? ` <span class="cd" data-cd="${s.deadline}"></span>` : "";
     return `<div class="step">
       <span class="sdot" style="background:${st.color}"></span>
       <div><span class="slabel" style="color:${st.color}">${st.label}</span> ${statusIcon}
-      <div class="sdesc">${s.desc || ""}</div></div></div>`;
+      <div class="sdesc">${s.desc || ""}${cd}</div></div></div>`;
   }).join("");
-  return `<details class="steps"><summary>执行过程 · ${steps.length} 步</summary><div class="step-list">${items}</div></details>`;
+  const retrying = steps.some(s => s.kind === "retry" && s.status === "running");
+  return `<details class="steps"${retrying ? " open" : ""}><summary>执行过程 · ${steps.length} 步</summary><div class="step-list">${items}</div></details>`;
 }
 
 /* 思考面板：reasoning 事件流式累积；reasoning_end 定格可折叠看全文；
@@ -2073,7 +2172,12 @@ function feedbackHTML(m, i) {
 
 function msgHTML(m, i, isLast) {
   const fbHTML = m.role === "assistant" ? feedbackHTML(m, i) : "";
+  const copyHTML = m.role === "assistant" && m.content
+    ? `<button class="btn sm" data-copymsg="${i}" title="复制回答原文（Markdown）">复制</button>` : "";
+  const continueHTML = m.role === "assistant" && m.interrupted && isLast
+    ? '<button class="btn sm" data-continue="1" title="从中断处续写剩余内容，不重复已有部分">继续生成</button>' : "";
   const actions = `<div class="msg-actions">
+    ${copyHTML}${continueHTML}
     <button class="btn sm" data-fork="${i}">分支</button>
     ${isLast ? '<button class="btn sm" data-regen="1">重新生成</button>' : ""}
     ${fbHTML}
@@ -2102,7 +2206,9 @@ let chatPinned = true;
 $("#messages").addEventListener("scroll", () => {
   const box = $("#messages");
   chatPinned = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  $("#chat-scroll-btn").classList.toggle("show", !chatPinned);
 });
+$("#chat-scroll-btn").onclick = () => scrollMessagesBottom(true);
 function scrollMessagesBottom(force = false) {
   if (force) chatPinned = true;           // 切会话/发消息：无条件回底部并恢复跟随
   if (!chatPinned) return;
@@ -2131,6 +2237,10 @@ function patchLastMsg(msg) {
     last.replaceWith(newNode);
     $$("[data-regen]", newNode).forEach(el => el.onclick = regenerateLast);
     const realIdx = getMsgs().length - 1;
+    $$("[data-continue]", newNode).forEach(el => el.onclick = continueGeneration);
+    $$("[data-copymsg]", newNode).forEach(el => { el.dataset.copymsg = realIdx;
+      el.onclick = () => { const m = getMsgs()[realIdx];
+        if (m) copyText(m.content, "回答已复制"); }; });
     $$("[data-fb]", newNode).forEach(el => { el.dataset.fb = realIdx;
       el.onclick = () => sendFeedback(realIdx, +el.dataset.fbv); });
     scrollMessagesBottom();                   // 仅钉住时跟随；用户上翻不强制拉底
@@ -2181,6 +2291,7 @@ function sendChat() {
     toast("附件还在解析中，稍候再发送"); return;
   }
   if (!text && !files.length) return;
+  ensureNotifyPermission();               // 用户手势内预请求通知授权
   input.value = "";
   input.style.height = "auto";
   state.pendingFiles = [];
@@ -2263,6 +2374,7 @@ async function sendMessage(text, opts = {}) {
     if (!asst.content) asst.content = "出错了：" + e.message;
   } finally {
     asst._streaming = false;
+    if (!asst._done) asst.interrupted = true;   // SSE 未正常收尾（断连/异常）→ 可续写
     state.streaming = false;
     $("#send-btn").disabled = false;
     const sb = $("#stop-btn");
@@ -2272,6 +2384,9 @@ async function sendMessage(text, opts = {}) {
     if (state.sessions.some(s => s.id === streamSid)) saveMsgs(msgs, streamSid);
     state.streamSid = null; state.streamMsgs = null;
     loadSessionUsage(streamSid);        // P3-20：本轮用量已落库，刷新流所属会话累计
+    notifyBackground("科研助手", asst.interrupted
+      ? "回答已中断，可点「继续生成」续写"
+      : asst.content.startsWith("出错了") ? "生成出错，请查看会话" : "回答已生成");
     $("#chat-input").focus();
   }
 }
@@ -2340,6 +2455,13 @@ function forkSession(idx) {
 }
 
 /* 重新生成：去掉最后一条 assistant 回复（报错/不满意时手动重试），重发同一条用户提问 */
+/* 继续生成：上一条回答被停止/断连中断，从断点续写剩余内容。
+   后端 checkpoint 已含带部分内容的助手消息，续写指令直接可见地入历史 */
+function continueGeneration() {
+  if (state.streaming) return;
+  sendMessage("请从上一条回答中断处继续，直接续写剩余内容，不要重复已有部分。");
+}
+
 function regenerateLast() {
   if (state.streaming) return;
   const msgs = getMsgs();
@@ -2357,6 +2479,12 @@ function handleChatEvent(ev, asst, stepByTrace) {
   switch (ev.type) {
     case "token":
       asst.content += ev.content || "";
+      resolveRetrySteps(asst);          // 有内容流回 = 重试成功，倒计时步骤收尾
+      break;
+    case "retry":                       // LLM 网络层重试透出（native_round）
+      asst.steps.push({ kind: "retry", status: "running",
+        desc: `超时重试 ${ev.attempt}/${ev.max}（${esc((ev.error || "调用失败").slice(0, 80))}）`,
+        deadline: Date.now() + (ev.delay || 0) * 1000 });
       break;
     case "routing":                     // 路由前置：thinking 模型路由可能数十秒
       asst.routeThinking = "";          // 空串 = 活跃（显示"路由判断中"条）
@@ -2441,6 +2569,7 @@ function handleChatEvent(ev, asst, stepByTrace) {
     case "reasoning":                 // 思考内容流（thinking 端点）：实时累积
       asst.reasoning = (asst.reasoning || "") + (ev.content || "");
       asst.reasoningState = "thinking";
+      resolveRetrySteps(asst);
       break;
     case "reasoning_end":               // 最终输出轮：思考面板定格，可折叠看全文
       asst.reasoningState = "done";
@@ -2450,12 +2579,15 @@ function handleChatEvent(ev, asst, stepByTrace) {
       asst.reasoningState = "discarded";
       break;
     case "stopped":
+      asst.interrupted = true;            // 手动停止：保留部分答复，可「继续生成」
       asst.steps.push({ kind: "llm", status: "ok", desc: "已手动停止生成（保留部分答复）" });
       if (!asst.content) asst.content = "（已停止生成）";
       break;
     case "done":
+      asst._done = true;                  // SSE 正常收尾（区分断连/异常中断）
       break;
     case "error":
+      asst.interrupted = true;
       asst.steps.push({ kind: "llm", status: "fail", desc: esc(ev.error || "生成出错") });
       if (!asst.content) asst.content = "出错了：" + (ev.error || "未知错误");
       break;
@@ -4233,6 +4365,7 @@ async function bsStart() {
 /* 发起与重跑共用的启动器：重跑传已有 session_id——后端检测到同 session
    重跑会自动清旧 checkpoint、复位会话状态（api 层 run_graph 的重跑分支） */
 async function bsLaunch(topic, roles, sid, maxRounds, tokenBudget) {
+  ensureNotifyPermission();               // 长任务开场：预请求通知授权（用户手势内）
   bsPinned = true;
   state.bs = { running: true, sid, abort: new AbortController(),
                evidence: [], tools: [], plan: null, replayed: false,
@@ -4327,11 +4460,14 @@ async function bsStream(sid, endpoint, body) {
           bsStatus(state.bs.team === "seminar" ? "本场会讲已结束"
                    : "本场头脑风暴已结束", "ok");
           bsShowTokenTotal(sid);            // 整场完成：展示总 token 消耗
+          notifyBackground("科研助手", "多 Agent 场次已结束，点击查看成稿");
           continue;
         }
         if (ev.type === "error") {
           bsStatus("出错了：" + (ev.error || "未知错误"), "bad");
           toast(ev.error || "头脑风暴运行失败", "err");
+          notifyBackground("科研助手",
+            "多 Agent 场次运行出错：" + (ev.error || "").slice(0, 60));
           continue;
         }
         if (/^(bs_|sem_|dr_)/.test(String(ev.type))) bsHandleEvent(ev);
@@ -4418,6 +4554,8 @@ function bsHandleEvent(ev) {
     case "token": {
       const item = bsLiveOf(ev.agent);
       if (item && item.streaming) {
+        const rb = $(".bs-retry", item.el);
+        if (rb) rb.remove();            // 内容流恢复 = 重试成功，撤掉倒计时横幅
         item.content += ev.content;
         bsScheduleFlush(item);
       }
@@ -4478,19 +4616,54 @@ function bsHandleEvent(ev) {
       break;
     }
 
+    case "retry": {                    // LLM 网络层重试（native_round 透出）：气泡内倒计时横幅
+      const item = bsLiveOf(ev.agent);
+      if (item) {
+        let bar = $(".bs-retry", item.el);
+        if (!bar) {
+          bar = document.createElement("div");
+          bar.className = "bs-retry";
+          item.bodyEl.parentNode.insertBefore(bar, item.bodyEl);
+        }
+        bar.innerHTML = "⏳ 超时重试 " + esc(`${ev.attempt}/${ev.max}`)
+          + ' <span class="cd" data-cd="' + (Date.now() + (ev.delay || 0) * 1000) + '"></span>'
+          + (ev.error ? '<span class="bs-retry-err" title="' + esc(ev.error) + '">'
+            + esc(String(ev.error).slice(0, 60)) + "</span>" : "");
+        bsScroll();
+      }
+      break;
+    }
+
+    case "agent_fail": {               // 重试耗尽最终失败：气泡红字显示原因
+      const item = bsLiveOf(ev.agent);
+      if (item) {
+        item.streaming = false;
+        item.bodyEl.classList.remove("bs-cursor");
+        const rb = $(".bs-retry", item.el);
+        if (rb) rb.remove();
+        item.bodyEl.innerHTML = '<span style="color:var(--danger)">（生成失败'
+          + (ev.error ? "：" + esc(ev.error) : "") + '）</span>';
+        delete state.bs.live[ev.agent];
+        bsScroll();
+      }
+      break;
+    }
+
     case "agent_end":
     case "present_end": {                       // 会讲汇报收尾（present 无独立 agent_end）
       const item = bsLiveOf(ev.agent);
       if (item && item.streaming) {
         item.streaming = false;
         item.bodyEl.classList.remove("bs-cursor");
-        if (ev.phase === "research" && ev.failed)
-          item.bodyEl.innerHTML = '<span style="color:var(--danger)">（调研失败'
-            + (ev.reason ? "：" + esc(ev.reason) : "，本角色缺席") + '）</span>';
-        else if (ev.phase === "read" && ev.failed)
-          item.bodyEl.innerHTML = '<span style="color:var(--danger)">（研读失败'
-            + (ev.reason ? "：" + esc(ev.reason) : "，本学者缺席") + '）</span>';
-        else if (ev.aborted)
+        // 失败原因全阶段透出（辩论发言/汇报/执笔…后端在 agent_end 带 reason）
+        const failWord = { research: "调研失败", read: "研读失败" }[ev.phase] || "生成失败";
+        if (ev.failed || ev.reason) {
+          const suffix = ev.reason ? "：" + esc(ev.reason)
+            : (ev.phase === "research" ? "，本角色缺席"
+              : ev.phase === "read" ? "，本学者缺席" : "");
+          item.bodyEl.innerHTML = '<span style="color:var(--danger)">（'
+            + esc(failWord) + suffix + '）</span>';
+        } else if (ev.aborted)
           item.bodyEl.innerHTML = '<span style="color:var(--muted)">（已停止，本角色调研中止）</span>';
         delete state.bs.live[ev.agent];
       }

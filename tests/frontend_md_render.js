@@ -7,7 +7,8 @@ const end = src.indexOf("/* ================= 鉴权 ================= */");
 if (start < 0 || end < 0) { console.error("extract markers not found"); process.exit(1); }
 const chunk = src.slice(start, end);
 
-const factory = new Function("window", "hljs", chunk + "\nreturn { md, esc, katexHTML };");
+const docStub = { title: "t", addEventListener() {} };
+const factory = new Function("window", "hljs", "document", chunk + "\nreturn { md, esc, katexHTML };");
 const rendered = [];
 const fakeWindow = {
   katex: {
@@ -17,7 +18,7 @@ const fakeWindow = {
     },
   },
 };
-const { md } = factory(fakeWindow, undefined);   // hljs 缺失（CDN 失败场景）
+const { md } = factory(fakeWindow, undefined, docStub);   // hljs 缺失（CDN 失败场景）
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -58,7 +59,8 @@ rendered.length = 0;
 h = md("运行 `$HOME/bin/$USER` 查看");
 check("行内 code 内 $ 不误判", rendered.length === 0 && h.includes("<code>$HOME/bin/$USER</code>"), h);
 h = md("```\n$$x$$ \\alpha\n```");
-check("围栏代码内公式不处理", rendered.length === 0 && h.includes("<pre><code>") && h.includes("\\alpha"), h);
+check("围栏代码内公式不处理", rendered.length === 0 && h.includes("<pre class=\"md-pre\"")
+  && h.includes("<code>$$x$$ \\alpha</code>"), h);
 
 /* 5. hljs 缺失时代码内容仍被转义（防 XSS） */
 h = md("```html\n<script>alert(1)</script>\n```");
@@ -110,11 +112,12 @@ rendered.length = 0;
 h = md("推导如下\n\n$$\n\\begin{aligned}\nx &= 1");
 check("未闭合 $$ 流式态保留原文", rendered.length === 0 && h.includes("x &amp;= 1") && h.includes("推导如下"), h);
 h = md("```python\nprint('hi')");
-check("未闭合代码围栏（流式态）", h.includes("<pre><code") && h.includes("print"), h);
+check("未闭合代码围栏（流式态）", h.includes("<pre class=\"md-pre\"") && h.includes("language-python")
+  && h.includes("print"), h);
 
 /* 12. KaTeX 缺失时降级为原文 */
-const factoryNoKatex = new Function("window", "hljs", chunk + "\nreturn { md };");
-const { md: mdNoKatex } = factoryNoKatex({}, undefined);
+const factoryNoKatex = new Function("window", "hljs", "document", chunk + "\nreturn { md };");
+const { md: mdNoKatex } = factoryNoKatex({}, undefined, docStub);
 h = mdNoKatex("质能方程 $E = mc^2$ 与\n\n$$\\int_0^1 x\\,dx$$");
 check("无 KaTeX 时公式降级为原文", h.includes("E = mc^2") && h.includes("\\int_0^1") && !h.includes("katex"), h);
 

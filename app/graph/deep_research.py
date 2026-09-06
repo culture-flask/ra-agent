@@ -617,11 +617,15 @@ def make_write_frame_node(ctx: WorkflowContext):
                         chapters=chapters_text[:12000])
         toc, intro, concl, used = "", "", "", 0
         raw_text = ""
+        last_err = ""
+        # 不流式但用户在场：重试倒计时与失败原因透出到撰写人气泡
+        retry_kw = dict(emit_retry=True, emit_extra={"agent": rid})
         try:
             text, used = await _llm_text(
                 ctx, state, WRITE_FRAME_SYSTEM.format(**frame_kw),
                 "请撰写引言/结论/目录并输出 JSON。",
-                temperature=float(role.get("temperature", 0.4)), prefix="dr_")
+                temperature=float(role.get("temperature", 0.4)), prefix="dr_",
+                **retry_kw)
             raw_text = (text or "").strip()
             data = _loads_fuzzy(raw_text) or {}
             toc = str(data.get("toc", ""))[:2000]
@@ -629,6 +633,7 @@ def make_write_frame_node(ctx: WorkflowContext):
             concl = str(data.get("conclusion", ""))[:3000]
         except Exception as e:
             logger.warning("dr write_frame failed: %s", e)
+            last_err = str(e)
         if not (toc or intro or concl):
             # 第一段契约失败：留诊断证据（原始输出头部），换定界符格式重试
             logger.warning("dr write_frame json attempt empty (raw head: %s)，"
@@ -638,14 +643,21 @@ def make_write_frame_node(ctx: WorkflowContext):
                 text, used2 = await _llm_text(
                     ctx, state, WRITE_FRAME_PLAIN.format(**frame_kw),
                     "请按 ===TOC===/===INTRO===/===CONCL=== 三段格式输出。",
-                    temperature=float(role.get("temperature", 0.4)), prefix="dr_")
+                    temperature=float(role.get("temperature", 0.4)),
+                    prefix="dr_", **retry_kw)
                 used += used2
                 toc, intro, concl = _parse_frame_sections(text or "")
             except Exception as e:
                 logger.warning("dr write_frame plain retry failed: %s", e)
+                last_err = str(e)
         if not (toc or intro or concl):
             logger.warning("dr write_frame both contracts empty（报告将降级汇编），"
                            "raw head: %s", raw_text[:300] or "（空）")
+            # 重试耗尽仍无产出：失败原因即时透出（发布员会降级汇编，但
+            # 撰写人气泡不能只留空白，用户要能看到为什么降级）
+            emit("dr_agent_fail", {"agent": rid, "error":
+                _short_reason(Exception(last_err)) if last_err
+                else "两段输出契约均为空（网关空完成或格式不可解析）"})
         # 与审稿同理：控制类调用不产生流式 token，不补展示事件的话前端
         # 撰写人气泡全程空白。这里把目录/引言/结论的实际产出回放进气泡
         # （与详情回放路径 put("writer","frame",…) 的内容口径一致）。
