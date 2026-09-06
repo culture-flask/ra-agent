@@ -4103,6 +4103,7 @@ function bsHandleEvent(ev) {
       $("#bs-plan-wrap").hidden = false;
       $("#bs-plan-body").innerHTML = md(plan);
       state.bs.plan = plan;
+      bsLoadSavedFiles();      // 执笔人落盘的完整文档（展示内容只是发言摘要）
       if (ev.fallback)
         toast(ev.reason === "stopped" ? "已停止：以各方立场汇编成稿" :
               ev.reason === "budget_exhausted" ? "token 预算熔断：以各方立场汇编成稿" :
@@ -4394,6 +4395,42 @@ function bsDownload(name, text) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/* 完整文档下载：执笔人经 save_document/export_bibtex 落盘在服务器
+   output 目录的完整稿（卡片里展示/导出的只是发言摘要）。成稿事件与
+   历史回放共用此入口——按会话查产出文件清单，逐个渲染下载按钮。 */
+async function bsLoadSavedFiles() {
+  const box = $("#bs-plan-files");
+  box.innerHTML = "";
+  if (!state.bs.sid) return;
+  let files = [];
+  try {
+    files = await api("/api/v1/outputs/saved?session_id="
+                      + encodeURIComponent(state.bs.sid));
+  } catch { return; }                             // 清单拿不到不影响成稿展示
+  files.forEach(f => {
+    const b = document.createElement("button");
+    b.className = "btn sm";
+    b.title = `下载完整文档（${f.chars ? f.chars + " 字符，" : ""}保存于服务器 output 目录）`;
+    b.textContent = "⬇ 完整稿 " + f.filename;
+    b.onclick = () => bsDownloadServerFile(f.filename);
+    box.appendChild(b);
+  });
+}
+
+async function bsDownloadServerFile(name) {
+  try {
+    const res = await fetch(store.base
+      + "/api/v1/outputs/download?name=" + encodeURIComponent(name),
+      { headers: { Authorization: "Bearer " + store.token } });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { toast("下载失败：" + e.message, "err"); }
 }
 
 /* ---------- 会讲：构想卡墙（谱系 + 评分角标 + 排序） ---------- */

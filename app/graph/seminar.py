@@ -209,9 +209,9 @@ def _cards_digest(cards: list[dict], limit: int = 500) -> str:
     """构想卡摘要：每卡各字段截 limit 字。
 
     存库上限（panel/merge/improve 解析时截断）：标题 120、灵感 300、
-    假设 500、风险 300、**验证思路 5500**——limit < 5500 时验证思路
-    展示不全，消费方按需选择：评审 2000（可行性打分要见验证深度）、
-    执笔 5500（全文）。"""
+    假设 500、风险 300、**验证思路 2500**——limit < 2500 时验证思路
+    展示不全，消费方按需选择：改进/评审 1000（够判可行性与改进点）、
+    执笔 2500（全文）。"""
     if not cards:
         return "（无）"
     out = []
@@ -518,7 +518,7 @@ def make_qa_node(ctx: WorkflowContext):
                 ctx, state,
                 CHAIR_INSIGHT_PROMPT.format(presenter=prole["name"],
                                             presentation=presentation[:1500],
-                                            qa_pairs=qa_pairs[:20000]),
+                                            qa_pairs=qa_pairs[:8000]),
                 "请提取洞见并输出 JSON。", temperature=0.2, prefix="sem_")
             used_total += used
             data = _loads_fuzzy(text) or {}
@@ -584,7 +584,7 @@ def make_propose_node(ctx: WorkflowContext, role_id: str):
                       "title": str(c.get("title", ""))[:120],
                       "inspiration": str(c.get("inspiration", ""))[:300],
                       "hypothesis": str(c.get("hypothesis", ""))[:500],
-                      "validation_sketch": str(c.get("validation_sketch", ""))[:5500],
+                      "validation_sketch": str(c.get("validation_sketch", ""))[:2500],
                       "risk": str(c.get("risk", ""))[:300]}
                      for c in data[:max_cards] if isinstance(c, dict)
                      and c.get("title")]
@@ -604,7 +604,7 @@ def make_merge_node(ctx: WorkflowContext):
             cards_json = json.dumps(
                 [{"i": i, **c} for i, c in enumerate(raw)], ensure_ascii=False)
             text, used = await _llm_text(
-                ctx, state, MERGE_PROMPT.format(cards=cards_json[:150000]),
+                ctx, state, MERGE_PROMPT.format(cards=cards_json[:60000]),
                 "请合并定稿并输出 JSON。", temperature=0.2, prefix="sem_")
             data = _loads_fuzzy(text) or {}
             if isinstance(data.get("merged_cards"), list):
@@ -617,7 +617,7 @@ def make_merge_node(ctx: WorkflowContext):
                                   "inspiration": str(c.get("inspiration", ""))[:300],
                                   "hypothesis": str(c.get("hypothesis", ""))[:500],
                                   "validation_sketch":
-                                      str(c.get("validation_sketch", ""))[:5500],
+                                      str(c.get("validation_sketch", ""))[:2500],
                                   "risk": str(c.get("risk", ""))[:300]})
         except Exception as e:
             logger.warning("seminar merge failed, code fallback: %s", e)
@@ -673,7 +673,7 @@ def make_improve_node(ctx: WorkflowContext, role_id: str):
                               "improvement": str(c.get("improvement", ""))[:300],
                               "hypothesis": str(c.get("hypothesis", ""))[:500],
                               "validation_sketch":
-                                  str(c.get("validation_sketch", ""))[:5500],
+                                  str(c.get("validation_sketch", ""))[:2500],
                               "risk": str(c.get("risk", ""))[:300]})
         # 同 propose：并行节点不写单值 channel（stopped）
         return {"idea_cards": cards, "token_budget_used": used}
@@ -691,7 +691,7 @@ def make_panel_node(ctx: WorkflowContext):
         try:
             cards_json = json.dumps(raw, ensure_ascii=False, default=str)
             text, used = await _llm_text(
-                ctx, state, MERGE_PROMPT.format(cards=cards_json[:150000]),
+                ctx, state, MERGE_PROMPT.format(cards=cards_json[:60000]),
                 "请合并定稿全部卡片并输出 JSON。", temperature=0.2,
                 prefix="sem_")
             data = _loads_fuzzy(text) or {}
@@ -708,7 +708,7 @@ def make_panel_node(ctx: WorkflowContext):
                                           str(c.get("inspiration", ""))[:300],
                                       "hypothesis": str(c.get("hypothesis", ""))[:500],
                                       "validation_sketch":
-                                          str(c.get("validation_sketch", ""))[:5500],
+                                          str(c.get("validation_sketch", ""))[:2500],
                                       "risk": str(c.get("risk", ""))[:300]})
         except Exception as e:
             logger.warning("seminar panel failed, code fallback: %s", e)
@@ -737,7 +737,7 @@ def make_score_node(ctx: WorkflowContext, role_id: str):
         system = SCORE_SYSTEM.format(
             name=role["name"], role_id=role_id,
             orientation=SCHOLAR_ORIENTATION[role_id],
-            cards=_cards_digest(cards, limit=2000))
+            cards=_cards_digest(cards, limit=1000))
         human = "请独立评审全部构想卡。"
         try:
             text, used, stopped = await _agent_speak(
@@ -883,7 +883,7 @@ def make_rapporteur_node(ctx: WorkflowContext):
         system = RAPPORTEUR_PROMPT.format(
             topic=state["topic"], notes=notes,
             insights=_insight_digest(state, 50),
-            cards=_cards_digest(state.get("card_registry") or [], 5500),
+            cards=_cards_digest(state.get("card_registry") or [], 2500),
             ranking=ranking_text, open_questions=open_qs)
         # 执笔人文档工具子集（产出资产，不再调研）
         def _schema_name(t: dict) -> str:
