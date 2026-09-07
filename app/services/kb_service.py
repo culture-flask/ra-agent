@@ -822,12 +822,15 @@ class KBService:
     def update_embedding(self, kb_id: str, provider: str | None = None,
                          model_id: str | None = None, dim: int | None = None,
                          base_url: str | None = None,
-                         api_key: str | None = None) -> KnowledgeBase:
+                         api_key: str | None = None,
+                         user_id: str | None = None) -> KnowledgeBase:
         """修改知识库的嵌入配置（创建后随时可改，不再固化）。
 
         - 传了才改：provider/model_id/dim 仅在有值时更新
         - base_url：None=保持不变；空串=清空（回退 provider 默认端点）
         - api_key：None=保持不变；空串=清除专用密钥；其他=加密更新
+        - user_id：操作者（嵌入模型解析的"用户级配置"回退层级：
+          显式指定 > 用户级嵌入配置 > 系统默认）
         - 已入库的向量不会重新嵌入，查询时由 embedding_mismatch 提醒
         """
         kb = self.get_kb(kb_id)
