@@ -4,6 +4,7 @@ export_bibtex（网络类 MCP 新工具不在此测——离线确定性纪律�
 
 import asyncio
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -110,7 +111,10 @@ def test_save_document_and_bibtex():
                              "content": "# 研究方案\n正文"},
                             "t-bs-tool-6", "u1"))
     data = json.loads(out["output"])
-    assert data["saved"] is True and data["filename"] == "research-proposal.md"
+    # 文件名由系统自动加「日期-时分」前缀（北京时间）：LLM 只起主题名
+    fname = data["filename"]
+    assert data["saved"] is True and fname.endswith("research-proposal.md")
+    assert re.fullmatch(r"\d{8}-\d{4}-research-proposal\.md", fname)
     saved = Path(data["path"])
     assert saved.exists() and saved.read_text(encoding="utf-8") == "# 研究方案\n正文"
     assert saved.parent.name == "u1"                  # 按用户隔离目录

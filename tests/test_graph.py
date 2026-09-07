@@ -459,8 +459,11 @@ def test_supervisor_excludes_archive_kbs():
     assert all(r.get("kb_name") == "普通资料库" for r in result["retrievals"])
     assert all(r.get("kb_name") != "头脑风暴成果" for r in result["retrievals"])
 
-    # 服务层开关：include_archives=False 排除沉淀库（多 agent 研读仍默认包含 → 飞轮保留）
-    both = kb_service.list_queryable_kbs("u1")
-    assert {k.name for k in both} >= {"普通资料库", "辩论式agent纪要"}
-    no_arch = kb_service.list_queryable_kbs("u1", include_archives=False)
-    assert {k.name for k in no_arch} == {"普通资料库"}
+    # 团队隔离（按 team 声明身份而非布尔开关）：普通对话只见普通库；
+    # team=debate 额外见本团队沉淀库（多 agent 研读往期产出 → 飞轮保留）
+    normal_only = kb_service.list_queryable_kbs("u1")
+    assert {k.name for k in normal_only} == {"普通资料库"}
+    with_archive = kb_service.list_queryable_kbs("u1", team="debate")
+    assert {k.name for k in with_archive} >= {"普通资料库", "辩论式agent纪要"}
+    other_team = kb_service.list_queryable_kbs("u1", team="seminar")
+    assert {k.name for k in other_team} == {"普通资料库"}   # 别的团队也看不到本场沉淀库
