@@ -114,7 +114,7 @@ COMPACT_PROMPT = """您正在进行上下文检查点压缩。请为另一个LLM
 
 内容包括：
 - 用户的研究主题、关键问题及迄今得出的结论
-- 对话中已确认的事实、参数和用户偏好
+- 对话中已确认的事实、参数、数据和用户偏好
 - 未解决的问题或后续跟进事项（明确下一步行动）
 
 请简洁、结构清晰，注重顺畅延续。
@@ -231,8 +231,17 @@ async def compact_node(ctx: WorkflowContext, state: AgentState) -> dict:
         model = await asyncio.to_thread(
             ctx.llm_service.get_chat_model,
             state["user_id"], temperature=state.get("temperature"))
+        # 旧摘要并入本次总结输入：第二次及以后压缩时，更早的对话只剩旧摘要
+        # 一个载体（对应消息已被 RemoveMessage 删除），不并入会被新摘要整体
+        # 覆盖——conversation_summary 无 reducer，默认 last-value-wins
+        old_summary = str(state.get("conversation_summary") or "").strip()
+        prompt = COMPACT_PROMPT
+        if old_summary:
+            prompt += ("\n\n[已有交接摘要（来自更早的对话，压缩后的新摘要必须在"
+                       "它基础上合并补充，不得丢失其中仍有效的信息）]\n"
+                       + old_summary)
         _t0 = time.perf_counter()
-        resp = await model.ainvoke([SystemMessage(content=COMPACT_PROMPT)] + old)
+        resp = await model.ainvoke([SystemMessage(content=prompt)] + old)
         logger.info("compact summarized in %.1fs old_rounds=%d chars=%d",
                     time.perf_counter() - _t0, len(old),
                     len(str(resp.content or "")))
@@ -485,7 +494,7 @@ async def _merge_memories_llm(ctx: WorkflowContext, user_id: str,
 
 # 固定身份句：永不变化，置于系统提示词最前，保证所有请求共享同一前缀段
 _IDENTITY = ("你是科研助手。若用户消息后附有【知识库检索结果】，优先据此回答，"
-             "引用时标明来源（public/private）；否则根据你自己的知识回答。")
+             "引用时标明来源（public/private）；否则根据你自己的知识或调用工具来回答。")
 
 
 def _build_system_prompt(state: AgentState) -> str:
