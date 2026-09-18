@@ -31,7 +31,9 @@ class Tracer:
                 started_at=_now(),
             ))
             db.commit()
-        emit("trace_start", {"id": log_id, "kind": kind, "name": name})
+        # args/parent_id 一并透出：实时面板据此展示工具参数与调用树层级
+        emit("trace_start", {"id": log_id, "kind": kind, "name": name,
+                             "parent_id": parent_id, "args": args or {}})
         return log_id
 
     def success(self, log_id: str, output: str) -> None:

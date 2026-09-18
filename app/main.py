@@ -11,7 +11,7 @@ from app.abstractions.llm import LLMService
 from app.api.auth import router as auth_router
 from app.api.brainstorm import router as brainstorm_router
 from app.api.seminar import router as seminar_router
-from app.api.deep_research import router as deep_research_router   # 溯源社：深度调研式多 agent
+from app.api.deep_research import router as deep_research_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.feedbacks import router as feedbacks_router
@@ -29,7 +29,7 @@ from app.core.net import apply_proxy
 from app.core.tracing import Tracer
 from app.graph.brainstorm import build_brainstorm_graph
 from app.graph.seminar import build_seminar_graph
-from app.graph.deep_research import build_deep_research_graph      # 溯源社：深度调研式多 agent
+from app.graph.deep_research import build_deep_research_graph
 from app.graph.nodes import WorkflowContext
 from app.graph.workflow import build_graph
 from app.mcp.adapter import MCPToolAdapter

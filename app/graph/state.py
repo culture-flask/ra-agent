@@ -23,6 +23,7 @@ class AgentState(TypedDict, total=False):
     temperature: float | None               # 生成温度（None=默认 0.3；0 也合法）
     parent_groups: int | None               # 聚合返回的父块名额（None=全局默认；0=关闭聚合）
     last_usage: dict | None                 # 上一次 generate 的真实 token 用量（来自 LLM 响应）
+    llm_log_id: str | None                  # 本轮 generate 的追踪行 id（tool_executor 据此挂父子）
     stopped: bool                           # 本轮生成被用户手动中断（部分答复仍入 checkpoint）
     # 跨轮检索状态：记录上一轮是否检索过、搜了哪些库、命中几条。
     # 由 checkpointer 持久保留（_initial_state 不重置它），供 supervisor 判断

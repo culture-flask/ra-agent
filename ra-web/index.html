@@ -2090,9 +2090,10 @@ function stepsHTML(steps) {
       : s.status === "fail" ? '<span class="badge red">失败</span>'
       : s.status === "ok" ? '<span class="badge green">完成</span>' : "";
     const cd = s.deadline ? ` <span class="cd" data-cd="${s.deadline}"></span>` : "";
-    return `<div class="step">
+    const indent = s.depth ? ` style="margin-left:${s.depth * 18}px"` : "";   // 调用树缩进
+    return `<div class="step"${indent}>
       <span class="sdot" style="background:${st.color}"></span>
-      <div><span class="slabel" style="color:${st.color}">${st.label}</span> ${statusIcon}
+      <div>${s.depth ? '<span class="muted">└ </span>' : ""}<span class="slabel" style="color:${st.color}">${st.label}</span> ${statusIcon}
       <div class="sdesc">${s.desc || ""}${cd}</div></div></div>`;
   }).join("");
   const retrying = steps.some(s => s.kind === "retry" && s.status === "running");
@@ -2531,17 +2532,17 @@ function handleChatEvent(ev, asst, stepByTrace) {
     case "retrievals":
       asst.retrievals = ev.results || [];
       break;
-    case "tool_start": {
-      const args = JSON.stringify(ev.args || {});
-      const step = { kind: "tool", status: "running",
-        desc: `<code>${esc(ev.name)}</code> 参数 <code>${esc(args.length > 120 ? args.slice(0, 120) + "…" : args)}</code>` };
-      asst.steps.push(step);
-      stepByTrace["tool:" + ev.name] = step;
-      break;
-    }
+    // 工具/LLM 步骤统一由 trace 事件生成：带 args 与 parent_id，按 trace id 配对，
+    // 并据父步骤算缩进层级（调用树）。节点级的 tool_start 已移除——它会与
+    // trace_start 重复一条，且拿不到父子关系。
     case "trace_start": {
+      const args = JSON.stringify(ev.args || {});
       const step = { kind: ev.kind === "llm" ? "llm" : ev.kind, status: "running",
-        desc: `<code>${esc(ev.name)}</code>` };
+        traceId: ev.id, parentId: ev.parent_id || null,
+        desc: `<code>${esc(ev.name)}</code>` + (args && args !== "{}"
+          ? ` 参数 <code>${esc(args.length > 120 ? args.slice(0, 120) + "…" : args)}</code>` : "") };
+      const parent = step.parentId ? stepByTrace[step.parentId] : null;
+      step.depth = parent ? (parent.depth || 0) + 1 : 0;   // 子调用缩进一层
       asst.steps.push(step);
       stepByTrace[ev.id] = step;
       break;
@@ -2551,11 +2552,6 @@ function handleChatEvent(ev, asst, stepByTrace) {
       if (step) {
         step.status = ev.ok ? "ok" : "fail";
         if (!ev.ok && ev.error) step.desc += ` <span style="color:var(--danger)">${esc(ev.error.slice(0, 150))}</span>`;
-      }
-      // 同时把同名 tool 步骤收尾
-      for (const k of Object.keys(stepByTrace)) {
-        const s = stepByTrace[k];
-        if (s.kind === "tool" && s.status === "running") s.status = ev.ok ? "ok" : "fail";
       }
       break;
     }
@@ -3667,10 +3663,26 @@ async function loadTraces() {
     box.innerHTML = `<div class="empty"><div class="big">暂无调用日志</div>发起一次对话后，这里会记录完整调用链路</div>`;
     return;
   }
+  // 平表 → 调用树：按 parent_id 挂子节点后 DFS 展开（父被 200 条上限截掉/跨页的
+  // 孤儿行当根，保证不丢行）；同一父下按时间升序，读起来就是执行顺序。
+  const byId = new Map(rows.map(r => [r.id, r]));
+  rows.forEach(r => {
+    const p = r.parent_id ? byId.get(r.parent_id) : null;
+    if (p && p !== r) (p._kids || (p._kids = [])).push(r); else r._root = true;
+  });
+  const asc = (a, b) => ((a.started_at || "") < (b.started_at || "") ? -1 : 1);
+  const ordered = [], seen = new Set();
+  const walk = (n, d) => {
+    if (seen.has(n.id)) return;                 // 防御脏数据成环
+    seen.add(n.id);
+    ordered.push([n, d]);
+    (n._kids || []).sort(asc).forEach(k => walk(k, d + 1));
+  };
+  rows.filter(r => r._root).sort(asc).forEach(r => walk(r, 0));
   box.innerHTML = `<table class="tbl"><tr>
     <th style="width:160px">时间</th><th style="width:80px">类型</th><th>名称</th>
     <th style="width:90px">会话</th><th style="width:80px">状态</th><th style="width:90px">耗时</th></tr>` +
-    rows.map((r, i) => {
+    ordered.map(([r, depth], i) => {
       const dur = r.started_at && r.finished_at
         ? (new Date(r.finished_at) - new Date(r.started_at)) + " ms" : "-";
       const status = r.error ? '<span class="badge red">失败</span>'
@@ -3678,7 +3690,7 @@ async function loadTraces() {
       return `<tr class="expander" data-i="${i}">
         <td class="muted mono">${fmtTime(r.started_at)}</td>
         <td><span class="badge ${KIND_BADGE[r.kind] || "gray"}">${esc(r.kind)}</span></td>
-        <td class="mono">${esc(r.name)}</td>
+        <td class="mono" style="${depth ? `padding-left:${12 + depth * 16}px` : ""}">${depth ? '<span class="muted">└ </span>' : ""}${esc(r.name)}</td>
         <td class="mono muted" data-copysid="${esc(r.session_id)}" title="点击复制 ${esc(r.session_id)}" style="cursor:copy">${esc(shortId(r.session_id))}</td>
         <td>${status}</td><td class="muted mono">${dur}</td></tr>
       <tr class="detail" data-detail="${i}" style="display:none"><td colspan="6">

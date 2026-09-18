@@ -25,7 +25,7 @@ llm:
     base_url: https://token.sensenova.cn/v1
     model_id: sensenova-6.8-flash-lite
   retry:             # 调用失败退避重试：限流/5xx/网络错误指数退避重试
-    max_retries: 10
+    max_retries: 5
     base_delay: 1.0 # 首次重试等 1s，之后 2s / 4s（含随机抖动）
   context_window: 256000  # 上下文窗口兜底值(token)：用户未设置且探测不到模型元数据时使用，达到 80% 触发自动压缩
   providers:                     # 均为 OpenAI 协议兼容端点（custom 自定义除外）

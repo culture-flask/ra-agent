@@ -775,13 +775,19 @@ def route_after_generate(state: AgentState) -> str:
 
 
 async def tool_executor_node(ctx: WorkflowContext, state: AgentState) -> dict:
-    """执行 LLM 请求的工具：经 MCPToolAdapter → MCP tools/call，结果回灌。"""
+    """执行 LLM 请求的工具：经 MCPToolAdapter → MCP tools/call，结果回灌。
+
+    追踪行挂到触发它的 LLM 调用下（parent_id）——追踪页按调用树展示。
+    工具的实时 event（trace_start/trace_end，带 args 与 parent_id）由 Tracer
+    统一发出，这里不再另发 tool_start：否则同一调用会出现两条步骤。
+    """
     last = state["messages"][-1]
+    parent_id = state.get("llm_log_id")          # generate 本轮写入的 llm 行 id
     results = []
     for call in last.tool_calls:
-        emit("tool_start", {"name": call["name"], "args": call["args"]})
         out = await ctx.mcp_adapter.call(call["name"], call["args"],
-                                         state["session_id"], state["user_id"])
+                                         state["session_id"], state["user_id"],
+                                         parent_id=parent_id)
         results.append(ToolMessage(content=json.dumps(out, ensure_ascii=False),
                                    tool_call_id=call["id"]))
     return {"messages": results}
@@ -1028,6 +1034,7 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     # 检索块作为临时消息插在最后一条用户消息后（不进 checkpoint），
     # 保证发送序列跨轮前缀稳定 → 供应商侧前缀缓存可命中历史
     payload = _compose_llm_messages(state, system, _retrieval_message(state))
+    log_id: str | None = None                     # 追踪行 id：回写 state 供工具挂父子
     if ctx.tracer is not None:
         log_id = await asyncio.to_thread(
             ctx.tracer.start, "llm", getattr(model, "model_name", "chat"),
@@ -1121,4 +1128,5 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
             "模型连续返回空响应（已自动重试），请稍后重试或更换模型/提供商")
 
     return {"messages": [resp], "answer": answer,
-            "last_usage": usage, "stopped": stopped}
+            "last_usage": usage, "stopped": stopped,
+            "llm_log_id": log_id}                 # 工具执行节点据此把调用挂成本轮 LLM 的子节点

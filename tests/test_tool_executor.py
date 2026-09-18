@@ -78,11 +78,14 @@ def test_tool_call_loop():
         config={"configurable": {"thread_id": "t-tool-1"}}))
     assert result["answer"] == "已收到回声"
 
-    # 追踪：llm → tool(echo) → llm
-    kinds = [x["kind"] for x in tracer.list(session_id="t-tool-1")]
+    # 追踪：llm → tool(echo) → llm；工具行挂到触发它的 LLM 行（parent 成树）
+    logs = tracer.list(session_id="t-tool-1")
+    kinds = [x["kind"] for x in logs]
     assert kinds[0] == "llm" and kinds[1] == "tool"
-    echo_log = tracer.list(session_id="t-tool-1")[1]
+    echo_log = logs[1]
     assert "ping" in echo_log["output"]
+    assert echo_log["parent_id"] == logs[2]["id"]    # 工具的父亲 = 第一轮 generate 的 llm 行
+    assert logs[0]["parent_id"] is None              # llm 行是根
 
 
 def test_no_tool_call_ends():

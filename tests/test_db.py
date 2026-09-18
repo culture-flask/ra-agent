@@ -13,4 +13,5 @@ def test_tables_exist():
         rows = conn.execute(text(
             "SELECT tablename FROM pg_tables WHERE schemaname='public'"
         )).scalars().all()
-        assert {"users", "kbs", "sessions", "tool_call_log"}.issubset(rows)
+        assert {"users", "kbs", "tool_call_log"}.issubset(rows)
+        assert "sessions" not in rows      # 死表已随 UserSession 一起清理

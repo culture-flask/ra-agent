@@ -16,18 +16,9 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(256))   # 第 2 天存哈希而非明文
+    password_hash: Mapped[str] = mapped_column(String(256))  
     role: Mapped[str] = mapped_column(String(16), default="user")   # user | admin
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-class UserSession(Base):
-    """登录会话登记：LangGraph 的 thread_id 落库，便于追踪与续聊。"""
-    __tablename__ = "sessions"
-    session_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class Conversation(Base):
     """对话会话登记：跨设备同步会话列表（消息本体在 LangGraph checkpoint）。
@@ -96,7 +87,6 @@ class ToolCallLog(Base):
     kind: Mapped[str] = mapped_column(String(16))       # llm | tool | retrieve | kb
     name: Mapped[str] = mapped_column(String(64))
     # 64：头脑风暴会话 id 是 "bs-" + uuid（39 字符），36 会截断报
-    # StringDataRightTruncation——所有工具调用因此在写追踪时全军覆没
     session_id: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     args: Mapped[dict] = mapped_column(JSON, default=dict)
