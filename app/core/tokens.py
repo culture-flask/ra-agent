@@ -1,4 +1,4 @@
-"""Token 粗估工具：跨层共用的纯函数（P2-17 分层修正）。
+"""Token 粗估工具：跨层共用的纯函数。
 
 此前 `_estimate_tokens` 定义在编排层（graph/nodes.py），而 API 层
 （api/chat.py 的 /chat/context）也需要同一估算——反向 import 编排层

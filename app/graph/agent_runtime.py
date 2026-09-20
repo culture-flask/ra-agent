@@ -223,8 +223,17 @@ async def _agent_speak_impl(ctx: WorkflowContext, state: dict,
     empty_retried = 0
     rounds = max(1, tool_loop_max)
     round_idx = 0
+    wrapup_notified = False
     while round_idx < rounds + 1:           # +1：工具预算耗尽后的强制收尾轮
         last_round = round_idx >= rounds
+        if last_round and not wrapup_notified:
+            # 收尾轮不声明工具，必须显式说明：否则模型仍想调工具时没有结构化
+            # 通道，DeepSeek 系会把原生工具模板当正文吐出来（实测 <｜｜DSML｜｜ ...），
+            # 直接污染研读笔记/成稿。临时消息只在本轮 msgs 里，不进 checkpoint。
+            wrapup_notified = True
+            msgs.append(HumanMessage(content=(
+                "[系统] 本轮不再提供工具。请直接基于已获得的信息给出最终内容，"
+                "不要再请求调用工具。")))
         if cfg is not None:
             resp, usage, stopped = await native_round(
                 cfg, msgs,

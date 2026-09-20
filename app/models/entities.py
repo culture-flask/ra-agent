@@ -97,7 +97,7 @@ class ToolCallLog(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class LLMUsage(Base):
-    """Token 用量计量（P3-20）：generate_node 每轮真实用量 best-effort 落库。
+    """Token 用量计量：generate_node 每轮真实用量 best-effort 落库。
 
     数据供 /usage/summary 成本报表与后续按用户配额演进使用；
     user_id 不设外键（与 ToolCallLog/Conversation 一致，避免历史数据强约束）。

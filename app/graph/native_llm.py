@@ -121,6 +121,27 @@ def log_zero_reasoning_once(cfg) -> None:
                 getattr(cfg, "base_url", ""), getattr(cfg, "model_id", ""))
 
 
+# DeepSeek 系原生工具调用模板标记（全角竖线 U+FF5C + 下划线 U+2581）
+_TOOL_MARKUP_MARK = "<｜｜DSML｜｜"
+
+
+def strip_tool_markup(text: str) -> str:
+    """剥离模型误吐的原生工具调用模板（从标记起整段丢弃）。
+
+    触发场景：本轮未声明工具（工具预算耗尽后的收尾轮），或模型想调用的工具
+    不在声明列表里——模型没有结构化通道，就把训练时的工具调用模板当正文
+    输出（实测 deepseek-flash 经网关会吐 <｜｜DSML｜｜ calls> ...）。清理后可能为空，
+    交由调用方既有的空完成/降级逻辑处理。"""
+    idx = text.find(_TOOL_MARKUP_MARK)
+    return text[:idx].rstrip() if idx >= 0 else text
+
+
+def leaked_tool_name(text: str) -> str:
+    """从泄漏文本里取模型想调的工具名（仅日志归因用，取不到返回空串）。"""
+    _, sep, rest = text.partition('invoke name="')
+    return rest.partition('"')[0] if sep else ""
+
+
 async def native_round(cfg, payload, tools, temperature, sid,
                        token_event: str = "token",
                        reasoning_event: str = "reasoning",
@@ -149,11 +170,16 @@ async def native_round(cfg, payload, tools, temperature, sid,
     for attempt in range(max_retries + 1):
         stopped = False
         try:
-            stream = await client.chat.completions.create(
-                model=cfg.model_id, messages=msgs, tools=tools or None,
-                temperature=temperature, stream=True,
-                stream_options={"include_usage": True},
-            )
+            # tools 非空才带该键：显式传 None 会被 SDK 序列化成 "tools": null，
+            # 严格网关（实测 tokenrhythm）据此报 400「tools 类型错误」
+            kwargs: dict = {
+                "model": cfg.model_id, "messages": msgs,
+                "temperature": temperature, "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            if tools:
+                kwargs["tools"] = tools
+            stream = await client.chat.completions.create(**kwargs)
             content_parts: list[str] = []
             tc_map: dict[int, dict] = {}    # index -> {"id","name","arguments"}
             last_usage = None
@@ -233,9 +259,16 @@ async def native_round(cfg, payload, tools, temperature, sid,
                     cfg.model_id, len(partial))
             if not had_reasoning and not stopped:
                 log_zero_reasoning_once(cfg)
+            text = "".join(content_parts)
+            cleaned = strip_tool_markup(text)
+            if cleaned != text:          # 泄漏兜底：绝不把工具模板当正文交付
+                logger.warning(
+                    "工具模板泄漏已剥离 model=%s 意图调用=%s 丢弃%d字符"
+                    "（本轮未声明该工具；频发请检查提示词或工具目录）",
+                    cfg.model_id, leaked_tool_name(text) or "未知",
+                    len(text) - len(cleaned))
             # 本版本 langchain-core 的 AIMessage 不接受 tool_calls=None
-            resp = AIMessage(content="".join(content_parts),
-                             tool_calls=tool_calls)
+            resp = AIMessage(content=cleaned, tool_calls=tool_calls)
             return resp, last_usage, stopped
         except Exception as e:
             if attempt >= max_retries or not _is_retryable(e):
