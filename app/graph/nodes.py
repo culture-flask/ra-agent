@@ -43,6 +43,8 @@ EXTRACT_PROMPT = """从这段对话中提取值得记住的用户信息（研究
               "tier":"core或short","topic":"主题标签（如 研究方向/项目/偏好）"}]}
 tier 判定：研究方向、领域、稳定偏好、身份信息等长期有效 → core；
 有时效性的事实（正在写某论文、本周任务、当前项目阶段）→ short。
+下方会列出该用户已保存的记忆：已在其中的不需要重复输出；若本次对话是
+对它的更新（状态变化、内容修正），沿用原 key 输出新值，不要另起键名。
 没有值得记住的信息输出 {"memories":[]}。只输出 JSON，不要其他文字。"""
 
 MERGE_PROMPT = """你是记忆整理助手。下面按主题分组了同一用户的多条长期记忆（JSON）。
@@ -103,6 +105,20 @@ def _normalize_memory(m: dict) -> dict:
         topic = m.get("key", "").split("_")[0]     # 兜底：key 首段（research_x → research）
     return {"key": m.get("key", ""), "value": value,
             "tier": tier, "topic": topic}
+
+
+def _existing_memory_block(existing: dict[str, dict]) -> str:
+    """已有记忆清单（拼进抽取 prompt）：让 LLM 认得“记过的”，别换键重记。
+
+    值压平折行 + 截断——清单只用于去重识别，不需要完整正文，控 token 膨胀。
+    """
+    if not existing:
+        return "\n\n该用户当前没有任何已保存的记忆。"
+    lines = []
+    for key, value in existing.items():        # get_all 已按 key 定序，清单稳定
+        text = value.get("v", "") if isinstance(value, dict) else str(value)
+        lines.append(f"- {key}: {' '.join(str(text).split())[:80]}")
+    return "\n\n该用户已保存的记忆（勿重复提取）：\n" + "\n".join(lines)
 
 
 # ---------- 自动上下文压缩 ----------
@@ -402,6 +418,8 @@ async def load_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
 async def extract_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """对话结束后抽取值得记住的信息：交给 LLM 从对话中提炼。
 
+    抽取前带上该用户已有记忆，让 LLM 认得“记过的”——同一事实不换键重记，
+    只对变化的部分沿用原 key 输出更新。
     重试耗尽仍失败时静默跳过——记忆抽取是锦上添花，绝不能打挂主对话。
     """
     if ctx.memory_service is None:
@@ -410,7 +428,10 @@ async def extract_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
         model = await asyncio.to_thread(
             ctx.llm_service.get_chat_model,
             state["user_id"], temperature=state.get("temperature"))
-        system = SystemMessage(content=EXTRACT_PROMPT)
+        existing = await asyncio.to_thread(
+            ctx.memory_service.get_all, state["user_id"])   # 全层级：去重不分 core/short
+        system = SystemMessage(
+            content=EXTRACT_PROMPT + _existing_memory_block(existing))
         resp = await model.ainvoke([system] + state["messages"][-4:])   # 只看最近几轮
         memories = _parse_memories(str(resp.content or ""))
     except Exception as e:

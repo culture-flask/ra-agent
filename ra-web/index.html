@@ -4919,6 +4919,39 @@ async function bsLoadHistory() {
   if (cur) sel.value = cur;
 }
 
+/* 回放：把「执行轨迹档案」里的思考过程与工具调用填回气泡（与实时渲染同构）。
+   实时是流式累积 + 工具 chip 动态增删；这里整体填充，工具同时进右侧记录。 */
+function bsFillTrace(item, tr) {
+  if (!item || !tr) return;
+  if (tr.reasoning) {
+    item.reasonWrap.hidden = false;
+    item.reasonEl.textContent = tr.reasoning;
+    const sum = $("summary", item.reasonWrap);
+    if (sum) sum.textContent = `思考过程（${tr.reasoning.length} 字）`;
+  }
+  const meta = bsAgentMeta(item.agent);
+  (tr.tools || []).forEach(t => {
+    const showArgs = () => openModal(
+      `<div class="section-t">工具调用 · ${esc(t.name)}</div>
+       <pre class="mono" style="white-space:pre-wrap;font-size:12px">${esc(JSON.stringify(t.args || {}, null, 2))}</pre>`);
+    const chip = document.createElement("span");
+    chip.className = "bs-tool" + (t.ok === false ? " fail" : "");
+    chip.textContent = t.name;
+    chip.title = "点击查看参数";
+    chip.onclick = showArgs;
+    item.toolsEl.appendChild(chip);
+    state.bs.tools.push({ agent: item.agent, name: t.name, args: t.args });
+    const log = document.createElement("div");
+    log.className = "bs-tool" + (t.ok === false ? " fail" : "");
+    log.style.cursor = "default";
+    log.textContent = `${meta.name} · ${t.name}`;
+    log.onclick = showArgs;
+    $("#bs-toollog").prepend(log);
+  });
+  const n = (state.bs.tools || []).length;
+  $("#bs-tool-count").textContent = n ? "· " + n + " 次" : "";
+}
+
 async function bsReplay(sid) {
   if (state.bs.running) return toast("当前正在运行一场头脑风暴", "err");
   const isSem = state.bs.team === "seminar";
@@ -4951,6 +4984,11 @@ async function bsReplay(sid) {
             { done: "已完成", stopped: "用户中途停止（汇编稿）", failed: "异常结束" }[d.status] || d.status}`,
             d.status === "running" ? "" : "ok");
 
+  // 执行轨迹档案（data/agent_traces/<sid>.json）：思考过程 + 工具调用。
+  // 这两类内容只走实时事件，刷新后按发言顺序从档案补回各个气泡。
+  const traceQ = {};
+  (d.traces || []).forEach(t =>
+    (traceQ[t.agent] = traceQ[t.agent] || []).push(t));
   // 立场书 → 调研气泡（回放态，不再流式）
   const put = (agent, phase, turn, text, failed, model) => {
     bsHandleEvent({ type: "bs_agent_start", agent, phase, turn,
@@ -4961,6 +4999,7 @@ async function bsReplay(sid) {
     item.bodyEl.innerHTML = md(text || "");
     if (failed) item.bodyEl.innerHTML =
       '<span style="color:var(--danger)">（调研失败，本角色缺席）</span>';
+    bsFillTrace(item, (traceQ[agent] || []).shift());   // 补回思考与工具调用
     delete state.bs.live[agent];
   };
   (d.positions || []).forEach(p =>

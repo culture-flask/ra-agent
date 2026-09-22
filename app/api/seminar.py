@@ -32,6 +32,7 @@ from app.graph.seminar import (SCHOLAR_IDS, _cards_digest, _insight_digest,
                                make_rapporteur_node)
 from app.graph.workflow import aget_state_retry
 from app.models import BrainstormSession, KnowledgeBase, User, utcnow
+from app.services import agent_trace
 
 logger = get_logger("seminar")
 
@@ -204,6 +205,7 @@ async def seminar_stream(req: SeminarRequest, request: Request,
                 await graph.adelete_thread(req.session_id)
             except Exception:
                 pass
+            agent_trace.delete(req.session_id)      # 重跑：旧轨迹档案一并清掉
             roles = _resolve_roles(req.roles, settings)
             await run_in_threadpool(_register_session, uid, req, roles)
             result = await graph.ainvoke(
@@ -228,9 +230,11 @@ async def seminar_stream(req: SeminarRequest, request: Request,
 
     async def event_gen():
         task = asyncio.create_task(run_graph())
+        rec = agent_trace.new_recorder()         # 执行轨迹留档：思考过程 + 工具调用
         try:
             while True:
                 ev = await sink.get()
+                agent_trace.record(rec, ev)      # 刷新后回放：思考/工具调用可重放
                 t = ev.get("type")
                 if t == "__done__":
                     break
@@ -240,6 +244,7 @@ async def seminar_stream(req: SeminarRequest, request: Request,
                 yield _sse(ev)
             yield _sse({"type": "done"})
         finally:
+            agent_trace.save(req.session_id, rec)   # 正常结束/客户端断开都落盘
             if not task.done():
                 task.cancel()
 
@@ -293,6 +298,7 @@ async def session_detail(session_id: str, request: Request,
     values = (snap.values or {}) if snap else {}
     return {
         "session_id": session_id, "topic": row.topic, "status": row.status,
+        "traces": await run_in_threadpool(agent_trace.load, session_id),
         "roles": row.roles, "stats": row.stats,
         "reading_notes": values.get("reading_notes", []),
         "qa_transcript": values.get("qa_transcript", []),
