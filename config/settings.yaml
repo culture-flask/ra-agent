@@ -47,6 +47,15 @@ retrieval:
   parent_groups: 5      # 聚合返回：展开的父块数（0=关闭，全返回小 chunk；前端可调）
   parent_group_size: 5  # 每个父块聚合的相邻 chunk 数
   parent_max_chars: 8000  # 单个父块拼接文本上限（字符）
+  rerank:               # 交叉编码器精排：对召回候选重排，提升最终排名质量（Cohere 兼容 /v1/rerank）
+    enabled: False
+    base_url: http://100.85.4.71:11437/v1
+    model: bge-reranker-v2-m3
+    candidates: 20      # 送入重排的候选数（应 >= 输出 k；越大越准也越慢）
+    timeout: 30         # 单次重排请求超时（秒）
+    max_input_tokens: 512  # 单条输入(query+候选) token 上限：本端点 512，超限直接 500
+                           # （客户端按此留 20% 余量裁剪候选正文，并在超限时自动收缩重试；
+                           #   若把服务端 physical batch size 调大，可同步调大此值以少裁剪）
 
 embedding:
   default_provider: llama

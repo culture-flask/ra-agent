@@ -44,6 +44,13 @@ def test_split_attachments():
     assert q == "总结一下" and names == ["a.pdf"]
     q2, names2 = _split_attachments("普通消息")       # 无标记的老消息原样返回
     assert q2 == "普通消息" and names2 == []
+    # 检索块（«检索结果» 标记）追加在末尾：回放时剔除，附件名照常还原
+    from app.graph.nodes import _RET_MARK
+    text3 = "总结一下" + _ATT_MARK + "[附件：a.pdf]\n正文内容" + _RET_MARK + "【知识库检索结果】…"
+    q3, names3 = _split_attachments(text3)
+    assert q3 == "总结一下" and names3 == ["a.pdf"]
+    q4, names4 = _split_attachments("只有问题" + _RET_MARK + "【知识库检索结果】…")
+    assert q4 == "只有问题" and names4 == []
 
 
 def test_register_and_list(auth_factory):

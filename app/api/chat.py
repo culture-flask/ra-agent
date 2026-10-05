@@ -30,12 +30,27 @@ router = APIRouter(prefix="/api/v1", tags=["chat"],
                    dependencies=[Depends(get_current_user)])
 
 
+class ForkFrom(BaseModel):
+    """分支来源：把源会话 checkpoint 里"分支点及之前"的消息复制到本会话。
+
+    定位用"用户消息条数"锚定（而非前端列表下标）：前端本地列表可能多出
+    报错提示等未同步条目，而用户消息计数在前后端始终一一对应。
+    """
+
+    session_id: str
+    user_count: int = Field(ge=1)          # 分支点及之前的用户消息条数
+    include_last_reply: bool = False       # 分支点在助手回复上：带出该轮非用户消息
+
+
 class ChatRequest(BaseModel):
     # 归属用户取自 Bearer token，请求体不再携带 user_id
     session_id: str = "s1"
     message: str = Field(min_length=1)
-    # 分支会话：新 thread 的初始历史（选中消息及之前），由前端随首次请求传入
+    # 分支会话：服务端从源会话 checkpoint 复制的纯文本兜底（复制不可用时）
     history: list[dict] = Field(default_factory=list)
+    # 分支会话：服务端从 fork_from.session_id 的 checkpoint 复制完整历史
+    # （含附件全文），优先于 history；仅新 thread 首轮生效
+    fork_from: ForkFrom | None = None
     # 重新生成：先回退 checkpoint 里最后一条回复，再基于最后一条用户消息重生成
     rewind: bool = False
     # 检索模式：vector（纯向量）| hybrid（向量+BM25）；None = 全局默认
@@ -54,17 +69,23 @@ class ChatRequest(BaseModel):
 
 
 def _initial_state(req: ChatRequest, user_id: str,
-                   append_message: bool = True) -> dict:
+                   append_message: bool = True,
+                   base_messages: list | None = None) -> dict:
     """组装图初始状态。
 
     - user_id 来自鉴权依赖（token 注入），非客户端可指定
-    - history：分支会话首次请求携带的历史（dict → LangChain 兼容消息格式）
+    - base_messages：服务端从源会话 checkpoint 复制的完整历史（分支首请求），
+      优先于纯文本 history；[] 表示本会话已有状态、不注入任何历史
+    - history：分支会话复制不可用时的纯文本兜底（选中消息及之前）
     - attachments：附件全文拼进本轮用户消息（进 checkpoint，后续追问 LLM 仍可引用）
     - append_message=False（rewind 场景）：不追加用户消息——checkpoint 里
       已回退到最后一条用户消息，直接以其为起点重新生成
     """
-    messages = [{"role": m.get("role", "user"), "content": m.get("content", "")}
-                for m in req.history]
+    if base_messages is not None:
+        messages = list(base_messages)
+    else:
+        messages = [{"role": m.get("role", "user"), "content": m.get("content", "")}
+                    for m in req.history]
     message = req.message
     if append_message and req.attachments:
         blocks = []
@@ -235,6 +256,50 @@ async def _rewind_to_last_user(graph, config: dict) -> bool:
     return True
 
 
+async def _copy_fork_messages(graph, req: ChatRequest, uid: str) -> list | None:
+    """分支：从源会话 checkpoint 复制"分支点及之前"的完整消息。
+
+    比前端 history（纯文本）更完整——附件全文（_ATT_MARK 块）、工具消息等
+    原样保留；返回 None 时调用方回退纯文本 history（源会话未登记/不属于
+    当前用户/定位失败），既不泄漏他人会话也不阻断对话。
+    """
+    fork = req.fork_from
+    with SessionLocal() as db:               # 属主校验（未登记=没有 checkpoint 可复制）
+        row = db.get(Conversation, fork.session_id)
+    if row is None or row.user_id != uid:
+        return None
+    snap = await graph.aget_state(
+        {"configurable": {"thread_id": fork.session_id}})
+    msgs = list((snap.values or {}).get("messages", [])) if snap else []
+    humans = [i for i, m in enumerate(msgs)
+              if getattr(m, "type", "") == "human"]
+    if len(humans) < fork.user_count:
+        return None                          # 源会话与服务端不一致（如发送失败）
+    end = humans[fork.user_count - 1]
+    if fork.include_last_reply:              # 分支点在助手回复上：带出该轮非用户消息
+        j = end + 1
+        while j < len(msgs) and getattr(msgs[j], "type", "") != "human":
+            j += 1
+        end = j - 1
+    return msgs[:end + 1]
+
+
+async def _prepare_initial_state(graph, req: ChatRequest, uid: str,
+                                 config: dict) -> dict:
+    """组装初始状态：分支首请求优先从源会话 checkpoint 复制完整历史。
+
+    本会话（thread）已有消息说明是重复/重试请求——直接续用已有状态，
+    不注入任何历史，防止消息与 checkpoint 里的副本叠加。
+    """
+    if req.fork_from is None:
+        return _initial_state(req, uid)
+    snap = await graph.aget_state(config)
+    if (snap.values or {}).get("messages"):
+        return _initial_state(req, uid, base_messages=[])
+    return _initial_state(req, uid,
+                          base_messages=await _copy_fork_messages(graph, req, uid))
+
+
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
@@ -300,7 +365,7 @@ async def chat(req: ChatRequest, request: Request,
         # 无 checkpoint 历史（新 thread）时无法回退 → 按普通提问追加消息
         initial = _initial_state(req, uid, append_message=not rewound)
     else:
-        initial = _initial_state(req, uid)
+        initial = await _prepare_initial_state(graph, req, uid, config)
     result = await graph.ainvoke(initial, config=config)
     # 登记/刷新会话（跨设备同步会话列表）
     try:
@@ -344,7 +409,7 @@ async def chat_stream(req: ChatRequest, request: Request,
                 # 无 checkpoint 历史（新 thread）时无法回退 → 按普通提问追加消息
                 initial = _initial_state(req, uid, append_message=not rewound)
             else:
-                initial = _initial_state(req, uid)
+                initial = await _prepare_initial_state(graph, req, uid, config)
             result = await graph.ainvoke(initial, config=config)
             # 登记/刷新会话（跨设备同步会话列表；失败不影响对话）
             try:

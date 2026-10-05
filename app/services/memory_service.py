@@ -10,7 +10,7 @@ memories 表（user_id/key/value/tier/topic/last_used_at/updated_at）。
 import threading
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.core.db import SessionLocal
 from app.core.logging import get_logger
@@ -65,6 +65,36 @@ class MemoryService:
                 {"key": m.key, "value": m.value, "tier": m.tier, "topic": m.topic,
                  "updated_at": m.updated_at.isoformat() if m.updated_at else None,
                  "last_used_at": m.last_used_at.isoformat() if m.last_used_at else None}
+                for m in db.scalars(stmt)
+            ]
+
+    def search(self, user_id: str, query: str = "", tier: str | None = None,
+               since: datetime | None = None, limit: int = 10) -> list[dict]:
+        """关键词检索：key / topic / 值三路模糊匹配，按 updated_at 倒序取前 limit 条。
+
+        通用原语——"查哪层、多新、几条"由调用方决定（如 search_memories 工具
+        限定 short 只取最近 7 天）。query 为空则退化为"最近更新的一批"。
+        """
+        q = query.strip()
+        with SessionLocal() as db:
+            stmt = select(Memory).where(Memory.user_id == user_id)
+            if tier:
+                stmt = stmt.where(Memory.tier == tier)
+            if since:
+                stmt = stmt.where(Memory.updated_at >= since)
+            if q:
+                escaped = q.replace("%", "\\%").replace("_", "\\_")   # 通配符转义
+                like = f"%{escaped}%"
+                stmt = stmt.where(or_(
+                    Memory.key.ilike(like, escape="\\"),
+                    Memory.topic.ilike(like, escape="\\"),
+                    # 用 ->> 取 JSON 正文：JSON 列实际以 \uXXXX 转义存储，
+                    # 直接 cast 成 text 匹配不到中文，->> 会先解码
+                    Memory.value.op("->>")("v").ilike(like, escape="\\")))
+            stmt = stmt.order_by(Memory.updated_at.desc()).limit(limit)
+            return [
+                {"key": m.key, "value": m.value, "tier": m.tier, "topic": m.topic,
+                 "updated_at": m.updated_at.isoformat() if m.updated_at else None}
                 for m in db.scalars(stmt)
             ]
 

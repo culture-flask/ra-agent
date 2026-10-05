@@ -221,7 +221,7 @@ class LLMService:
         with SessionLocal() as db:
             row = db.scalar(select(UserLLMConfig).where(
                 UserLLMConfig.user_id == user_id,
-                UserLLMConfig.is_default == True))          # noqa: E712
+                UserLLMConfig.is_default == True))
             if row is None:
                 row = db.scalar(select(UserLLMConfig).where(
                     UserLLMConfig.user_id == user_id)
@@ -238,7 +238,7 @@ class LLMService:
         """构建用户生效模型；temperature 非 None 时覆盖（按轮次可调，0 也有效）。"""
         cfg = self.get_user_config(user_id) or self._system
         if temperature is not None:
-            temperature = max(-2.0, min(2.0, float(temperature)))   # 范围约束 -2~2
+            temperature = max(0, min(2.0, float(temperature)))   # 范围约束 0~2.0
             cfg = replace(cfg, temperature=temperature)
         model = LLMFactory.build(cfg)
         return RetryableChatModel(model, max_retries=self._retry_max,

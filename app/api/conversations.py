@@ -20,6 +20,7 @@ from app.api.chat import _ATT_MARK
 from app.core.db import SessionLocal
 from app.core.deps import get_current_user
 from app.core.logging import get_logger
+from app.graph.nodes import _RET_MARK
 from app.models import Conversation, User
 
 logger = get_logger("conversations")
@@ -37,9 +38,13 @@ def _get_row(session_id: str) -> Conversation | None:
 def _split_attachments(content) -> tuple[str, list[str]]:
     """拆出问题正文与附件名列表（历史还原为前端 chips 用）。
 
-    _initial_state 把附件拼成「问题 + 标记 + 附件块」；无标记的老消息原样返回。
+    _initial_state 把附件拼成「问题 + 标记 + 附件块」，retrieve 节点把检索块
+    （«检索结果» 标记）追加在整条消息末尾——回放时一并剔除检索块；
+    无标记的老消息原样返回。
     """
     text = content if isinstance(content, str) else str(content or "")
+    if _RET_MARK in text:                     # 检索块在末尾：先截掉再拆附件
+        text = text.split(_RET_MARK)[0].rstrip()
     if _ATT_MARK not in text:
         return text, []
     question, _, block = text.partition(_ATT_MARK)

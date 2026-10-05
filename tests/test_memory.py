@@ -165,3 +165,78 @@ def test_memory_api(auth_factory):
         r = c.get("/api/v1/memories", headers=auth_factory("u1"))
         assert r.status_code == 200
         assert isinstance(r.json(), list)
+
+
+def test_strip_user_blocks_and_memory_view():
+    """方案 A：抽取输入剥离检索块与附件块，只留用户真实表述；
+    工具往返与空内容消息跳过。"""
+    from langchain_core.messages import ToolMessage
+
+    from app.api.chat import _ATT_MARK
+    from app.graph.nodes import _RET_MARK, _memory_view
+
+    msgs = [
+        HumanMessage(content="帮我总结" + _ATT_MARK + "[附件：a.pdf]\n附件正文ABC"),
+        AIMessage(content="好的，总结如下"),
+        HumanMessage(content="再看这个"
+                     + _ATT_MARK + "[附件：b.pdf]\n附件正文XYZ"
+                     + _RET_MARK + "【知识库检索结果】资料正文"),
+        AIMessage(content=""),                       # 纯工具调用轮：空内容跳过
+        ToolMessage(content='{"ok":1}', tool_call_id="c1"),
+    ]
+    view = _memory_view(msgs)
+    assert [m.type for m in view] == ["human", "ai", "human"]
+    texts = [str(m.content) for m in view]
+    assert texts[0] == "帮我总结"
+    assert texts[2] == "再看这个"
+    joined = " ".join(texts)
+    assert "附件正文" not in joined and "资料正文" not in joined
+
+
+def test_extract_skips_llm_when_only_resource_blocks():
+    """最近几条剥离后为空（只剩资料块）：不调 LLM，直接返回空结果。"""
+    from app.api.chat import _ATT_MARK
+
+    class _Boom:
+        def get_chat_model(self, user_id, temperature=None):
+            raise AssertionError("不应调用 LLM")
+
+    ctx, _ms = _make_ctx([])
+    ctx.llm_service = _Boom()
+    state = {"user_id": "u1", "temperature": None, "messages": [
+        HumanMessage(content="问题" + _ATT_MARK + "[附件：a.pdf]\n正文"),
+    ]}
+    assert _run(extract_memory_node(ctx, state)) == {"new_memories": []}
+
+
+def test_extract_llm_receives_stripped_messages():
+    """端到端：extract_memory_node 传给 LLM 的消息已剥离附件/检索块。"""
+    from app.api.chat import _ATT_MARK
+    from app.graph.nodes import _RET_MARK
+
+    seen = {}
+
+    class _Recorder:
+        def bind_tools(self, schemas):
+            return self
+
+        async def ainvoke(self, messages, **kwargs):
+            seen["messages"] = messages
+            return AIMessage(content='{"memories":[]}')
+
+    class _Svc:
+        def get_chat_model(self, user_id, temperature=None):
+            return _Recorder()
+
+    ctx, _ms = _make_ctx([])
+    ctx.llm_service = _Svc()
+    state = {"user_id": "u1", "temperature": None, "messages": [
+        HumanMessage(content="问题" + _ATT_MARK + "[附件：a.pdf]\n附件正文"
+                     + _RET_MARK + "【知识库检索结果】资料正文"),
+        AIMessage(content="回答"),
+    ]}
+    assert _run(extract_memory_node(ctx, state)) == {"new_memories": []}
+    body = " ".join(str(m.content) for m in seen["messages"][1:])
+    assert "问题" in body and "回答" in body
+    assert "附件正文" not in body and "资料正文" not in body
+    assert _ATT_MARK not in body and _RET_MARK not in body

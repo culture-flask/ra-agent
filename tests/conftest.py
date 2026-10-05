@@ -58,6 +58,8 @@ os.environ["DATABASE_URL"] = "postgresql+psycopg://ra:ra@localhost:5432/ra_agent
 os.environ["EMBEDDING_DEFAULT_PROVIDER"] = "local"
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="ra-test-data-")
 os.environ["CHROMA_DIR"] = tempfile.mkdtemp(prefix="ra-test-chroma-")
+# 重排默认走远端端点（config/settings.yaml），测试必须离线确定性 → 关闭
+os.environ["RETRIEVAL_RERANK_ENABLED"] = "false"
 
 import pytest
 from sqlalchemy import text
@@ -112,6 +114,8 @@ def clean_db():
     """
     with engine.begin() as conn:          # 事务：DELETE 执行后自动提交
         conn.execute(text("DELETE FROM llm_usage"))
+        # 追踪表：不清会让 tracer.list 混入历次运行的残留 → 工具链测试断言错乱
+        conn.execute(text("DELETE FROM tool_call_log"))
         conn.execute(text("DELETE FROM feedbacks"))
         conn.execute(text("DELETE FROM brainstorm_sessions"))
         conn.execute(text("DELETE FROM user_llm_config"))

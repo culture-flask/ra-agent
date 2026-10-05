@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     retrieval_parent_groups: int = 3        # 聚合返回：展开的父块数（0=关闭，全返回小 chunk）
     retrieval_parent_group_size: int = 3    # 每个父块聚合的相邻 chunk 数
     retrieval_parent_max_chars: int = 4000  # 单个父块拼接文本上限（字符）
+    # 交叉编码器重排（rerank）：对召回候选精排，提升最终排名质量
+    retrieval_rerank_enabled: bool = False
+    retrieval_rerank_base_url: str = ""      # API 根地址（如 http://host:port/v1，自动拼 /rerank）
+    retrieval_rerank_model: str = "bge-reranker-v2-m3"
+    retrieval_rerank_api_key: str = ""
+    retrieval_rerank_candidates: int = 20   # 送入重排的候选数（应 >= 输出 k；越大越准也越慢）
+    retrieval_rerank_timeout: float = 30.0  # 单次重排请求超时（秒）
+    retrieval_rerank_max_input_tokens: int = 512  # 部署的单条输入(query+候选) token 上限（本端点 512，超限返回 500）
     embedding_default_provider: str = "doubao"
     embedding_default_model: str = "doubao-embedding-vision"
     embedding_cloud: dict = Field(default_factory=dict)
@@ -123,6 +131,13 @@ class Settings(BaseSettings):
                 "retrieval_parent_groups": raw.get("retrieval", {}).get("parent_groups", 3),
                 "retrieval_parent_group_size": raw.get("retrieval", {}).get("parent_group_size", 3),
                 "retrieval_parent_max_chars": raw.get("retrieval", {}).get("parent_max_chars", 4000),
+                "retrieval_rerank_enabled": raw.get("retrieval", {}).get("rerank", {}).get("enabled", False),
+                "retrieval_rerank_base_url": raw.get("retrieval", {}).get("rerank", {}).get("base_url", ""),
+                "retrieval_rerank_model": raw.get("retrieval", {}).get("rerank", {}).get("model", "bge-reranker-v2-m3"),
+                "retrieval_rerank_api_key": raw.get("retrieval", {}).get("rerank", {}).get("api_key", ""),
+                "retrieval_rerank_candidates": raw.get("retrieval", {}).get("rerank", {}).get("candidates", 20),
+                "retrieval_rerank_timeout": raw.get("retrieval", {}).get("rerank", {}).get("timeout", 30.0),
+                "retrieval_rerank_max_input_tokens": raw.get("retrieval", {}).get("rerank", {}).get("max_input_tokens", 512),
                 "embedding_default_provider": raw["embedding"]["default_provider"],
                 "embedding_default_model": raw["embedding"]["default_model"],
                 "embedding_cloud": raw["embedding"]["cloud"],

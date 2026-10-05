@@ -439,6 +439,175 @@ def test_rewind_on_empty_thread_returns_false():
     cfg = {"configurable": {"thread_id": "brand-new-thread"}}
     assert _run(_rewind_to_last_user(graph, cfg)) is False
 
+
+def test_fork_copies_full_history_from_checkpoint():
+    """分支：服务端从源会话 checkpoint 复制到分支点的完整消息——附件全文
+    随复制保留（前端纯文本 history 会丢）；user_count 锚定分支点，越界/他人
+    会话返回 None；目标会话已有状态时不注入任何历史（防重复叠加）。"""
+    from app.api.chat import (_ATT_MARK, ChatRequest, ForkFrom,
+                              _copy_fork_messages, _initial_state,
+                              _prepare_initial_state, _register_conversation)
+    from app.models import Conversation
+    ctx, _ = _make_ctx("源回答", '{"needs_retrieval": false, "kbs": []}')
+    graph = _run(build_graph(ctx))
+    src = "fork-src-1"
+    src_cfg = {"configurable": {"thread_id": src}}
+    # 源会话两轮：第一轮带附件（附件全文只存在于服务端 checkpoint）
+    _run(graph.ainvoke({"user_id": "fk-u1", "session_id": src, "query": "第一问",
+                        "messages": [HumanMessage(
+                            content="第一问" + _ATT_MARK + "[附件：note.txt]\n附件正文XYZ")]},
+                       config=src_cfg))
+    _run(graph.ainvoke({"user_id": "fk-u1", "session_id": src, "query": "第二问",
+                        "messages": [HumanMessage(content="第二问")]},
+                       config=src_cfg))
+    _register_conversation("fk-u1", src, "第一问")
+    try:
+        # 分支点在第二条用户消息（含其回复）→ 复制全部 4 条，附件全文在
+        req = ChatRequest(session_id="fork-dst-1", message="追问",
+                          fork_from=ForkFrom(session_id=src, user_count=2,
+                                             include_last_reply=True))
+        base = _run(_copy_fork_messages(graph, req, "fk-u1"))
+        assert [getattr(m, "type", "") for m in base] == ["human", "ai", "human", "ai"]
+        assert "附件正文XYZ" in base[0].content           # 完整版（history 兜底没有）
+        # 分支点在第一条用户消息（不含回复）→ 只复制到该条
+        req1 = ChatRequest(session_id="fork-dst-2", message="追问",
+                           fork_from=ForkFrom(session_id=src, user_count=1))
+        assert len(_run(_copy_fork_messages(graph, req1, "fk-u1"))) == 1
+        # 越界（前端与服务端不一致）/ 他人会话 → None（回退 history，不泄漏）
+        req99 = ChatRequest(session_id="fork-dst-3", message="追问",
+                            fork_from=ForkFrom(session_id=src, user_count=99))
+        assert _run(_copy_fork_messages(graph, req99, "fk-u1")) is None
+        assert _run(_copy_fork_messages(graph, req1, "fk-u2")) is None
+        # 初始状态：复制消息（含 id 的原对象）在前，本轮提问追加在末尾
+        state = _initial_state(req, "fk-u1", base_messages=base)
+        assert len(state["messages"]) == 5
+        assert state["messages"][0].id == base[0].id
+        assert "附件正文XYZ" in state["messages"][0].content
+        assert state["messages"][-1]["content"] == "追问"
+        # 复制不可用（源会话未登记）→ 回退纯文本 history
+        req_h = ChatRequest(session_id="fork-dst-4", message="追问",
+                            history=[{"role": "user", "content": "旧问"},
+                                     {"role": "assistant", "content": "旧答"}],
+                            fork_from=ForkFrom(session_id="ghost-src", user_count=1))
+        st2 = _run(_prepare_initial_state(graph, req_h, "fk-u1",
+                                          {"configurable": {"thread_id": "fork-dst-4"}}))
+        assert [m["content"] for m in st2["messages"]] == ["旧问", "旧答", "追问"]
+        # 目标会话已有 checkpoint（重复/重试请求）→ 不注入任何历史，直接续用
+        st3 = _run(_prepare_initial_state(
+            graph, req_h, "fk-u1", src_cfg))
+        assert [m["content"] for m in st3["messages"]] == ["追问"]
+    finally:
+        with SessionLocal() as db:
+            row = db.get(Conversation, src)
+            if row is not None:
+                db.delete(row)
+                db.commit()
+        try:
+            _run(graph.adelete_thread(src))
+        except Exception:
+            pass
+
+
+def test_fork_stream_endpoint_copies_from_checkpoint(auth_factory, monkeypatch):
+    """端到端：/chat/stream 带 fork_from → 新会话从源会话 checkpoint 复制
+    （附件全文随迁），SSE 正常收尾。"""
+    from fastapi.testclient import TestClient
+
+    from app.api.chat import _ATT_MARK, _register_conversation
+    from app.main import app
+    from app.models import Conversation
+
+    class FakeResp:                          # 屏蔽真实 /models 探测（同 test_compact）
+        status_code = 200
+
+        def json(self):
+            return {"data": []}
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr("app.abstractions.llm.httpx.get",
+                        lambda url, headers=None, timeout=None: FakeResp())
+    monkeypatch.setattr("app.api.chat._spawn_memory_pipeline",  # 记忆后台任务不参与本测试
+                        lambda *a, **k: None)
+
+    ctx, _ = _make_ctx("分支端到端回答", '{"needs_retrieval": false, "kbs": []}')
+    graph = _run(build_graph(ctx))
+    src, dst = "fork-ep-src", "fork-ep-dst"
+    _run(graph.ainvoke({"user_id": "fep-u1", "session_id": src, "query": "第一问",
+                        "messages": [HumanMessage(
+                            content="第一问" + _ATT_MARK + "[附件：note.txt]\n附件正文XYZ")]},
+                       config={"configurable": {"thread_id": src}}))
+    _register_conversation("fep-u1", src, "第一问")
+    try:
+        with TestClient(app) as c:
+            app.state.graph = graph                # 换成假 LLM 图（同一 checkpointer）
+            r = c.post("/api/v1/chat/stream", headers=auth_factory("fep-u1"),
+                       json={"session_id": dst, "message": "追问",
+                             "fork_from": {"session_id": src, "user_count": 1,
+                                           "include_last_reply": True}})
+            assert r.status_code == 200
+            assert '"type": "done"' in r.text      # SSE 正常收尾
+            assert "分支端到端回答" in r.text       # 新回答已流出
+        snap = _run(graph.aget_state({"configurable": {"thread_id": dst}}))
+        msgs = list(snap.values["messages"])
+        assert [getattr(m, "type", "") for m in msgs] == ["human", "ai", "human", "ai"]
+        assert msgs[0].content.startswith("第一问")
+        assert "附件正文XYZ" in msgs[0].content     # 复制带出附件全文
+        assert msgs[2].content == "追问"            # 本轮提问
+        assert msgs[3].content == "分支端到端回答"   # 新回答
+    finally:
+        with SessionLocal() as db:
+            for sid in (src, dst):
+                row = db.get(Conversation, sid)
+                if row is not None:
+                    db.delete(row)
+            db.commit()
+        for sid in (src, dst):
+            try:
+                _run(graph.adelete_thread(sid))
+            except Exception:
+                pass
+
+
+def test_retrieval_block_persists_in_user_message():
+    """检索块持久化：并入最后一条用户消息（同 id 替换，不新增消息）——
+    跨轮仍带资料、重新生成重跑检索幂等不累积；历史回放接口会拆掉检索块。"""
+    from app.api.chat import ChatRequest, _initial_state, _rewind_to_last_user
+    from app.api.conversations import _split_attachments
+    from app.graph.nodes import _RET_MARK
+
+    ctx, kb_service = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "测试库", "scope": "public"}]}')
+    kb_service.create_kb("测试库", "public", "u1", ["量子比特可以处于叠加态"])
+    graph = _run(build_graph(ctx))
+    sid = "ret-persist-1"
+    cfg = {"configurable": {"thread_id": sid}}
+    r1 = _run(graph.ainvoke({"user_id": "u1", "session_id": sid,
+                             "query": "叠加态是什么",
+                             "messages": [HumanMessage(content="叠加态是什么")]},
+                            config=cfg))
+    msgs = list(r1["messages"])
+    assert [getattr(m, "type", "") for m in msgs] == ["human", "ai"]   # 原地改写不新增
+    assert msgs[0].content.startswith("叠加态是什么")
+    assert _RET_MARK in msgs[0].content and "量子比特" in msgs[0].content
+    # 历史回放：拆掉检索块后还原为纯问题
+    q, names = _split_attachments(msgs[0].content)
+    assert q == "叠加态是什么" and names == []
+    # 跨轮：第一轮检索块仍在历史中且不重复累积
+    r2 = _run(graph.ainvoke({"user_id": "u1", "session_id": sid,
+                             "query": "继续问",
+                             "messages": [HumanMessage(content="继续问")]},
+                            config=cfg))
+    assert list(r2["messages"])[0].content.count(_RET_MARK) == 1
+    # 重新生成：回退后重跑（会重跑检索）→ 检索块仍只一份（patch 先剥离再追加）
+    assert _run(_rewind_to_last_user(graph, cfg)) is True
+    req = ChatRequest(session_id=sid, message="继续问")
+    r3 = _run(graph.ainvoke(_initial_state(req, "u1", append_message=False),
+                            config=cfg))
+    user_msgs = [m for m in r3["messages"] if getattr(m, "type", "") == "human"]
+    assert user_msgs[-1].content.count(_RET_MARK) == 1
+
 def test_supervisor_excludes_archive_kbs():
     """普通对话的检索目录排除多 agent 自动沉淀库（头脑风暴成果/会讲纪要）：
     路由提示词不含沉淀库、检索不命中；沉淀库仍服务多 agent 团队（飞轮保留）。"""

@@ -155,11 +155,14 @@ async def lifespan(app: FastAPI):
     # --- MCP 工具框架 + 调用追踪 ---
     tracer = Tracer()
     mcp_host = MCPHost(settings.mcp_servers, base_dir=BASE_DIR)
-    mcp_adapter = MCPToolAdapter(mcp_host, tracer, kb_service=kb_service)
+    # 记忆服务先建：原生工具 search_memories 需要它（与 ctx 共用同一实例，
+    # 保证 MemoryService 内部的用户级锁仍然共享）
+    memory_service = MemoryService()
+    mcp_adapter = MCPToolAdapter(mcp_host, tracer, kb_service=kb_service,
+                                 memory_service=memory_service)
     await mcp_adapter.ensure_catalog()         # 启动时 tools/list 动态发现
     logger.info("发现 %d 个 MCP 工具", len(mcp_host.tools or []))
 
-    memory_service = MemoryService()
     ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer, memory_service)
     app.state.workflow_ctx = ctx                  # API 层后台记忆管线复用同一编排上下文
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver

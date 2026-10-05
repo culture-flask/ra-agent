@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from app.abstractions.bm25 import Bm25Index, rrf_fuse
 from app.abstractions.embedding import EmbeddingFactory, EmbeddingMeta
+from app.abstractions.rerank import Reranker, RerankMeta
 from app.abstractions.vectorstore import ChunkRecord, VectorStoreFactory
 from app.core.cancel import OperationCancelled, _check_cancel, acknowledge_cancel
 from app.core.crypto import SecretCrypto
@@ -138,6 +139,24 @@ class KBService:
         self._chunks_cache: dict[str, list[ChunkRecord]] = {}  # kb_id -> 全量 chunk（聚合父块用）
         self._ingest_progress: dict[str, dict] = {}   # kb_id -> 最近一批入库进度（前端轮询）
         self._rebuild_progress: dict[str, dict] = {}  # new_kb_id -> 重建/复制进度（前端轮询）
+        self._reranker = self._build_reranker(settings)   # 交叉编码器重排；未启用为 None
+        self._rerank_candidates = max(
+            1, int(getattr(settings, "retrieval_rerank_candidates", 20)))
+
+    @staticmethod
+    def _build_reranker(settings) -> Reranker | None:
+        """按配置构建重排客户端；未启用或缺 API 根地址时返回 None（退回原融合排序）。"""
+        if not getattr(settings, "retrieval_rerank_enabled", False):
+            return None
+        base_url = (getattr(settings, "retrieval_rerank_base_url", "") or "").strip()
+        if not base_url:
+            return None
+        return Reranker(RerankMeta(
+            base_url=base_url,
+            model_id=getattr(settings, "retrieval_rerank_model", "bge-reranker-v2-m3"),
+            api_key=(getattr(settings, "retrieval_rerank_api_key", "") or "").strip() or None,
+            timeout=float(getattr(settings, "retrieval_rerank_timeout", 30.0)),
+            max_input_tokens=int(getattr(settings, "retrieval_rerank_max_input_tokens", 512))))
 
     # ---------- 模型解析 ----------
     def resolve_embedding_meta(self, provider: str | None = None,
@@ -771,6 +790,7 @@ class KBService:
         默认取全局配置 retrieval_mode；结果统一带 scope/kb_id/kb_name/method：
         - vector：distance（越小越近）
         - hybrid：distance（向量分）+ bm25_score（词频分）+ score（RRF 融合分，越大越好）
+        启用重排时，先取更深的候选池，再由交叉编码器精排取前 k（命中带 rerank_score）。
         """
         kb = self.get_kb(kb_id)
         mode = mode or self._settings.retrieval_mode
@@ -787,23 +807,53 @@ class KBService:
                 f"知识库「{kb.name}」({kb_id}) 向量由 dim={em.get('dim')} 嵌入，"
                 f"当前配置 dim={kb.embedding_dim}，请重新上传文档或重建后再参与检索")
 
+        # 候选池：启用重排时取更深的候选（交由交叉编码器精选出 k 条）；否则沿用原深度
+        pool = max(k, self._rerank_candidates) if self._reranker else k
         if mode == "hybrid":
-            # 每腿取 max(k, 15)：候选池略深于输出 k，避免一路深位（第 9~15 名）
+            # 每腿取 max(pool, 15)：候选池略深于输出 k，避免一路深位（第 9~15 名）
             # 的好命中在 RRF 融合时被另一路浅位挤出（26 查询网格实验最优值，
             # 见 rag_test/hparam_eval_report_v4.md）
+            depth = max(pool, 15)
             vec_hits = self._vector_store(kb).search(
-                query, k=max(k, 15), scope=kb.scope, user_id=user_id)
-            bm_hits = self._bm25_index(kb).search(query, k=max(k, 15))
+                query, k=depth, scope=kb.scope, user_id=user_id)
+            bm_hits = self._bm25_index(kb).search(query, k=depth)
             hits = rrf_fuse([self._annotate(kb, h) for h in vec_hits],
                             [self._annotate(kb, h) for h in bm_hits],
-                            top=k)
+                            top=pool)
         else:
             hits = [self._annotate(kb, h)
                     for h in self._vector_store(kb).search(
-                        query, k=k, scope=kb.scope, user_id=user_id)]
+                        query, k=pool, scope=kb.scope, user_id=user_id)]
+        reranked = False
+        if self._reranker and len(hits) > 1:
+            hits = self._rerank(query, hits, top=k)
+            # 以"命中确实带上了重排分"为准：端点降级回退时标记为未重排，避免误导
+            reranked = any(h.get("rerank_score") is not None for h in hits)
         emit("retrieve", {"kb_id": kb_id, "hits": len(hits), "scope": kb.scope,
-                          "mode": mode})
+                          "mode": mode, "rerank": reranked})
         return hits
+
+    def _rerank(self, query: str, hits: list[dict], top: int) -> list[dict]:
+        """交叉编码器精排：按 (query, chunk) 相关性分重排，取前 top。
+
+        端点不可达/超时/协议异常时只记日志并回退原融合排序——重排是增强项，
+        绝不能因它挂掉而让整库检索失败。
+        """
+        try:
+            ranked = self._reranker.rerank(
+                query, [h.get("text") or "" for h in hits], top_n=len(hits))
+        except Exception as e:
+            logger.warning("rerank failed, keep fused order: %s", e)
+            return hits[:top]
+        out: list[dict] = []
+        ranked_idx: set[int] = set()
+        for idx, score in ranked:
+            if 0 <= idx < len(hits) and idx not in ranked_idx:
+                ranked_idx.add(idx)
+                out.append({**hits[idx], "rerank_score": round(score, 6)})
+        # 端点只回部分结果时，按原融合序补足未被打分的候选
+        out.extend(h for i, h in enumerate(hits) if i not in ranked_idx)
+        return out[:top]
 
     @staticmethod
     def _annotate(kb: KnowledgeBase, h: dict) -> dict:

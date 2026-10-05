@@ -415,28 +415,59 @@ async def load_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     return {"memory": memory}
 
 
+def _strip_user_blocks(content) -> str:
+    """剥离用户消息里的检索块与附件块，只留用户真实表述。
+
+    两类块都是系统拼接的资料（_RET_MARK / _ATT_MARK 之后的内容），
+    不应参与记忆抽取——否则资料正文会被误抽成"用户信息"。
+    """
+    from app.api.chat import _ATT_MARK       # 延迟导入：避免 graph→api 模块级循环
+    text = content if isinstance(content, str) else str(content or "")
+    text = text.split(_RET_MARK)[0]          # 检索块在整条消息末尾
+    text = text.split(_ATT_MARK)[0]          # 附件块紧随问题之后
+    return text.strip()
+
+
+def _memory_view(messages: Sequence) -> list:
+    """抽取 LLM 的输入视图：剥离资料块后只留 human/ai 文本（空内容跳过）。"""
+    out = []
+    for m in messages:
+        t = getattr(m, "type", "")
+        if t not in ("human", "ai"):
+            continue                         # 工具往返等中间消息与用户信息无关
+        text = _strip_user_blocks(getattr(m, "content", ""))
+        if text:
+            out.append(HumanMessage(content=text) if t == "human"
+                       else AIMessage(content=text))
+    return out
+
+
 async def extract_memory_node(ctx: WorkflowContext, state: AgentState) -> dict:
     """对话结束后抽取值得记住的信息：交给 LLM 从对话中提炼。
 
     抽取前带上该用户已有记忆，让 LLM 认得“记过的”——同一事实不换键重记，
-    只对变化的部分沿用原 key 输出更新。
+    只对变化的部分沿用原 key 输出更新。输入剥离附件/检索块（_memory_view），
+    杜绝资料正文被误抽为用户信息。
     重试耗尽仍失败时静默跳过——记忆抽取是锦上添花，绝不能打挂主对话。
     """
     if ctx.memory_service is None:
         return {"new_memories": []}
-    try:
-        model = await asyncio.to_thread(
-            ctx.llm_service.get_chat_model,
-            state["user_id"], temperature=state.get("temperature"))
-        existing = await asyncio.to_thread(
-            ctx.memory_service.get_all, state["user_id"])   # 全层级：去重不分 core/short
-        system = SystemMessage(
-            content=EXTRACT_PROMPT + _existing_memory_block(existing))
-        resp = await model.ainvoke([system] + state["messages"][-4:])   # 只看最近几轮
-        memories = _parse_memories(str(resp.content or ""))
-    except Exception as e:
-        logger.warning("memory extract failed, skip: %s", e)
-        memories = []
+    view = _memory_view(state["messages"][-4:])      # 只看最近几轮
+    memories: list = []
+    if view:                                         # 全为资料/工具往返：跳过 LLM 调用
+        try:
+            model = await asyncio.to_thread(
+                ctx.llm_service.get_chat_model,
+                state["user_id"], temperature=state.get("temperature"))
+            existing = await asyncio.to_thread(
+                ctx.memory_service.get_all, state["user_id"])   # 全层级：去重不分 core/short
+            system = SystemMessage(
+                content=EXTRACT_PROMPT + _existing_memory_block(existing))
+            resp = await model.ainvoke([system] + view)
+            memories = _parse_memories(str(resp.content or ""))
+        except Exception as e:
+            logger.warning("memory extract failed, skip: %s", e)
+            memories = []
     emit("memory_extract", {"candidates": len(memories)})
     return {"new_memories": memories}
 
@@ -522,8 +553,8 @@ def _build_system_prompt(state: AgentState) -> str:
     """组装稳定的系统提示词前缀：固定身份 → 用户记忆（定序）→ 历史总结（低频变化）。
 
     检索结果不进 system（每轮都变，放前缀会打穿供应商侧前缀缓存），
-    改由 _retrieval_message 打包、_compose_llm_messages 插在最后一条
-    用户消息之后——system 与对话历史跨轮字节级一致，命中 KV 前缀缓存。
+    由 retrieve 节点并入最后一条用户消息（随 checkpoint 持久化）——
+    system 与对话历史跨轮字节级一致，命中 KV 前缀缓存。
     """
     parts = [_IDENTITY]
     if state.get("memory"):
@@ -535,18 +566,21 @@ def _build_system_prompt(state: AgentState) -> str:
     return "\n\n".join(parts)
 
 
-def _retrieval_message(state: AgentState) -> HumanMessage | None:
-    """把本轮检索结果打包为一条临时消息（只进发送序列，不写 checkpoint）。
+_RET_MARK = "\n<<<检索结果>>>\n"   # 用户消息内 问题/附件 与 检索块 的边界标记
 
-    角色用 HumanMessage 而非 SystemMessage：消息序列中间的 system
-    是分布外排列，会触发 thinking 模型长思考/重复循环（A/B 实测思考
-    2988 字→100 字）；user 角色是标准 RAG 形态。原生路径翻译时相邻 user
-    会合并，最终仍以"资料附在问题末尾"的单条 user 发出。
+
+def _retrieval_block(retrievals: list | None) -> str | None:
+    """把本轮检索结果打包为文本块（并入最后一条用户消息，随 checkpoint 持久化）。
+
+    - 并入用户消息而非插入独立 system/消息：序列中间的 system 属分布外
+      排列，会触发 thinking 模型长思考；user 形态是标准 RAG 拼装
+    - 块以 _RET_MARK 与用户原文分隔：历史回放时拆出展示；重新生成会重跑
+      检索，追加前先剥离旧块（幂等，不重复累积）
     """
-    if not state.get("retrievals"):
+    if not retrievals:
         return None
     lines = ["【知识库检索结果】回答本问题时优先依据以下内容，引用标明来源。"]
-    for r in state["retrievals"]:
+    for r in retrievals:
         if r.get("type") == "parent":
             # 聚合父块：完整段落，标注来源文件/页码与命中片段数
             loc = r.get("source") or "未知来源"
@@ -557,25 +591,24 @@ def _retrieval_message(state: AgentState) -> HumanMessage | None:
                 f"含{r.get('hit_chunks')}个命中片段)] {r['text']}")
         else:
             lines.append(f"[知识库检索结果 ({r.get('scope')} / {r.get('kb_name')})] {r['text']}")
-    return HumanMessage(content="\n".join(lines))
+    return "\n".join(lines)
 
 
-def _compose_llm_messages(state: AgentState, system: SystemMessage,
-                          retrieval: HumanMessage | None) -> list:
-    """发送给 LLM 的消息序列：检索块插在最后一条用户消息之后。
+def _retrieval_patch(msgs: list, block: str) -> HumanMessage | None:
+    """把检索块并入最后一条用户消息：同 id → add_messages 原地替换。
 
-    - 不拼进用户消息内容：上轮请求是本序列的严格前缀，供应商前缀缓存
-      （按 token 前缀匹配）可命中全部历史与 system
-    - 工具循环第二轮（末尾已是 AI(tool_calls)/ToolMessage）仍按
-      「最后 human 索引」插入，轮内两次请求前缀完全一致
-    - 检索块不进 messages reducer → checkpoint 不被每轮检索结果污染
+    持久化收益：后续轮次仍带本轮资料，每轮请求序列包含上一轮全部内容
+    （供应商前缀缓存命中含检索块的历史）；重新生成重跑检索时先剥离旧块
+    再追加。找不到用户消息/消息缺 id（理论不可达）→ None（跳过不影响主流程）。
     """
-    msgs = list(state["messages"])
-    if retrieval is None:
-        return [system] + msgs
-    human_idx = [i for i, m in enumerate(msgs) if getattr(m, "type", "") == "human"]
-    idx = human_idx[-1] if human_idx else len(msgs) - 1   # 无 human 时兜底置尾
-    return [system] + msgs[:idx + 1] + [retrieval] + msgs[idx + 1:]
+    last = next((m for m in reversed(msgs)
+                 if getattr(m, "type", "") == "human"), None)
+    mid = getattr(last, "id", None) if last is not None else None
+    if mid is None:
+        return None
+    content = last.content if isinstance(last.content, str) else str(last.content or "")
+    base = content.split(_RET_MARK)[0].rstrip()
+    return HumanMessage(id=mid, content=base + _RET_MARK + block)
 
 
 # 路由是简单分类任务，思考纯属浪费延迟（业内共识：提示词压不住思考模型，
@@ -814,7 +847,14 @@ async def tool_executor_node(ctx: WorkflowContext, state: AgentState) -> dict:
     return {"messages": results}
 
 def _hit_rank_key(h: dict) -> float:
-    """跨库合并排序键：hybrid 结果按 RRF 融合分（越大越好），vector 按距离（越小越好）。"""
+    """跨库合并排序键：重排分 > RRF 融合分 > 向量距离。
+
+    启用重排时命中带 rerank_score（同一交叉编码器出的相关性分，越大越好），
+    以它为准，否则跨库合并会按 RRF 分把重排结果重新打乱；未重排时沿用
+    hybrid RRF 分（越大越好）/ vector 距离（越小越好）。
+    """
+    if h.get("rerank_score") is not None:
+        return -float(h["rerank_score"])
     if h.get("score") is not None:
         return -float(h.get("score") or 0)
     return float(h.get("distance") or float("inf"))
@@ -949,20 +989,29 @@ async def retrieve_node(ctx: WorkflowContext, state: AgentState) -> dict:
         {"type": h.get("type", "chunk"), "kb_name": h.get("kb_name"),
          "scope": h.get("scope"),
          "distance": h.get("distance"), "bm25_score": h.get("bm25_score"),
-         "score": h.get("score"), "method": h.get("method"),
+         "score": h.get("score"), "rerank_score": h.get("rerank_score"),
+         "method": h.get("method"),
          "source": h.get("source") or (h.get("metadata") or {}).get("source"),
          "page": (h.get("metadata") or {}).get("page"),
          "pages": h.get("pages"), "hit_chunks": h.get("hit_chunks"),
          "text": str(h.get("text", ""))[:300]}
         for h in top]})
-    return {"retrievals": top,
-            # 第一优先：落一份跨轮检索状态给下一轮的 supervisor 用。
-            # hit_count>0 表示"上一轮检索确有命中、回答大概率基于证据"——
-            # 供"延续话题免重复检索"的规则判断。kb_names 只用于提示文案。
-            "last_retrieval_state": {
-                "kb_ids": [kb.kb_id for kb in targets],
-                "kb_names": [kb.name for kb in targets],
-                "hit_count": len(top)}}
+    out = {"retrievals": top,
+           # 第一优先：落一份跨轮检索状态给下一轮的 supervisor 用。
+           # hit_count>0 表示"上一轮检索确有命中、回答大概率基于证据"——
+           # 供"延续话题免重复检索"的规则判断。kb_names 只用于提示文案。
+           "last_retrieval_state": {
+               "kb_ids": [kb.kb_id for kb in targets],
+               "kb_names": [kb.name for kb in targets],
+               "hit_count": len(top)}}
+    # 检索块并入最后一条用户消息（随 checkpoint 持久化）：后续轮次仍带本轮
+    # 资料，每轮请求序列包含上一轮全部内容——供应商前缀缓存命中全部历史
+    block = _retrieval_block(top)
+    if block:
+        patch = _retrieval_patch(state["messages"], block)
+        if patch is not None:
+            out["messages"] = [patch]
+    return out
 
 
 # ---------- generate 原生思考流（所有端点统一原生 SDK） ----------
@@ -1052,9 +1101,9 @@ async def generate_node(ctx: WorkflowContext, state: AgentState) -> dict:
     if schemas and native_cfg is None:
         model = model.bind_tools(schemas)      # 告诉 LLM"你有这些工具可用"
     system = SystemMessage(content=_build_system_prompt(state))
-    # 检索块作为临时消息插在最后一条用户消息后（不进 checkpoint），
-    # 保证发送序列跨轮前缀稳定 → 供应商侧前缀缓存可命中历史
-    payload = _compose_llm_messages(state, system, _retrieval_message(state))
+    # 检索块已由 retrieve 节点并入最后一条用户消息（随 checkpoint 持久化），
+    # 发送序列 = system + 全部历史：跨轮请求前缀稳定、缓存命中全部历史
+    payload = [system] + list(state["messages"])
     log_id: str | None = None                     # 追踪行 id：回写 state 供工具挂父子
     if ctx.tracer is not None:
         log_id = await asyncio.to_thread(

@@ -2158,6 +2158,9 @@ function citesHTML(retrievals) {
       `<span class="muted mono">距离 ${Number(r.distance).toFixed(3)}</span>`;
     const bm = (r.bm25_score === null || r.bm25_score === undefined) ? "" :
       `<span class="muted mono">BM25 ${Number(r.bm25_score).toFixed(2)}</span>`;
+    // 重排分（交叉编码器精排后存在）：越大越相关
+    const rk = (r.rerank_score === null || r.rerank_score === undefined) ? "" :
+      `<span class="muted mono">重排 ${Number(r.rerank_score).toFixed(2)}</span>`;
     // 来源文件 + 页码（chunk 元数据）；父块显示页码范围与命中片段数
     let src = "";
     if (r.type === "parent") {
@@ -2170,7 +2173,7 @@ function citesHTML(retrievals) {
         : `<span class="muted">📄 ${esc(r.source)}</span>`;
     }
     return `<div class="cite${r.type === "parent" ? " parent" : ""}"><div class="ch">
-      <b>[${i + 1}]</b> ${scopeBadge}${methodBadge}<span>${esc(r.kb_name || "知识库")}</span>${dist}${bm}</div>
+      <b>[${i + 1}]</b> ${scopeBadge}${methodBadge}<span>${esc(r.kb_name || "知识库")}</span>${dist}${bm}${rk}</div>
       ${src}<div class="txt">${esc(r.text || "")}</div></div>`;
   }).join("");
   return `<details class="cites"><summary>引用溯源 · ${retrievals.length} 条检索结果${retrievals.some(x => x.type === "parent") ? "（含完整段落）" : ""}</summary><div class="cites-body">${items}</div></details>`;
@@ -2322,6 +2325,7 @@ async function sendMessage(text, opts = {}) {
   const msgs = getMsgs();
   const sess = state.sessions.find(s => s.id === state.active);
   const sendFiles = opts.files || [];                    // 本轮附件（已解析成功的）
+  let sentForkInit = false;                              // 本轮是否携带分支初始历史（见 finally）
   const body = { session_id: state.active, message: text,
     retrieval_mode: state.retrievalMode || undefined,
     per_kb_k: state.perKbK || undefined, total_k: state.totalK || undefined,
@@ -2337,10 +2341,13 @@ async function sendMessage(text, opts = {}) {
     msgs.push({ role: "user", content: text,
       files: sendFiles.map(f => ({ name: f.name })) });
     if (sess && sess.forked) {
-      // 分支会话首次发送：把选中消息及之前的历史一并带给后端（新 thread 无 checkpoint 历史）
+      // 分支会话首次发送：服务端按 fork_from 从源会话 checkpoint 复制完整历史
+      // （含附件全文）；history 仅作复制不可用时的纯文本兜底。
+      // 标记等 SSE 正常收尾后才关闭（见 finally）：失败重发仍带 fork_from，
+      // 服务端幂等——目标会话已有 checkpoint 时不重复复制
       body.history = msgs.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
-      sess.forked = false;
-      saveSessions();
+      if (sess.forkFrom) body.fork_from = sess.forkFrom;
+      sentForkInit = true;
     }
   }
   const asst = { role: "assistant", content: "", steps: [], retrievals: [], _streaming: true };
@@ -2396,6 +2403,12 @@ async function sendMessage(text, opts = {}) {
     const sb = $("#stop-btn");
     sb.style.display = "none"; sb.disabled = false; sb.textContent = "停止";
     if (state.active === streamSid) patchLastMsg(asst);
+    // 分支首次发送成功收尾才关闭标记：失败/断连保持 forked——重发仍带 fork_from
+    // （后端幂等：目标会话已有 checkpoint 时不再重复复制，无 checkpoint 时补上）
+    if (sentForkInit && asst._done && sess) {
+      sess.forked = false;
+      saveSessions();
+    }
     // 会话仍存在才落库（生成期间被删的会话不留幽灵数据）
     if (state.sessions.some(s => s.id === streamSid)) saveMsgs(msgs, streamSid);
     state.streamSid = null; state.streamMsgs = null;
@@ -2455,14 +2468,22 @@ async function sendFeedback(i, rating) {
   } catch (e) { toast(e.message, "err"); }
 }
 
-/* 分支：从选中消息（含）及之前的历史开一个新会话，后续提问从分支点继续 */
+/* 分支：从选中消息（含）及之前的历史开一个新会话，后续提问从分支点继续。
+   服务端按 forkFrom 从源会话 checkpoint 复制"分支点及之前"的完整历史
+   （含附件全文）；user_count 按用户消息条数锚定（本地报错条目不影响对齐） */
 function forkSession(idx) {
   if (state.streaming) return;
   const msgs = getMsgs();
   if (idx < 0 || idx >= msgs.length) return;
+  const src = state.active;                     // 源会话（切到新会话前先取）
   const cut = msgs.slice(0, idx + 1);
   const anchor = String(cut[idx].content || "").replace(/\s+/g, " ").slice(0, 10);
-  const s = { id: uuid(), title: "分支 · " + (anchor || "新对话"), created: Date.now(), forked: true };
+  const userCount = cut.filter(m => m.role === "user").length;
+  const s = { id: uuid(), title: "分支 · " + (anchor || "新对话"), created: Date.now(), forked: true,
+              forkFrom: userCount ? {
+                session_id: src, user_count: userCount,
+                include_last_reply: cut[cut.length - 1].role === "assistant",
+              } : null };
   state.sessions.unshift(s);
   state.active = s.id;
   localStorage.setItem(store.mk(s.id), JSON.stringify(cut));
@@ -2542,7 +2563,7 @@ function handleChatEvent(ev, asst, stepByTrace) {
       break;
     case "retrieve":
       asst.steps.push({ kind: "retrieve", status: "ok",
-        desc: `${ev.mode === "hybrid" ? "混合检索（向量+BM25）" : "纯向量检索"} · 知识库 <code>${esc(shortId(ev.kb_id))}</code>（${ev.scope === "private" ? "私人" : "公共"}）命中 ${ev.hits} 条` });
+        desc: `${ev.mode === "hybrid" ? "混合检索（向量+BM25）" : "纯向量检索"}${ev.rerank ? "+重排" : ""} · 知识库 <code>${esc(shortId(ev.kb_id))}</code>（${ev.scope === "private" ? "私人" : "公共"}）命中 ${ev.hits} 条` });
       break;
     case "retrievals":
       asst.retrievals = ev.results || [];
@@ -3121,12 +3142,14 @@ async function openKBDetail(kbId) {
             `<span class="muted mono">距离 ${Number(h.distance).toFixed(3)}</span>`;
           const bm = h.bm25_score === null || h.bm25_score === undefined ? "" :
             `<span class="muted mono">BM25 ${Number(h.bm25_score).toFixed(2)}</span>`;
+          const rk = h.rerank_score === null || h.rerank_score === undefined ? "" :
+            `<span class="muted mono">重排 ${Number(h.rerank_score).toFixed(2)}</span>`;
           const src = (h.metadata && h.metadata.source)
             ? (h.metadata.page !== null && h.metadata.page !== undefined
                 ? `<span class="muted">📄 ${esc(h.metadata.source)} · 第 ${h.metadata.page} 页</span>`
                 : `<span class="muted">📄 ${esc(h.metadata.source)}</span>`)
             : "";
-          return `<div class="search-hit"><b>[${i + 1}]</b> ${dist}${bm}<div class="txt">${esc(h.text)}</div>${src}</div>`;
+          return `<div class="search-hit"><b>[${i + 1}]</b> ${dist}${bm}${rk}<div class="txt">${esc(h.text)}</div>${src}</div>`;
         }).join("");
     } catch (e) { box.innerHTML = ""; toast(e.message, "err"); }
   };

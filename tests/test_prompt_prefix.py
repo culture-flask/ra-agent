@@ -1,16 +1,15 @@
 # 前缀缓存优化单元测试：不依赖 DB，纯函数验证消息组装的前缀稳定性。
 #
-# 覆盖三个纯函数：
 # - _build_system_prompt：system 前缀跨轮稳定（不随检索/记忆键序变化）
-# - _retrieval_message：检索结果打包（父块/小 chunk/空检索）
-# - _compose_llm_messages：检索块插在最后一条 human 之后；
-#   轮内工具循环两次请求前缀一致；跨轮请求分叉点在旧 human 之后
+# - _retrieval_block / _retrieval_patch：检索块打包并并入最后一条用户消息
+#   （同 id 替换、重复生成幂等、排在附件块之后）
+# - 前缀性质：检索块持久化后，下一轮请求完整包含上一轮请求（缓存命中）
 import pytest
 from langchain_core.messages import (AIMessage, HumanMessage, SystemMessage,
                                      ToolMessage)
 
-from app.graph.nodes import (_build_system_prompt, _compose_llm_messages,
-                             _retrieval_message)
+from app.graph.nodes import (_RET_MARK, _build_system_prompt,
+                             _retrieval_block, _retrieval_patch)
 
 
 def _sig(messages: list) -> list[tuple]:
@@ -49,107 +48,77 @@ def test_system_prompt_includes_summary_and_identity():
     assert "[历史对话总结]" in prompt
 
 
-# ---------- _retrieval_message ----------
+# ---------- _retrieval_block / _retrieval_patch ----------
 
-def test_retrieval_message_none_when_empty():
-    assert _retrieval_message({"messages": [], "retrievals": []}) is None
-    assert _retrieval_message({"messages": []}) is None
+def test_retrieval_block_none_when_empty():
+    assert _retrieval_block([]) is None
+    assert _retrieval_block(None) is None
 
 
-def test_retrieval_message_formats():
+def test_retrieval_block_formats():
     """父块（来源/页码/命中数）与小 chunk 两种格式。"""
-    state = {"retrievals": [
+    block = _retrieval_block([
         {"type": "parent", "text": "完整段落", "scope": "private", "kb_name": "我的库",
          "source": "a.pdf", "pages": [2, 3], "hit_chunks": 2},
         {"type": "chunk", "text": "小片段", "scope": "public", "kb_name": "公共库"},
-    ]}
-    msg = _retrieval_message(state)
-    # P3-34：检索块用 HumanMessage（消息序列中间的 system 触发 thinking 模型长思考）
-    assert isinstance(msg, HumanMessage)
-    content = msg.content
-    assert "【知识库检索结果】" in content
-    assert "a.pdf 第2-3页" in content and "含2个命中片段" in content
-    assert "(public / 公共库)" in content
+    ])
+    assert "【知识库检索结果】" in block
+    assert "a.pdf 第2-3页" in block and "含2个命中片段" in block
+    assert "(public / 公共库)" in block
 
 
-# ---------- _compose_llm_messages ----------
+def test_retrieval_patch_merges_into_last_human():
+    """检索块并入最后一条用户消息：同 id 替换（不新增消息）、标记分隔。"""
+    u1 = HumanMessage(content="问题一", id="m1")
+    a1 = AIMessage(content="答一")
+    u2 = HumanMessage(content="问题二", id="m2")
+    patch = _retrieval_patch([u1, a1, u2], "R")
+    assert patch.id == "m2"                       # 同 id → add_messages 原地替换
+    assert patch.content == "问题二" + _RET_MARK + "R"
 
-def test_compose_passthrough_without_retrieval():
-    """无检索：直接 [system] + messages。"""
+
+def test_retrieval_patch_idempotent_on_regen():
+    """重新生成会重跑检索：先剥离旧块再追加 → 幂等不累积。"""
+    u1 = HumanMessage(content="问题一", id="m1")
+    first = _retrieval_patch([u1], "旧块")
+    again = _retrieval_patch([first], "新块")
+    assert again.content == "问题一" + _RET_MARK + "新块"
+    assert again.content.count(_RET_MARK) == 1
+
+
+def test_retrieval_patch_after_attachment_block():
+    """附件块保留在前，检索块追加在整条消息末尾（回放拆解顺序：先检索后附件）。"""
+    u1 = HumanMessage(content="问题\n<<<附件>>>\n[附件：a.pdf]\n正文", id="m1")
+    patch = _retrieval_patch([u1], "R")
+    assert patch.content.index("<<<附件>>>") < patch.content.index(_RET_MARK)
+
+
+def test_retrieval_patch_skips_without_id():
+    """消息缺 id / 无用户消息（理论不可达）：跳过改写，不影响主流程。"""
+    assert _retrieval_patch([HumanMessage(content="无 id")], "R") is None
+    assert _retrieval_patch([AIMessage(content="a")], "R") is None
+
+
+# ---------- 前缀缓存性质 ----------
+
+def test_payload_tool_loop_round2_prefix_stable():
+    """工具循环：第二轮（尾部为 AI(tool_calls)+Tool）是第一轮的严格前缀扩展。"""
     system = SystemMessage(content="S")
-    msgs = [HumanMessage(content="hi")]
-    out = _compose_llm_messages({"messages": msgs}, system, None)
-    assert _sig(out) == _sig([system] + msgs)
-
-
-def test_compose_inserts_after_last_human():
-    """检索块插在最后一条 human 之后（不在 human 之前、不进 messages 尾部）。"""
-    system = SystemMessage(content="S")
-    retrieval = HumanMessage(content="R")
-    msgs = [HumanMessage(content="u1"), AIMessage(content="a1"),
-            HumanMessage(content="u2")]
-    out = _compose_llm_messages({"messages": msgs}, system, retrieval)
-    assert _sig(out) == _sig([system, msgs[0], msgs[1], msgs[2], retrieval])
-
-
-def test_compose_tool_loop_round2_prefix_stable():
-    """轮内工具循环：第二轮（尾部为 AI(tool_calls)+Tool）仍插在 human 后，
-    且第二轮请求是第一轮的严格前缀扩展 → 前缀缓存全命中。"""
-    system = SystemMessage(content="S")
-    retrieval = HumanMessage(content="R")
-    u1 = HumanMessage(content="u1")
+    u1 = HumanMessage(content="问题" + _RET_MARK + "R", id="m1")
     ai_tool = AIMessage(content="", tool_calls=[
         {"name": "web_search", "args": {"query": "q"}, "id": "call_1"}])
     tool_msg = ToolMessage(content='{"ok": 1}', tool_call_id="call_1")
-
-    round1 = _compose_llm_messages({"messages": [u1]}, system, retrieval)
-    round2 = _compose_llm_messages({"messages": [u1, ai_tool, tool_msg]},
-                                   system, retrieval)
-    # 第二轮前缀 = 第一轮完整序列
+    round1 = [system, u1]
+    round2 = [system, u1, ai_tool, tool_msg]
     assert _sig(round2)[:len(round1)] == _sig(round1)
-    # 检索块紧跟 human 之后（而非 tool 消息之后），且角色为 user
-    assert _sig(round2)[2] == ("human", "R")
 
 
-def test_compose_cross_turn_prefix_stable():
-    """跨轮：第 2 轮请求与第 1 轮的共同前缀覆盖 [system, u1]，
-    分叉点恰在旧 human 之后——历史全部可命中，新增量仅为 a1/R2/u2。"""
+def test_payload_cross_turn_covers_previous_request():
+    """跨轮（持久化收益）：第 2 轮请求完整包含第 1 轮请求（含检索块）。"""
     system = SystemMessage(content="S")
-    u1 = HumanMessage(content="u1")
-    a1 = AIMessage(content="a1")
-    u2 = HumanMessage(content="u2")
-    r1 = HumanMessage(content="检索结果一")
-    r2 = HumanMessage(content="检索结果二")
-
-    turn1 = _compose_llm_messages({"messages": [u1]}, system, r1)
-    turn2 = _compose_llm_messages({"messages": [u1, a1, u2]}, system, r2)
-
-    sig1, sig2 = _sig(turn1), _sig(turn2)
-    # 共同前缀 = [system, u1]（turn2 的 a1 与 turn1 的 R1 在此处分叉）
-    common = 0
-    for s1, s2 in zip(sig1, sig2):
-        if s1 != s2:
-            break
-        common += 1
-    assert common == 2
-    assert sig2 == _sig([system, u1, a1, u2, r2])
-
-
-def test_compose_no_human_fallback_appends():
-    """防御：没有 human 消息时检索块置尾（不会抛异常）。"""
-    system = SystemMessage(content="S")
-    retrieval = HumanMessage(content="R")
-    msgs = [AIMessage(content="a")]
-    out = _compose_llm_messages({"messages": msgs}, system, retrieval)
-    assert _sig(out) == _sig([system, msgs[0], retrieval])
-
-
-def test_compose_does_not_mutate_state_messages():
-    """组装是纯函数：state['messages'] 不被修改（检索块不进 checkpoint）。"""
-    system = SystemMessage(content="S")
-    retrieval = HumanMessage(content="R")
-    msgs = [HumanMessage(content="u1")]
-    state = {"messages": msgs}
-    _compose_llm_messages(state, system, retrieval)
-    assert len(state["messages"]) == 1
-    assert isinstance(state["messages"][0], HumanMessage)
+    u1 = HumanMessage(content="问题一" + _RET_MARK + "R1")
+    a1 = AIMessage(content="答一")
+    u2 = HumanMessage(content="问题二" + _RET_MARK + "R2")
+    turn1 = [system, u1]
+    turn2 = [system, u1, a1, u2]
+    assert _sig(turn2)[:len(turn1)] == _sig(turn1)

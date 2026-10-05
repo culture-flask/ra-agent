@@ -64,7 +64,7 @@ class CloudEmbeddingModel(EmbeddingModel):
 
     BATCH_SIZE = 16      # 单次 input 上限 10 条
     BATCH_DELAY = 0.5    # 批次间隔秒数：防 429 限流
-    MAX_RETRIES = 10      # 429 重试次数（指数退避）
+    MAX_RETRIES = 5      # 429 重试次数（指数退避）
     MAX_CONN_RETRIES = 4  # 连接抖动重试次数
 
     def __init__(self, meta: EmbeddingMeta, api_key: str):

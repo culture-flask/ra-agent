@@ -41,7 +41,8 @@ def test_new_native_tools_in_catalog():
     schemas = _run(adapter.schemas_for_llm())
     names = {s.get("name") or (s.get("function") or {}).get("name")
              for s in schemas}
-    assert {"search_knowledge_base", "save_document", "export_bibtex"} <= names
+    assert {"search_knowledge_base", "save_document", "export_bibtex",
+            "search_memories"} <= names
 
 
 def test_search_knowledge_base_tool():

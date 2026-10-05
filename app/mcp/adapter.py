@@ -9,7 +9,7 @@ schemas_for_llm 的工具目录里，都经 call() 统一执行/追踪。
 import asyncio
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from langchain_core.utils.function_calling import convert_to_openai_function
@@ -50,12 +50,12 @@ def cap_observation(text: str, limit: int = TOOL_OUTPUT_MAX_CHARS) -> str:
     return text[:head] + note + (text[-tail:] if tail else "")
 
 
-# ---------- 原生工具定义（本进程内执行，可访问 KBService） ----------
+# ---------- 原生工具定义（本进程内执行，可访问 KBService / MemoryService） ----------
 def _native_tool_specs() -> list[dict]:
     """原生工具目录：name/description/OpenAI parameters schema + 实现函数。
 
-    实现签名 async def(args: dict, user_id: str) -> dict——user_id 由
-    call() 注入（LLM 看不到也伪造不了），保证按用户隔离。
+    实现签名 async def(args: dict, user_id: str, kb_service, memory_service) -> dict——
+    服务实例与 user_id 均由 call() 注入（LLM 看不到也伪造不了），保证按用户隔离。
     """
     return [
         {
@@ -159,10 +159,30 @@ def _native_tool_specs() -> list[dict]:
             },
             "func": _export_bibtex,
         },
+        {
+            "name": "search_memories",
+            "description": (
+                "检索当前用户的长期记忆（偏好、研究背景、正在进行的项目等）。"
+                "当用户提到「我之前说过」「我的偏好/习惯」这类需要历史信息的问题，"
+                "或你需要确认某个事实是否已记录过时调用。"
+                "core 记忆已常驻系统提示，本工具主要用于取回短期（临时）记忆、"
+                "以及按主题定位具体记忆条目；query 缺省时返回最近更新的记忆。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",
+                              "description": "检索词（中英文均可），匹配记忆键名/主题/内容"},
+                    "tier": {"type": "string", "enum": ["core", "short"],
+                             "description": "可选：只查某一层（core=常驻 / short=临时）"},
+                },
+                "required": [],
+            },
+            "func": _search_memories,
+        },
     ]
 
 
-async def _list_kb_files(args: dict, user_id: str, kb_service) -> dict:
+async def _list_kb_files(args: dict, user_id: str, kb_service, memory_service=None) -> dict:
     """实现：可检索库 → 每库的源文件名列表（同步盘读放线程池）。
 
     带显式 file_count。
@@ -183,7 +203,7 @@ async def _list_kb_files(args: dict, user_id: str, kb_service) -> dict:
     return {"user_id": user_id, "kb_count": len(out), "kbs": out}
 
 
-async def _get_local_document(args: dict, user_id: str, kb_service) -> dict:
+async def _get_local_document(args: dict, user_id: str, kb_service, memory_service=None) -> dict:
     """实现：权限校验 → 定位文件 → 全部 chunk 去重拼接完整原文。
 
     超长文献截断到 FULL_ARTICLE_MAX_CHARS（带 truncated 标记），
@@ -234,7 +254,7 @@ async def _get_local_document(args: dict, user_id: str, kb_service) -> dict:
     }
 
 
-async def _get_utc_time(args: dict, user_id: str, kb_service) -> dict:
+async def _get_utc_time(args: dict, user_id: str, kb_service, memory_service=None) -> dict:
     """实现：当前 UTC 时间（ISO 8601 + 星期 + Unix 时间戳）。"""
     now = datetime.now(timezone.utc)
     return {
@@ -244,7 +264,7 @@ async def _get_utc_time(args: dict, user_id: str, kb_service) -> dict:
     }
 
 
-async def _search_knowledge_base(args: dict, user_id: str, kb_service) -> dict:
+async def _search_knowledge_base(args: dict, user_id: str, kb_service, memory_service=None) -> dict:
     """实现：LLM 主动检索知识库——头脑风暴角色差异化调研的关键工具。
 
     与 research 节点的预取（用议题当 query）互补：这里 query 由 LLM 按
@@ -295,6 +315,52 @@ async def _search_knowledge_base(args: dict, user_id: str, kb_service) -> dict:
     return out
 
 
+# 记忆检索工具的策略：short 只回最近 N 天（过期的临时事实会误导），总量封顶，
+# 单条 value 截断——检索用于"定位 + 回忆要点"，不需要完整长文（那是纯 token 开销）。
+MEMORY_TOOL_SHORT_DAYS = 7
+MEMORY_TOOL_LIMIT = 10
+MEMORY_TOOL_VALUE_MAX = 500
+
+
+async def _search_memories(args: dict, user_id: str, kb_service=None,
+                           memory_service=None) -> dict:
+    """实现：按关键词检索用户长期记忆（key / topic / 值三路模糊匹配）。
+
+    分层策略：short 是易过期的临时事实，只回最近 7 天；core 是稳定偏好，
+    不设时间窗（它本就常驻系统提示，这里只负责按 query 定位条目）。
+    读操作不刷新 last_used_at——检索不该给 short 续命、干扰 TTL/LRU 语义。
+    """
+    if memory_service is None:
+        return {"count": 0, "memories": [], "note": "记忆服务不可用"}
+    query = str(args.get("query") or "").strip()
+    tier = args.get("tier") if args.get("tier") in ("core", "short") else None
+    cutoff = datetime.now(timezone.utc) - timedelta(days=MEMORY_TOOL_SHORT_DAYS)
+
+    rows: list[dict] = []
+    if tier in (None, "short"):
+        rows += await asyncio.to_thread(memory_service.search, user_id, query,
+                                        "short", cutoff, MEMORY_TOOL_LIMIT)
+    if tier in (None, "core"):
+        rows += await asyncio.to_thread(memory_service.search, user_id, query,
+                                        "core", None, MEMORY_TOOL_LIMIT)
+    rows.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
+
+    memories = []
+    for r in rows[:MEMORY_TOOL_LIMIT]:
+        value = r.get("value")
+        text = value.get("v", "") if isinstance(value, dict) else str(value or "")
+        if len(text) > MEMORY_TOOL_VALUE_MAX:
+            text = text[:MEMORY_TOOL_VALUE_MAX] + "…(已截断)"
+        memories.append({"key": r.get("key", ""), "value": text,
+                         "tier": r.get("tier", ""), "topic": r.get("topic", ""),
+                         "updated_at": r.get("updated_at")})
+    if not memories:
+        return {"count": 0, "memories": [],
+                "note": "未找到匹配记忆（core 已常驻系统提示；short 只保留最近 7 天）"}
+    return {"count": len(memories),
+            "note": "tier=short 为临时信息，可能已过期", "memories": memories}
+
+
 def _user_dir_name(user_id: str) -> str:
     """user_id → 用户名（查 users 表）：产出目录用人可读的用户名而非 uuid。
 
@@ -335,7 +401,7 @@ async def _write_user_file(filename: str, content: str, user_id: str) -> dict:
             "path": str(path), "chars": len(content)}
 
 
-async def _save_document(args: dict, user_id: str, kb_service) -> dict:
+async def _save_document(args: dict, user_id: str, kb_service, memory_service=None) -> dict:
     """实现：把 Markdown 内容写入 <output_dir>/<用户名>/<filename>（强制 .md）。"""
     filename = str(args.get("filename") or "").strip()
     if not filename:
@@ -379,7 +445,7 @@ def _render_bibtex(entries: list[dict]) -> str:
     return "\n\n".join(out)
 
 
-async def _export_bibtex(args: dict, user_id: str, kb_service) -> dict:
+async def _export_bibtex(args: dict, user_id: str, kb_service, memory_service=None) -> dict:
     """实现：entries → BibTeX → 写入用户文件区。"""
     filename = str(args.get("filename") or "").strip() or "references.bib"
     if not filename.endswith(".bib"):
@@ -396,10 +462,11 @@ class MCPToolAdapter:
     """把 MCP 工具包装为统一接口：schema 生成、执行、追踪、错误处理一次搞定。"""
 
     def __init__(self, host: MCPHost, tracer: Tracer,
-                 kb_service=None):
+                 kb_service=None, memory_service=None):
         self.host = host
         self.tracer = tracer
         self.kb_service = kb_service
+        self.memory_service = memory_service
         self._native = _native_tool_specs()
 
     async def ensure_catalog(self) -> None:
@@ -429,7 +496,8 @@ class MCPToolAdapter:
         try:
             native = self._native_by_name(name)
             if native is not None:                     # 原生工具：本进程执行
-                result = await native["func"](args, user_id, self.kb_service)
+                result = await native["func"](args, user_id, self.kb_service,
+                                              self.memory_service)
             else:                                      # 外部 MCP：tools/call
                 tool = next(t for t in self.host.tools if t.name == name)
                 result = await tool.ainvoke(args)
