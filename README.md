@@ -86,6 +86,33 @@ ra-agent 是一个「科研助手」风格的 **RAG Agent 后端服务**（配�
 | 安全       | bcrypt / PyJWT / cryptography(Fernet)     | 密码哈希 / token / 密钥加密        |
 | 配置       | pydantic-settings + PyYAML                | 环境变量 > yaml > 默认值 三级合并     |
 
+### 模型流与推理字段
+
+模型调用统一使用 LangChain `ChatModel`。`app/abstractions/reasoning.py` 中的
+`ReasoningChatOpenAI` 继承 `ChatOpenAI`，在父类转换后保留兼容端点返回的
+`reasoning_content` / `reasoning`；工具参数分片、消息类型与回调继续由框架处理。
+该适配按 `requirements.txt` 中的 `langchain-openai` 版本验证，升级时应运行对应契约测试。
+
+`RetryableChatModel` 实现标准 Runnable 接口，保留配置、回调、工具绑定和批量调用。
+Python 3.10 下，各图节点显式透传 `RunnableConfig`，支持 LangGraph 消息流和角色追踪。
+已有 FastAPI SSE 与前端事件继续使用；普通消息 checkpoint 不保存展示用推理文本。
+
+`app/graph/native_llm.py` 为兼容旧导入保留名称，内部已改为标准模型流协调器。
+流中重试会创建新尝试，并用 `stream_reset` 撤回失败尝试已显示的正文和推理；
+工具参数和用量聚合也按尝试隔离。用户停止时关闭底层响应流并保留部分正文。
+
+### 多模态输入
+
+普通聊天及争鸣社、格致会讲、溯源社支持图片、音频和视频画面输入。前端分别开启“图片 / 音频 / 视频”，默认全部关闭；开关随每轮请求发送，也作用于历史媒体、重新生成、分支、会后追问和重跑执笔。所选模型及团队各角色模型需支持相应模态。
+
+先开启“图片”，即可将本地图片拖到普通对话输入区或三队议题区，也可在文本框粘贴剪贴板图片；文字仍正常粘贴，图片开关不会自动开启。
+
+- 依赖：`requirements.txt` 已包含 Pillow；音频/视频还需系统 `ffmpeg` 和 `ffprobe`（Debian/Ubuntu：`sudo apt-get install ffmpeg`）。项目 Dockerfile 已安装。`GET /api/v1/settings/multimodal` 返回服务器处理能力。
+- 使用：`POST /api/v1/chat/files` 以 multipart `files` 上传，取返回的 `file_id`，聊天/团队请求传 `attachments:[file_id]` 和 `multimodal:{"image":true,"audio":false,"video":false}`。音频规范化为 WAV；视频最多抽8帧，只分析画面、不含音轨；GIF只取首帧。
+- 限制：每批8个、每文件20MiB，音频/视频最长120秒；每用户媒体最多100份、500MiB。媒体保存在 `<data_dir>/chat_media/`，checkpoint只存引用，调用模型前读取编码。备份/迁移会话时请同时保留此目录。
+
+详细协议与实现见 [后端教程](docs/backend-tutorial.html) 第35章。
+
 ## 快速开始
 
 ### 前置要求

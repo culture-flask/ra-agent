@@ -16,6 +16,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.chat import _ATT_MARK, _CHAT_FILES
+from app.api.input_media import (
+    MultimodalOptions, ensure_checkpoint_owner, prepare_attachments, reserve_session,
+)
+from app.core.message_content import hydrate_messages
 from app.core.cancel import clear_stop, request_stop
 from app.core.db import SessionLocal
 from app.core.deps import get_current_user
@@ -27,6 +31,7 @@ from app.graph.brainstorm import (DEBATER_IDS, ROLE_ORIENTATION,
                                   _evidence_digest, _positions_digest,
                                   _recent_transcript, _role_cfg,
                                   _effective_cfg, synthesis_node)
+from app.graph.agent_runtime import role_run_config
 from app.graph.native_llm import native_round
 from app.models import BrainstormSession, KnowledgeBase, User, utcnow
 from app.services import agent_trace
@@ -38,12 +43,13 @@ router = APIRouter(prefix="/api/v1/brainstorm", tags=["brainstorm"],
 
 
 class BrainstormRequest(BaseModel):
-    session_id: str = Field(min_length=1)     # 建议前端用 bs_ 前缀的 uuid
+    session_id: str = Field(min_length=1, max_length=64)     # 建议前端用 bs_ 前缀的 uuid
     topic: str = Field(min_length=1, max_length=8000)
     max_rounds: int | None = None            # None = 全局默认
     token_budget: int | None = Field(None, ge=10_000, le=100_000_000)  # 本场预算；None = 全局默认
     roles: list[dict] | None = None          # 可选：参赛角色子集（id 限四辩手，缺省=全部默认角色）
-    attachments: list[str] = []               # /chat/files 上传的 file_id
+    attachments: list[str] = Field(default_factory=list, max_length=8)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)               # /chat/files 上传的 file_id
 
 
 def _sse(payload: dict) -> str:
@@ -92,19 +98,13 @@ def _resolve_roles(raw: list[dict] | None, settings) -> list[dict]:
 
 
 def _initial_state(req: BrainstormRequest, user_id: str, settings,
-                   roles: list[dict]) -> dict:
+                   roles: list[dict], media_service=None) -> dict:
     """组装图初始状态：议题（附件全文拼入）+ 角色目录 + 控制字段。
     附件复用主链路 /chat/files 的进程内暂存（_CHAT_FILES）。"""
-    topic = req.topic
-    if req.attachments:
-        blocks = []
-        for fid in req.attachments:
-            att = _CHAT_FILES.get(fid)
-            if att:
-                blocks.append(f"[附件：{att['filename']}]\n{att['text']}")
-        if blocks:
-            topic = topic + _ATT_MARK + "\n\n".join(blocks)
+    topic, media = prepare_attachments(req.topic, req.attachments, user_id,
+        req.multimodal, _CHAT_FILES, media_service)
     return {
+        "input_media": media, "multimodal": req.multimodal.model_dump(),
         "user_id": user_id,
         "session_id": req.session_id,
         "topic": topic,
@@ -126,17 +126,8 @@ def _initial_state(req: BrainstormRequest, user_id: str, settings,
 # ---------- 会话登记（与 chat._register_conversation 同构） ----------
 
 def _register_session(user_id: str, req: BrainstormRequest, roles: list) -> None:
-    with SessionLocal() as db:
-        row = db.get(BrainstormSession, req.session_id)
-        if row is None:
-            db.add(BrainstormSession(
-                session_id=req.session_id, user_id=user_id,
-                topic=req.topic[:2000], status="running", roles=roles))
-        else:                                  # 重跑同 session：复位状态
-            row.status = "running"
-            row.final_proposal = ""
-            row.updated_at = utcnow()
-        db.commit()
+    reserve_session(user_id, req.session_id, team="debate",
+                    topic=req.topic, roles=roles)
 
 
 def _finish_session(user_id: str, session_id: str, result: dict) -> None:
@@ -222,9 +213,18 @@ async def brainstorm_stream(req: BrainstormRequest, request: Request,
     set_agent_team("debate")     # 团队身份：只检索普通库 + 本队沉淀库
     uid = user.id
     graph = request.app.state.brainstorm_graph
+    await ensure_checkpoint_owner(
+        graph, {"configurable": {"thread_id": req.session_id}}, uid)
     settings = request.app.state.settings
+    roles = _resolve_roles(req.roles, settings)
+    initial = await run_in_threadpool(_initial_state, req, uid, settings, roles,
+                                     request.app.state.multimodal_service)
+    await run_in_threadpool(_register_session, uid, req, roles)
     sink: asyncio.Queue = asyncio.Queue()
     config = {"configurable": {"thread_id": req.session_id},
+              "tags": ["team:debate"],
+              "metadata": {"team": "debate", "user_id": uid,
+                           "session_id": req.session_id},
               "recursion_limit": 200}          # 辩论循环步数多，必须放大
 
     async def run_graph():
@@ -237,9 +237,6 @@ async def brainstorm_stream(req: BrainstormRequest, request: Request,
             except Exception:
                 pass
             agent_trace.delete(req.session_id)      # 重跑：旧轨迹档案一并清掉
-            roles = _resolve_roles(req.roles, settings)
-            await run_in_threadpool(_register_session, uid, req, roles)
-            initial = _initial_state(req, uid, settings, roles)
             result = await graph.ainvoke(initial, config=config)
             await run_in_threadpool(_finish_session, uid, req.session_id, result)
             if not result.get("stopped"):    # 停止的半成品不入库（飞轮只沉淀完成品）
@@ -289,7 +286,8 @@ async def brainstorm_stream(req: BrainstormRequest, request: Request,
 # ---------- 停止 / 列表 / 详情 ----------
 
 class StopRequest(BaseModel):
-    session_id: str
+    session_id: str = Field(min_length=1, max_length=64)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
 
 
 @router.post("/stop")
@@ -332,6 +330,8 @@ async def session_detail(session_id: str, request: Request,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not brainstorm owner")
+    if row.team != "debate":
+        raise HTTPException(status_code=404, detail="not found in this team")
 
     graph = request.app.state.brainstorm_graph
     snap = await aget_state_retry(graph, {"configurable": {"thread_id": session_id}})
@@ -351,6 +351,7 @@ async def session_detail(session_id: str, request: Request,
 
 class BrainstormAskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=8000)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
 
 
 # 触发词 → 角色别名表：问题文本中最早命中的角色被唤起；未命中 → 主持人
@@ -393,6 +394,8 @@ async def brainstorm_ask(session_id: str, req: BrainstormAskRequest,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not brainstorm owner")
+    if row.team != "debate":
+        raise HTTPException(status_code=404, detail="not found in this team")
 
     graph = request.app.state.brainstorm_graph
     ctx = request.app.state.workflow_ctx
@@ -406,6 +409,10 @@ async def brainstorm_ask(session_id: str, req: BrainstormAskRequest,
     proposal = values.get("final_proposal") or row.final_proposal
 
     agent_id = _pick_agent(req.question, roles)
+    config = role_run_config(
+        {"configurable": {"thread_id": session_id}},
+        {"session_id": session_id, "user_id": user.id},
+        agent_id, "bs_", phase="ask")
     is_debater = agent_id in ("innovator", "critic",
                               "methodologist", "practitioner")
     role = next((r for r in roles if r.get("id") == agent_id), {}) \
@@ -441,6 +448,11 @@ async def brainstorm_ask(session_id: str, req: BrainstormAskRequest,
             HumanMessage(content=req.question)]
     sid = session_id
     uid = user.id
+    media = values.get("input_media") or []
+    if media:
+        msgs[-1] = HumanMessage(content=[{"type": "text", "text": req.question}, *media])
+    msgs = await run_in_threadpool(hydrate_messages, msgs,
+        request.app.state.multimodal_service, user.id, req.multimodal.model_dump())
     sink: asyncio.Queue = asyncio.Queue()
 
     async def run_ask():
@@ -448,7 +460,8 @@ async def brainstorm_ask(session_id: str, req: BrainstormAskRequest,
         try:
             resp, _usage, stopped = await native_round(
                 cfg, msgs, None, temperature, sid,
-                token_event="token", reasoning_event="ask_reasoning")
+                token_event="token", reasoning_event="ask_reasoning",
+                config=config)
             await sink.put({"type": "__done__"})
         except Exception as e:
             logger.warning("brainstorm ask failed: %s", e)
@@ -512,12 +525,17 @@ async def brainstorm_rerun_writer(req: StopRequest, request: Request,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != uid:
         raise HTTPException(status_code=403, detail="not brainstorm owner")
+    if row.team != "debate":
+        raise HTTPException(status_code=404, detail="not found in this team")
     if row.status == "running":
         raise HTTPException(status_code=409, detail="场次进行中，稍后再试")
     topic = row.topic
 
     graph = request.app.state.brainstorm_graph
-    config = {"configurable": {"thread_id": sid}}
+    config = role_run_config(
+        {"configurable": {"thread_id": sid}},
+        {"session_id": sid, "user_id": uid},
+        "writer", "bs_", phase="rerun_writer")
     snap = await aget_state_retry(graph, config)
     values = dict((snap.values or {}) if snap else {})
     if not (values.get("positions") or values.get("transcript")):
@@ -531,8 +549,9 @@ async def brainstorm_rerun_writer(req: StopRequest, request: Request,
         set_event_sink(sink)
         clear_stop(sid)
         try:
-            state = {**values, "stopped": False}
-            update = await synthesis_node(request.app.state.workflow_ctx, state)
+            state = {**values, "stopped": False, "multimodal": req.multimodal.model_dump()}
+            update = await synthesis_node(request.app.state.workflow_ctx, state,
+                                          config=config)
             merged = {**values, **update}
             await run_in_threadpool(_finish_session, uid, sid, merged)
             if not merged.get("stopped"):    # 与主流程同口径：停止的半成品不入库

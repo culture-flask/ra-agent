@@ -35,6 +35,8 @@ class SeminarState(TypedDict, total=False):
     """会讲图状态。"""
     # 会话身份
     user_id: str
+    multimodal: dict[str, bool]          # 本轮发送许可，缺省所有模态关闭
+    input_media: list[dict]               # 用户上传的持久 media_ref；模型前展开
     session_id: str                       # 建议 sem_ 前缀，与 bs_/主对话空间隔离
     topic: str
     roles: list[dict]                     # 同争鸣社：含 config_id/model_id 可选

@@ -162,6 +162,26 @@ def test_read_chunks_restores_metadata():
     assert bm_hits and bm_hits[0]["metadata"]["source"] == "paper.pdf"
 
 
+def test_hierarchical_chunking_writes_context_header_and_metadata():
+    """切分策略切到 hierarchical 后：块首带标题/章节头，章节路径落到元数据。"""
+    import json
+
+    ks = _make_ctx()
+    ks._settings.chunk_method = "hierarchical"
+    kb = ks.create_kb("层级库", "public", None)
+    body = "量子比特可以处于叠加态。" * 200          # 2400 字，必被切多块
+    text = f"# 量子计算导论\n\n## 方法\n\n{body}"
+    ks.ingest_file(kb.kb_id, "量子计算导论.md", text.encode())
+
+    files = sorted((Path(ks._chunk_dir) / kb.kb_id).glob("*.txt"))
+    assert len(files) >= 2
+    assert all(f.read_text(encoding="utf-8").startswith(
+        "【文档】量子计算导论｜【章节】方法\n") for f in files)
+    metas = [json.loads(f.with_suffix(".meta.json").read_text(encoding="utf-8"))
+             for f in files]
+    assert all(m["heading"] == "方法" for m in metas)
+
+
 def test_get_parent_block_aggregates_group():
     """父块聚合：同 doc 内同组 chunk 拼接、页码收集、不存在的组返回 None。"""
     from app.services.kb_service import _chunk_index

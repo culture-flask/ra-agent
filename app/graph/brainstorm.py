@@ -18,6 +18,7 @@ import asyncio
 import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import Send
 from langgraph.graph import END, START, StateGraph
 
@@ -82,16 +83,20 @@ async def build_brainstorm_graph(ctx: WorkflowContext):
 
     builder = StateGraph(BrainstormState)
 
-    async def _prepare(s): return await prepare_node(ctx, s)
-    async def _moderator(s): return await moderator_node(ctx, s)
-    async def _synthesis(s): return await synthesis_node(ctx, s)
+    async def _prepare(s, config: RunnableConfig):
+        return await prepare_node(ctx, s, config=config)
+
+    async def _moderator(s, config: RunnableConfig):
+        return await moderator_node(ctx, s, config=config)
+
+    async def _synthesis(s, config: RunnableConfig):
+        return await synthesis_node(ctx, s, config=config)
 
     builder.add_node("prepare", _prepare)
     builder.add_node("moderator", _moderator)
     builder.add_node("synthesis", _synthesis)
     for rid in DEBATER_IDS:
-        # 工厂在构建期绑定 ctx：LangGraph 调节点只传 state 一个参数，
-        # 节点函数不能是 (ctx, state) 双参签名（与 _prepare 闭包同理）
+        # 工厂在构建期绑定 ctx；LangGraph 注入 state 与 RunnableConfig。
         builder.add_node(f"research_{rid}", make_research_node(ctx, rid))
         builder.add_node(f"agent_{rid}", make_agent_node(ctx, rid))
 
@@ -118,7 +123,8 @@ async def build_brainstorm_graph(ctx: WorkflowContext):
 
 # ---------- Phase 0：议题解析 ----------
 
-async def prepare_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
+async def prepare_node(ctx: WorkflowContext, state: BrainstormState,
+                       config: RunnableConfig = None) -> dict:
     """主持人解析议题：重述 + 四角色差异化调研指令。
 
     解析失败（LLM 异常 / JSON 不合法）→ 降级为通用调研指令 + 角色取向兜底，
@@ -131,7 +137,7 @@ async def prepare_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
     try:
         text, used = await _llm_text(
             ctx, state, PREPARE_PROMPT.format(topic=state["topic"]),
-            "请解析议题并输出 JSON。", temperature=0.2)
+            "请解析议题并输出 JSON。", temperature=0.2, config=config, agent_id="moderator")
         data = _loads_fuzzy(text) or {}
         if data.get("topic_restatement"):
             restatement = str(data["topic_restatement"])
@@ -150,10 +156,10 @@ async def prepare_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
 
 def make_research_node(ctx: WorkflowContext, role_id: str):
     """工厂：四个 research 节点共享实现，差异只来自 role_id 注入的
-    指令/取向/温度。ctx 在图构建期绑定进闭包（LangGraph 调节点只传 state）。
+    指令/取向/温度。ctx 在图构建期绑定进闭包（LangGraph 注入 state/config）。
     失败降级为"缺席声明"空立场书，绝不让单个 agent 挂掉整场头脑风暴。"""
 
-    async def research_node(state: BrainstormState) -> dict:
+    async def research_node(state: BrainstormState, config: RunnableConfig = None) -> dict:
         cfg = _role_cfg(ctx, state, role_id)   # 角色实际使用的模型
         emit("bs_agent_start", {"agent": role_id, "phase": "research",
                                 "model": getattr(cfg, "model_id", "") or ""})
@@ -214,7 +220,7 @@ def make_research_node(ctx: WorkflowContext, role_id: str):
         try:
             content, used, stopped = await _agent_speak(
                 ctx, state, role_id, system, human,
-                float(role.get("temperature", 0.5)), tools, loop_max, cfg=cfg)
+                float(role.get("temperature", 0.5)), tools, loop_max, cfg=cfg, config=config)
         except Exception as e:
             # 失败原因透出（模型不被端点支持/限流/网络……），界面与日志都可查
             logger.warning("bs research %s failed: %s", role_id, e)
@@ -249,7 +255,8 @@ def make_research_node(ctx: WorkflowContext, role_id: str):
 
 # ---------- Phase 2：主持人调度 ----------
 
-async def moderator_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
+async def moderator_node(ctx: WorkflowContext, state: BrainstormState,
+                         config: RunnableConfig = None) -> dict:
     """决定下一个发言者 + 判定收敛。终止优先级（高的先判）：
     用户停止 > token 预算熔断 > 轮数上限 > 主持人判定收敛。
 
@@ -282,8 +289,9 @@ async def moderator_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
         divergence=json.dumps(notes.get("divergence", []), ensure_ascii=False))
     next_speaker, focus, used = "", "", 0
     try:
-        text, used = await _llm_text(ctx, state, prompt,
-                                     "请调度并输出 JSON。", temperature=0.2)
+        text, used = await _llm_text(
+            ctx, state, prompt, "请调度并输出 JSON。", temperature=0.2,
+            config=config, agent_id="moderator")
         data = _loads_fuzzy(text) or {}
         cand = str(data.get("next_speaker", "")).strip().lower()
         # finish 与收敛判定同门槛：至少辩满一轮才允许提前收场——否则主持人
@@ -324,7 +332,7 @@ def make_agent_node(ctx: WorkflowContext, role_id: str):
     摘要 + 最近 K 轮发言原文 + 共享证据池摘要（滚动窗口控窗口占用，
     更早内容由 moderator_notes 的共识/分歧承载——等价滚动摘要）。"""
 
-    async def agent_node(state: BrainstormState) -> dict:
+    async def agent_node(state: BrainstormState, config: RunnableConfig = None) -> dict:
         if is_stopped(state["session_id"]):
             return {"stopped": True, "next_speaker": ""}
         role = next((r for r in state.get("roles", []) if r.get("id") == role_id),
@@ -356,7 +364,7 @@ def make_agent_node(ctx: WorkflowContext, role_id: str):
             content, used, stopped = await _agent_speak(
                 ctx, state, role_id, system, human,
                 float(role.get("temperature", 0.5)), tools, tool_loop_max=2,
-                cfg=cfg)
+                cfg=cfg, config=config)
         except Exception as e:
             logger.warning("bs debate %s failed: %s", role_id, e)
             fail_reason = _short_reason(e)
@@ -435,7 +443,8 @@ def _fallback_proposal(state: BrainstormState) -> str:
     return "\n\n".join(parts)
 
 
-async def synthesis_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
+async def synthesis_node(ctx: WorkflowContext, state: BrainstormState,
+                         config: RunnableConfig = None) -> dict:
     """撰稿人成稿。用户停止 → 不再调 LLM，直接汇编降级稿（部分成果保留）。
 
     token 预算熔断只停止辩论（moderator 不再点名），撰稿人**不受预算约束、
@@ -486,7 +495,7 @@ async def synthesis_node(ctx: WorkflowContext, state: BrainstormState) -> dict:
             ctx, state, "writer", system,
             "请把全场讨论收敛为一份唯一、明确、可执行的研究方案（不是观点综述）；"
             "完成后如需保存草稿或导出引文可调用文档工具。", 0.3, tools=doc_tools,
-            tool_loop_max=3, cfg=wcfg)
+            tool_loop_max=3, cfg=wcfg, config=config)
         if not content.strip():
             raise RuntimeError("empty proposal")
     except Exception as e:

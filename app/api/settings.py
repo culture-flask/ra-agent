@@ -26,3 +26,20 @@ async def retrieval_settings(request: Request):
         "parent_group_size": s.retrieval_parent_group_size,
         "parent_max_chars": s.retrieval_parent_max_chars,
     }
+
+
+@router.get("/multimodal")
+async def multimodal_settings(request: Request):
+    """服务器的媒体处理能力；不宣称用户选择的模型也支持这些模态。"""
+    service = request.app.state.multimodal_service
+    limits = service.limits
+    return {
+        "available": service.availability(),
+        "default": {"image": False, "audio": False, "video": False},
+        "max_files": 8, "max_file_bytes": limits.max_bytes,
+        "max_audio_seconds": limits.max_audio_seconds,
+        "max_video_seconds": limits.max_video_seconds,
+        "max_video_frames": limits.max_video_frames,
+        "video_visual_only": True,
+        "model_support_required": True,
+    }

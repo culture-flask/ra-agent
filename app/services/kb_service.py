@@ -29,6 +29,8 @@ from app.core.events import emit
 from app.core.logging import get_logger
 from app.models import KnowledgeBase
 from app.models.entities import UserEmbeddingConfig
+from app.services.chunking import (SectionChunk, split_chunks_hierarchical,
+                                   strip_context_header)
 from app.services.parsing import parse_file_pages
 
 logger = get_logger("kb_service")
@@ -67,16 +69,16 @@ def _chunk_index(chunk_id: str) -> int:
 def join_document_text(chunks: list, max_overlap: int = 150) -> str:
     """按序拼接 chunk 还原文档：动态匹配并去掉相邻块的重叠部分。
 
-    分块是固定窗口 + overlap=150（split_chunks），相邻块间有约 150 字符
-    重复；直接拼接会把重复段留在正文里。这里对每对相邻块从 max_overlap
-    往下找最长公共前后缀，命中则跳过重叠段再拼接；找不到（如跨页边界，
-    每页独立分块无重叠）就直接相连。
+    相邻块间有重叠（定长方案 150 字，层级方案 50 字）；直接拼接会把
+    重复段留在正文里。这里对每对相邻块从 max_overlap 往下找最长公共
+    前后缀，命中则跳过重叠段再拼接；找不到（如跨页边界，每页独立分块
+    无重叠）就直接相连。层级方案块首的上下文头先剥掉，不混入原文。
     """
     if not chunks:
         return ""
-    out = chunks[0].text
+    out = strip_context_header(chunks[0].text)
     for c in chunks[1:]:
-        t = c.text
+        t = strip_context_header(c.text)
         if not t:
             continue
         k = min(max_overlap, len(out), len(t))
@@ -601,6 +603,8 @@ class KBService:
         self._ingest_progress[kb_id] = prog
         ok_ids: list[str] = []
         ok_chunks = 0
+        # 库内已收录内容（digest）：失败清理时跳过，不牵连库里那份成功数据
+        ingested = set(kb.source_doc_ids or [])
         try:
             vs = self._vector_store(kb)   # 配置级错误（缺密钥等）在这里 fail fast
         except Exception as e:
@@ -629,7 +633,8 @@ class KBService:
                     ok_ids.append(digest)
             except OperationCancelled:
                 # 向量化途中被取消：清该文件残留，收尾回滚状态
-                self._cleanup_failed_batch(kb_id, [(filename, content)])
+                self._cleanup_failed_batch(kb_id, [(filename, content)],
+                                           ingested | set(ok_ids))
                 prog["current"] = None
                 self._finish_ingest(kb_id, kb, prog, ok_ids, ok_chunks,
                                     cancelled=True)
@@ -643,7 +648,8 @@ class KBService:
                                    filename, kb_id,
                                    type(e.__cause__).__name__, e.__cause__)
                 # 只清该文件的残留 chunk，库内已有文件与其他文件不受影响
-                self._cleanup_failed_batch(kb_id, [(filename, content)])
+                self._cleanup_failed_batch(kb_id, [(filename, content)],
+                                           ingested | set(ok_ids))
                 entry.update(status="failed", error=str(e)[:300])
                 prog["failed"] += 1
             prog["done"] += 1
@@ -663,10 +669,17 @@ class KBService:
         kb_dir.mkdir(parents=True, exist_ok=True)
         pages = parse_file_pages(filename, content)   # 不支持的格式等在这里抛
         digest = hashlib.sha256(content).hexdigest()[:8]
+        method = getattr(self._settings, "chunk_method", "fixed")
+        title = Path(filename).stem          # 文档标题（上下文头用）
         chunks: list[ChunkRecord] = []
         i = 0
         for page_no, page_text in pages:
-            for piece in split_chunks(_clean_text(page_text)):
+            text = _clean_text(page_text)
+            if method == "hierarchical":
+                pieces = split_chunks_hierarchical(text, title=title)
+            else:
+                pieces = [SectionChunk(text=t) for t in split_chunks(text)]
+            for piece in pieces:
                 chunk_id = f"{kb_id}_{digest}_{i}"
                 payload = {"scope": kb.scope,
                            "user_id": kb.owner_user_id or "",
@@ -675,12 +688,16 @@ class KBService:
                            "source": filename}     # 源文件名（引用溯源）
                 if page_no is not None:
                     payload["page"] = page_no      # 页码（Chroma 不接受 None 值）
+                if piece.heading_path:
+                    payload["heading"] = piece.heading_path   # 层级方案的章节路径
                 chunks.append(ChunkRecord(
-                    id=chunk_id, text=piece, payload=payload))
-                (kb_dir / f"{chunk_id}.txt").write_text(piece, encoding="utf-8")
-                # 伴生元数据文件：重建/BM25 从磁盘读 chunk 时恢复 source/page
+                    id=chunk_id, text=piece.text, payload=payload))
+                (kb_dir / f"{chunk_id}.txt").write_text(piece.text,
+                                                        encoding="utf-8")
+                # 伴生元数据文件：重建/BM25 从磁盘读 chunk 时恢复 source/page/heading
                 (kb_dir / f"{chunk_id}.meta.json").write_text(
-                    json.dumps({"source": filename, "page": page_no},
+                    json.dumps({"source": filename, "page": page_no,
+                                "heading": piece.heading_path},
                                ensure_ascii=False), encoding="utf-8")
                 i += 1
         vs.add(chunks)              # 向量化失败 -> 调用方清该文件残留后继续
@@ -735,13 +752,19 @@ class KBService:
                         "succeeded": prog["succeeded"], "failed": prog["failed"]})
 
     def _cleanup_failed_batch(self, kb_id: str,
-                              files: list[tuple[str, bytes]]) -> None:
-        """删除指定文件集的残留 chunk（按内容哈希定位），保留库内已有文件。
+                              files: list[tuple[str, bytes]],
+                              keep_ids: set[str]) -> None:
+        """删除指定文件集的残留（按内容哈希定位）：磁盘 chunk + Chroma 向量。
 
-        换嵌入模型后维度不匹配、解析失败等场景，错误只落在进度明细，
-        历史文件的 chunk 绝不能被牵连删除（重新上传会重建）。
+        keep_ids（库内已收录 + 本批已成功的 digest）跳过：同内容重传失败时，
+        库内既有文件的 chunk 绝不能被牵连删除（重新上传会重建）。
+        vs.add 分批写入（每批 16 条），中途失败会留下此前已写入批次的孤儿向量，
+        这里按 doc_id 从 Chroma 一并删除，与 delete_documents 同一套过滤。
         """
         digests = {hashlib.sha256(content).hexdigest()[:8] for _, content in files}
+        digests -= keep_ids
+        if not digests:
+            return
         kb_dir = self._chunk_dir / kb_id
         for f in list(kb_dir.glob("*.txt")) + list(kb_dir.glob("*.meta.json")):
             parts = f.stem.split("_")
@@ -750,6 +773,16 @@ class KBService:
                     f.unlink()
                 except OSError as e:
                     logger.warning("remove chunk file failed %s: %s", f, e)
+        # 向量残留：解析阶段就失败时 collection 可能还没建/从未写入，容错处理；
+        # 清理失败只记日志，绝不能因清理动作中断入库主循环
+        try:
+            client = chromadb.PersistentClient(
+                path=str(self._settings.chroma_persist_dir))
+            col = client.get_collection(f"kb_{kb_id}")
+            for doc_id in digests:
+                col.delete(where={"doc_id": doc_id})
+        except Exception as e:
+            logger.warning("cleanup chroma chunks failed kb=%s: %s", kb_id, e)
 
     # ---------- 检索 ----------
     def embedding_mismatch(self, kb: KnowledgeBase) -> str | None:
@@ -828,6 +861,58 @@ class KBService:
         if self._reranker and len(hits) > 1:
             hits = self._rerank(query, hits, top=k)
             # 以"命中确实带上了重排分"为准：端点降级回退时标记为未重排，避免误导
+            reranked = any(h.get("rerank_score") is not None for h in hits)
+        emit("retrieve", {"kb_id": kb_id, "hits": len(hits), "scope": kb.scope,
+                          "mode": mode, "rerank": reranked})
+        return hits
+
+    def search_multi(self, kb_id: str, queries: list[str], k: int = 3,
+                     user_id: str | None = None,
+                     mode: str | None = None) -> list[dict]:
+        """多查询检索：腿内先跨查询融合，腿间再融合。
+
+        融合顺序：vec(q1)+vec(q2)+…→RRF；bm25(q1)+bm25(q2)+…→RRF；
+        两条腿路再 RRF 成最终结果（同 id 合并、分数累加）。
+        与单查询路径不同：查询维度在腿内先合并（查询间 RRF 下沉到库层）。
+        单查询（或去重后仅剩一条）时直接委托 search()，行为与原路径一致。
+        """
+        qs = list(dict.fromkeys(q.strip() for q in queries
+                                if isinstance(q, str) and q.strip()))
+        if len(qs) <= 1:
+            return self.search(kb_id, qs[0] if qs else "", k=k,
+                               user_id=user_id, mode=mode)
+        kb = self.get_kb(kb_id)
+        mode = mode or self._settings.retrieval_mode
+        warn = self.embedding_mismatch(kb)
+        if warn:
+            logger.warning("embedding mismatch kb=%s: %s", kb_id, warn)
+        em = kb.embedded_model or {}
+        if em and em.get("dim") != kb.embedding_dim:
+            raise KBRetrievalUnavailable(
+                f"知识库「{kb.name}」({kb_id}) 向量由 dim={em.get('dim')} 嵌入，"
+                f"当前配置 dim={kb.embedding_dim}，请重新上传文档或重建后再参与检索")
+        pool = max(k, self._rerank_candidates) if self._reranker else k
+        if mode == "hybrid":
+            depth = max(pool, 15)
+            vec_lists = [[self._annotate(kb, h)
+                          for h in self._vector_store(kb).search(
+                              q, k=depth, scope=kb.scope, user_id=user_id)]
+                         for q in qs]
+            bm_lists = [[self._annotate(kb, h)
+                         for h in self._bm25_index(kb).search(q, k=depth)]
+                        for q in qs]
+            hits = rrf_fuse(rrf_fuse(*vec_lists, top=depth),
+                            rrf_fuse(*bm_lists, top=depth), top=pool)
+        else:
+            vec_lists = [[self._annotate(kb, h)
+                          for h in self._vector_store(kb).search(
+                              q, k=pool, scope=kb.scope, user_id=user_id)]
+                         for q in qs]
+            hits = rrf_fuse(*vec_lists, top=pool)
+        reranked = False
+        if self._reranker and len(hits) > 1:
+            # 多查询下重排参照词取第一个查询（通常为中文原义改写）
+            hits = self._rerank(qs[0], hits, top=k)
             reranked = any(h.get("rerank_score") is not None for h in hits)
         emit("retrieve", {"kb_id": kb_id, "hits": len(hits), "scope": kb.scope,
                           "mode": mode, "rerank": reranked})
@@ -1126,7 +1211,7 @@ class KBService:
                 pages.append(page)
             if total >= max_chars:
                 break
-            text = c.text
+            text = strip_context_header(c.text)   # 父块内不重复块首上下文头
             if total + len(text) > max_chars:
                 text = text[: max_chars - total]
             parts.append(text)
@@ -1170,6 +1255,8 @@ class KBService:
                        "source": meta.get("source")}
             if meta.get("page") is not None:
                 payload["page"] = meta.get("page")
+            if meta.get("heading"):
+                payload["heading"] = meta.get("heading")
             chunks.append(ChunkRecord(
                 id=f.stem, text=f.read_text(encoding="utf-8"), payload=payload))
         return chunks

@@ -35,6 +35,7 @@ import json
 import re
 from datetime import datetime, timezone
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from app.core.cancel import clear_stop, is_stopped
@@ -132,7 +133,7 @@ def _stop_guard(state: DeepResearchState) -> dict | None:
 # ---------- Phase 1：初调 ----------
 
 def make_scout_node(ctx: WorkflowContext):
-    async def scout_node(state: DeepResearchState) -> dict:
+    async def scout_node(state: DeepResearchState, config: RunnableConfig = None) -> dict:
         """初调：带工具检索，产出研究摘要（纯 Markdown + 内联引用）。
 
         与会讲的 curate 不同——curate 只是解析议题（llm_text 无工具），
@@ -158,7 +159,7 @@ def make_scout_node(ctx: WorkflowContext):
             content, used, stopped = await _agent_speak(
                 ctx, state, rid, system, "请开始初步调研，输出研究摘要。",
                 float(role.get("temperature", 0.4)), tools, loop_max,
-                cfg=cfg, prefix="dr_")
+                cfg=cfg, prefix="dr_", config=config)
         except Exception as e:
             logger.warning("dr scout failed: %s", e)
             fail_reason = _short_reason(e)
@@ -185,7 +186,7 @@ def make_scout_node(ctx: WorkflowContext):
 # ---------- Phase 2：大纲规划 ----------
 
 def make_plan_node(ctx: WorkflowContext):
-    async def plan_node(state: DeepResearchState) -> dict:
+    async def plan_node(state: DeepResearchState, config: RunnableConfig = None) -> dict:
         """规划大纲（控制类调用，不流式透传，JSON 输出）。
 
         研究编辑也要有气泡：agent_start/token/end 三件套与审稿同款——
@@ -213,7 +214,8 @@ def make_plan_node(ctx: WorkflowContext):
                 PLAN_SYSTEM.format(topic=state["topic"],
                                    brief=str(state.get("scouting_brief") or "")[:4000],
                                    min_sections=min_s, max_sections=max_s),
-                "请规划大纲并输出 JSON。", temperature=0.2, prefix="dr_")
+                "请规划大纲并输出 JSON。", temperature=0.2, prefix="dr_",
+                config=config, agent_id=rid, cfg=cfg)
             data = _loads_fuzzy(text) or {}
             secs = data.get("sections")
             if isinstance(secs, list):
@@ -255,7 +257,7 @@ def make_plan_node(ctx: WorkflowContext):
 # ---------- Phase 3.1：分章深研 ----------
 
 def make_research_node(ctx: WorkflowContext):
-    async def research_node(state: DeepResearchState) -> dict:
+    async def research_node(state: DeepResearchState, config: RunnableConfig = None) -> dict:
         """写当前章节草稿（带工具，纯 Markdown 输出 + 内联引用）。"""
         g = _stop_guard(state)
         if g:
@@ -294,7 +296,7 @@ def make_research_node(ctx: WorkflowContext):
             content, used, stopped = await _agent_speak(
                 ctx, state, rid, system, "请撰写本章正文。",
                 float(role.get("temperature", 0.5)), tools, loop_max,
-                cfg=cfg, prefix="dr_")
+                cfg=cfg, prefix="dr_", config=config)
         except Exception as e:
             logger.warning("dr research ch%d failed: %s", idx + 1, e)
             fail_reason = _short_reason(e)
@@ -342,7 +344,7 @@ def merge_sources_node(state: DeepResearchState) -> dict:
 # ---------- Phase 3.2：审稿 ----------
 
 def make_review_node(ctx: WorkflowContext):
-    async def review_node(state: DeepResearchState) -> dict:
+    async def review_node(state: DeepResearchState, config: RunnableConfig = None) -> dict:
         """六维审稿（控制类调用，无工具——审稿人不能自己去"补证据"）。
 
         输出判定 PASS 或 REVISE JSON。解析失败 → 放行（fail-open）：
@@ -373,7 +375,8 @@ def make_review_node(ctx: WorkflowContext):
         try:
             text, used = await _llm_text(
                 ctx, state, system, "请审查本章草稿并输出判定。",
-                temperature=float(role.get("temperature", 0.2)), prefix="dr_")
+                temperature=float(role.get("temperature", 0.2)), prefix="dr_",
+                config=config, agent_id=rid, cfg=cfg)
             text = (text or "").strip()
             if text.upper().strip("\"'` \n") == "PASS":
                 verdict = "PASS"
@@ -424,7 +427,7 @@ def make_review_node(ctx: WorkflowContext):
 # ---------- Phase 3.3：修订 ----------
 
 def make_revise_node(ctx: WorkflowContext):
-    async def revise_node(state: DeepResearchState) -> dict:
+    async def revise_node(state: DeepResearchState, config: RunnableConfig = None) -> dict:
         """依审稿意见修订（带工具：需要真的去检索补充引用）。
 
         轮次递增由本节点写（单写者）。审稿未批评的部分靠提示词约束不动。
@@ -456,7 +459,7 @@ def make_revise_node(ctx: WorkflowContext):
             content, used, stopped = await _agent_speak(
                 ctx, state, rid, system, "请输出修订后的完整章节正文。",
                 float(role.get("temperature", 0.3)), tools, loop_max,
-                cfg=cfg, prefix="dr_")
+                cfg=cfg, prefix="dr_", config=config)
         except Exception as e:
             logger.warning("dr revise ch%d r%d failed: %s", idx + 1, rnd, e)
             fail_reason = _short_reason(e)
@@ -589,7 +592,7 @@ def _parse_frame_sections(text: str) -> tuple[str, str, str]:
 
 
 def make_write_frame_node(ctx: WorkflowContext):
-    async def write_frame_node(state: DeepResearchState) -> dict:
+    async def write_frame_node(state: DeepResearchState, config: RunnableConfig = None) -> dict:
         """引言 / 结论 / 目录（控制类调用）。
 
         两段式契约：先 JSON（WRITE_FRAME_SYSTEM）；解析结果为空（空完成
@@ -625,7 +628,7 @@ def make_write_frame_node(ctx: WorkflowContext):
                 ctx, state, WRITE_FRAME_SYSTEM.format(**frame_kw),
                 "请撰写引言/结论/目录并输出 JSON。",
                 temperature=float(role.get("temperature", 0.4)), prefix="dr_",
-                **retry_kw)
+                **retry_kw, config=config, agent_id=rid, cfg=cfg)
             raw_text = (text or "").strip()
             data = _loads_fuzzy(raw_text) or {}
             toc = str(data.get("toc", ""))[:2000]
@@ -644,7 +647,7 @@ def make_write_frame_node(ctx: WorkflowContext):
                     ctx, state, WRITE_FRAME_PLAIN.format(**frame_kw),
                     "请按 ===TOC===/===INTRO===/===CONCL=== 三段格式输出。",
                     temperature=float(role.get("temperature", 0.4)),
-                    prefix="dr_", **retry_kw)
+                    prefix="dr_", **retry_kw, config=config, agent_id=rid, cfg=cfg)
                 used += used2
                 toc, intro, concl = _parse_frame_sections(text or "")
             except Exception as e:

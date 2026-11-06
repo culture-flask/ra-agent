@@ -409,8 +409,20 @@ html[data-theme="dark"] .cite.parent{background:rgba(74,222,128,.06);border-colo
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .att-chip.ok{border-color:var(--line-strong)}
 .att-chip.err{border-color:var(--danger);color:var(--danger)}
+.att-chip.blocked{border-style:dashed;border-color:var(--warn);color:var(--warn)}
 .att-chip .x{cursor:pointer;color:var(--muted);font-size:11px}
 .att-chip .x:hover{color:var(--danger)}
+.multimodal-controls{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;font-size:12px;margin-bottom:8px}
+.multimodal-controls>span:first-child{font-weight:600}
+.multimodal-controls label{display:inline-flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap}
+.multimodal-controls input{margin:0;accent-color:var(--btn-blue)}
+.multimodal-controls .hint{flex-basis:100%;color:var(--muted);font-size:11.5px;line-height:1.5}
+#chat-multimodal-controls{max-width:820px;margin:0 auto 9px}
+#bs-multimodal-controls{max-width:760px;padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:var(--surface);margin-bottom:14px}
+#composer,#bs-setup{position:relative}
+.file-drop-active{outline:2px dashed var(--accent);outline-offset:-3px}
+.file-drop-active::after{content:"松开以添加附件";position:absolute;inset:4px;z-index:5;display:flex;align-items:center;justify-content:center;
+  border-radius:12px;background:var(--surface);color:var(--accent);font-weight:600;pointer-events:none;opacity:.94}
 .msg-files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
 .msg-files .att-chip{background:var(--chip);border-color:transparent}
 .chat-empty{max-width:820px;margin:44px auto;padding:0 28px}
@@ -828,11 +840,12 @@ html[data-theme="dark"] .bs-retry{color:#f0cd7e;background:rgba(232,178,58,.12);
         <label class="rk-input" title="聚合返回：命中的相邻片段合并为完整段落返回，最多展开几个（0=关闭，全返回小片段）">父块 <input id="rk-parent" type="number" min="0" max="10"></label>
       </div>
       <div id="composer">
+        <div class="multimodal-controls" id="chat-multimodal-controls" role="group" aria-label="多模态输入开关"></div>
         <div id="attach-bar"></div>
         <div class="composer-inner">
           <input type="file" id="chat-file" multiple accept=".txt,.md,.pdf,.docx" hidden>
           <button class="btn" id="attach-btn" title="上传文件给模型阅读（txt/md/pdf/docx，可多选）" aria-label="上传文件给模型阅读"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m20.5 11.5-8.8 8.8a5 5 0 0 1-7.1-7.1l9.3-9.3a3.5 3.5 0 0 1 5 5l-9.4 9.4a2 2 0 0 1-2.8-2.8l8.7-8.7"/></svg></button>
-          <textarea id="chat-input" placeholder="输入你的研究问题，Enter 发送，Shift+Enter 换行（可先 📎 上传文件给模型阅读）"></textarea>
+          <textarea id="chat-input" placeholder="输入问题，或拖入 / 粘贴图片。Enter 发送，Shift+Enter 换行"></textarea>
           <button class="btn primary" id="send-btn">发送</button>
           <button class="btn danger" id="stop-btn" title="终止当前生成，保留已生成内容" style="display:none">停止</button>
         </div>
@@ -1033,13 +1046,14 @@ html[data-theme="dark"] .bs-retry{color:#f0cd7e;background:rgba(232,178,58,.12);
           </div>
           <!-- 团队详细介绍（点选后显示） -->
           <div class="card bs-team-intro" id="bs-team-intro" hidden></div>
+          <div class="multimodal-controls" id="bs-multimodal-controls" role="group" aria-label="团队多模态输入开关"></div>
           <!-- 启动面板 -->
           <div class="card bs-setup" id="bs-setup" style="max-width:760px" hidden>
             <div class="section-t" style="margin-top:0" id="bs-setup-title">发起一场头脑风暴</div>
             <div class="field">
               <label>科研议题</label>
               <textarea class="input" id="bs-topic" rows="3"
-                placeholder="例：多模态RAG在科研文献综述中的可靠性提升"></textarea>
+                placeholder="例：多模态RAG在科研文献综述中的可靠性提升；也可拖入 / 粘贴图片"></textarea>
             </div>
             <div class="field">
               <label>参考附件（可选）</label>
@@ -1047,7 +1061,7 @@ html[data-theme="dark"] .bs-retry{color:#f0cd7e;background:rgba(232,178,58,.12);
                 <button class="btn sm" id="bs-attach-btn" type="button"
                         title="上传文件供全体角色研读（txt/md/pdf/docx，可多选）">+ 附件</button>
                 <input type="file" id="bs-file" multiple accept=".txt,.md,.pdf,.docx" hidden>
-                <span class="hint" style="font-size:12px;color:var(--muted)">单文件 ≤20MB；解析为纯文本后拼进议题，供各角色调研时引用</span>
+                <span class="hint" style="font-size:12px;color:var(--muted)">单文件 ≤20MiB，每场最多 8 个；文档解析为文本，已启用的媒体供各角色读取</span>
               </div>
               <div id="bs-attach-bar" style="margin-top:8px"></div>
             </div>
@@ -1259,7 +1273,8 @@ const state = {
   perKbK: 3, totalK: 5,      // 检索数量：每库几条 / 合并后总共几条
   temperature: 0.3,          // 生成温度（0~2，默认 0.3）
   parentGroups: 3,           // 聚合返回：父块名额（0=关闭）
-  pendingFiles: [],          // 待发送附件：{name, status: uploading|ok|err, file_id?, error?}
+  pendingFiles: [],          // 待发送附件：{name,kind,mime_type,status: uploading|ok|err,file_id?,error?}
+  multimodal: { image: false, audio: false, video: false }, // 按用户保存；请求同时控制历史媒体
 };
 
 const theme = {
@@ -1620,6 +1635,7 @@ async function submitAuth() {
 async function boot() {
   const me = await api("/api/v1/auth/me");
   state.user = me;
+  resetMultimodalInputs(me.id);
   $("#user-name").textContent = me.username;
   $("#user-role").textContent = me.role === "admin" ? "管理员" : "用户 · " + shortId(me.id);
   $("#auth-view").hidden = true; $("#app").hidden = false;
@@ -1645,6 +1661,7 @@ async function boot() {
 }
 
 function logout() {
+  resetMultimodalInputs(null);
   store.token = null; state.user = null;
   location.reload();
 }
@@ -2204,7 +2221,7 @@ function msgHTML(m, i, isLast) {
   if (m.role === "user") {
     const filesHTML = (m.files && m.files.length)
       ? `<div class="msg-files">${m.files.map(f =>
-          `<span class="att-chip" title="已发给模型阅读">📄 ${esc(f.name)}</span>`).join("")}</div>`
+          `<span class="att-chip" title="已发送的${({image:"图片",audio:"音频",video:"视频"})[f.kind] || "文档"}附件">${({image:"🖼",audio:"♫",video:"▶"})[f.kind] || "📄"} ${esc(f.name)}</span>`).join("")}</div>`
       : "";
     return `<div class="msg user"><div class="row">
       <div class="bubble-wrap"><div class="bubble">${filesHTML}${esc(m.content)}</div>${actions}</div>
@@ -2266,49 +2283,244 @@ function patchLastMsg(msg) {
   });
 }
 
-/* ---------------- 对话附件：上传解析 → 暂存 file_id → 随消息发送 ---------------- */
+/* ---------------- 多模态输入：开关 / 文件分类 / 上传与发送校验 ---------------- */
+const MEDIA_INPUTS = {
+  image: { label: "图片", accept: ".jpg,.jpeg,.png,.webp,.gif", icon: "🖼" },
+  audio: { label: "音频", accept: ".mp3,.wav,.m4a,.aac,.ogg,.flac,.webm", icon: "♫" },
+  video: { label: "视频", accept: ".mp4,.webm,.mov,.mkv,.avi", icon: "▶" },
+};
+const DOCUMENT_ACCEPT = ".txt,.md,.pdf,.docx";
+
+function multimodalInputOptions() {
+  return { image: state.multimodal?.image === true,
+           audio: state.multimodal?.audio === true,
+           video: state.multimodal?.video === true };
+}
+
+function resetMultimodalInputs(userId) {
+  let saved = {};
+  if (userId) {
+    try { saved = JSON.parse(localStorage.getItem("ra.multimodal." + userId) || "{}"); }
+    catch { /* 损坏的偏好按全部关闭处理 */ }
+  }
+  state.multimodal = { image: saved?.image === true, audio: saved?.audio === true,
+                       video: saved?.video === true };
+  // 不让上一位用户的临时 file_id 或异步上传结果进入新账户。
+  state.pendingFiles = []; state.bsFiles = [];
+  renderMultimodalInputs(); renderAttachBar(); bsRenderFiles();
+}
+
+function renderMultimodalInputs() {
+  const options = multimodalInputOptions();
+  for (const id of ["chat", "bs"]) {
+    const box = $("#" + id + "-multimodal-controls");
+    if (box) {
+      box.innerHTML = '<span>多模态输入</span>' + Object.entries(MEDIA_INPUTS).map(([kind, meta]) =>
+        `<label><input type="checkbox" data-mm-kind="${kind}"${options[kind] ? " checked" : ""}>${meta.label}</label>`
+      ).join("") + '<span class="hint">文档始终可用；媒体默认关闭，启用后需模型支持对应输入。音视频 ≤120 秒；GIF 读取首帧，视频读取画面；声音请另传音频。开关也约束历史媒体；本轮生成开始后修改将在下一次请求生效。</span>';
+      $$("[data-mm-kind]", box).forEach(cb => cb.onchange = () => {
+        state.multimodal[cb.dataset.mmKind] = cb.checked;
+        if (state.user?.id) localStorage.setItem("ra.multimodal." + state.user.id, JSON.stringify(multimodalInputOptions()));
+        renderMultimodalInputs(); renderAttachBar(); bsRenderFiles();
+      });
+    }
+    const picker = $(id === "chat" ? "#chat-file" : "#bs-file");
+    if (picker) picker.accept = [DOCUMENT_ACCEPT,
+      ...Object.entries(MEDIA_INPUTS).filter(([kind]) => options[kind]).map(([, meta]) => meta.accept)
+    ].join(",");
+    const button = $(id === "chat" ? "#attach-btn" : "#bs-attach-btn");
+    if (button) button.title = "上传文档或已启用的媒体（单文件 ≤20MiB，每轮最多 8 个附件）";
+  }
+}
+
+function inputFileKind(file) {
+  if (file.kind === "text" || MEDIA_INPUTS[file.kind]) return file.kind;
+  const name = String(file.name || file.filename || "").toLowerCase();
+  const ext = name.includes(".") ? name.split(".").pop() : "";
+  const mime = String(file.type || file.mime_type || "").toLowerCase().split(";")[0].trim();
+  if (["txt", "md", "pdf", "docx"].includes(ext)) return "text";
+  if (["jpg", "jpeg", "png", "webp", "gif"].includes(ext)) return "image";
+  // WebM 可仅含音频；浏览器给出 audio/webm 时按音频，内容最终由后端验证。
+  if (ext === "webm") return mime.startsWith("audio/") ? "audio" : "video";
+  if (["mp3", "wav", "m4a", "aac", "ogg", "flac"].includes(ext)) return "audio";
+  if (["mp4", "mov", "mkv", "avi"].includes(ext)) return "video";
+  return "unknown";
+}
+
+function attachmentDisabled(file) {
+  const kind = file.kind || "text"; // 旧文档元信息没有 kind。
+  return kind !== "text" && (!MEDIA_INPUTS[kind] || state.multimodal?.[kind] !== true);
+}
+
+function attachmentChip(file, index, attr) {
+  const blocked = attachmentDisabled(file);
+  const cls = blocked ? "blocked" : file.status === "ok" ? "ok" : file.status === "err" ? "err" : "";
+  const mark = blocked ? "⊘" : file.status === "ok" ? "✓" : file.status === "err" ? "✕" : "…";
+  const type = MEDIA_INPUTS[file.kind]?.label || (file.kind === "unknown" ? "未知类型" : "文档");
+  const suffix = blocked && MEDIA_INPUTS[file.kind] ? "（已关闭）" : "";
+  return `<span class="att-chip ${cls}" title="${esc(file.error || type + "：" + file.name + suffix)}">${mark} ${esc(type)} · ${esc(file.name)}${suffix}<span class="x" ${attr}="${index}" title="移除" role="button" tabindex="0" aria-label="移除附件 ${esc(file.name)}">✕</span></span>`;
+}
+
+function validatePendingAttachments(files) {
+  if (files.length > 8) { toast("每轮最多 8 个附件，请先移除多余附件", "err"); return false; }
+  if (files.some(f => f.status === "uploading")) {
+    toast("附件还在上传或解析中，稍候再发送", "err"); return false;
+  }
+  const disabled = files.filter(attachmentDisabled);
+  if (disabled.length) {
+    toast("附件的输入形式已关闭或不受支持，请启用或移除：" + disabled.map(f => f.name).join("、"), "err"); return false;
+  }
+  const failed = files.filter(f => f.status !== "ok" || !f.file_id);
+  if (failed.length) {
+    toast("有附件上传失败，请移除后重新上传：" + failed.map(f => f.name).join("、"), "err"); return false;
+  }
+  return true;
+}
+
+async function uploadConversationFiles(fileList, key, render) {
+  const selected = [...fileList];
+  if (!selected.length) return;
+  const queue = state[key] || (state[key] = []);
+  if (queue.length + selected.length > 8) {
+    toast("本次未添加附件：每轮最多 8 个，请减少选择或移除已有附件后重试", "err"); return;
+  }
+  const owner = state.user?.id, token = store.token;
+  const fresh = selected.map(file => {
+    const kind = inputFileKind(file);
+    const error = kind === "unknown" ? "不支持此文件类型，请选择文档或已启用的媒体格式"
+      : kind !== "text" && state.multimodal?.[kind] !== true ? (MEDIA_INPUTS[kind].label + "输入已关闭，请启用后重新上传")
+      : file.size > 20 * 1024 * 1024 ? "单文件不能超过 20MiB" : null;
+    return { name: file.name, kind, mime_type: file.type || "", size_bytes: file.size,
+             status: error ? "err" : "uploading", ...(error ? { error } : {}) };
+  });
+  queue.push(...fresh); render();
+  const accepted = fresh.map((item, i) => ({ item, file: selected[i] })).filter(({ item }) => item.status === "uploading");
+  if (fresh.some(item => item.status === "err")) toast("部分附件未上传，请查看附件错误提示；移除或重新选择后再发送", "err");
+  if (!accepted.length) return;
+  const current = () => state.user?.id === owner && store.token === token && state[key] === queue;
+  try {
+    const fd = new FormData();
+    accepted.forEach(({ file }) => fd.append("files", file, file.name));
+    const r = await api("/api/v1/chat/files", { method: "POST", body: fd });
+    if (!current()) return;
+    const results = Array.isArray(r.files) ? r.files : [];
+    accepted.forEach(({ item }, i) => {
+      const res = results[i] || {};
+      const kind = res.kind || item.kind;
+      if (res.file_id && (kind === "text" || MEDIA_INPUTS[kind])) {
+        Object.assign(item, { status: "ok", file_id: res.file_id, kind,
+          name: res.filename || item.name, mime_type: res.mime_type || item.mime_type,
+          size_bytes: res.size_bytes ?? item.size_bytes });
+        delete item.error;
+      } else { item.status = "err"; item.error = res.error || "上传响应不完整或文件类型不受支持，请重试"; }
+    });
+  } catch (e) {
+    if (!current()) return;
+    accepted.forEach(({ item }) => { item.status = "err"; item.error = e.message; });
+    toast("附件上传失败：" + e.message, "err");
+  }
+  if (current()) render();
+}
+
+/* ---------------- 对话附件：上传 → 暂存 file_id → 随消息发送 ---------------- */
 function renderAttachBar() {
-  $("#attach-bar").innerHTML = state.pendingFiles.map((f, i) => {
-    const cls = f.status === "ok" ? "ok" : f.status === "err" ? "err" : "";
-    const mark = f.status === "ok" ? "✓" : f.status === "err" ? "✕" : "…";
-    return `<span class="att-chip ${cls}" title="${esc(f.error || f.name)}">${mark} ${esc(f.name)}<span class="x" data-att="${i}" title="移除">✕</span></span>`;
-  }).join("");
-  $$("#attach-bar [data-att]").forEach(el => el.onclick = () => {
-    state.pendingFiles.splice(+el.dataset.att, 1);
-    renderAttachBar();
+  $("#attach-bar").innerHTML = state.pendingFiles.map((f, i) => attachmentChip(f, i, "data-att")).join("");
+  $$("#attach-bar [data-att]").forEach(el => {
+    el.onclick = () => { state.pendingFiles.splice(+el.dataset.att, 1); renderAttachBar(); };
+    el.onkeydown = event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); el.onclick(); } };
   });
 }
 
 async function uploadChatFiles(fileList) {
-  const fresh = [...fileList].map(f => ({ name: f.name, status: "uploading" }));
-  state.pendingFiles.push(...fresh);
-  renderAttachBar();
-  try {
-    const fd = new FormData();
-    [...fileList].forEach(f => fd.append("files", f, f.name));
-    // 后端按上传顺序逐文件返回：成功含 file_id，失败含 error
-    const r = await api("/api/v1/chat/files", { method: "POST", body: fd });
-    (r.files || []).forEach((res, i) => {
-      const item = fresh[i];
-      if (!item) return;
-      if (res.file_id) { item.status = "ok"; item.file_id = res.file_id; }
-      else { item.status = "err"; item.error = res.error || "解析失败"; }
-    });
-  } catch (e) {
-    fresh.forEach(f => { f.status = "err"; f.error = e.message; });
-    toast("附件上传失败：" + e.message, "err");
+  return uploadConversationFiles(fileList, "pendingFiles", renderAttachBar);
+}
+
+/* 图片拖放 / 剪贴板只取得 File，继续走同一个上传与模态校验入口。 */
+function transferHasFiles(transfer) {
+  return !!transfer && (Array.from(transfer.types || []).includes("Files")
+    || Array.from(transfer.items || []).some(item => item.kind === "file")
+    || !!transfer.files?.length);
+}
+
+function transferFiles(transfer) {
+  // items 和 files 通常是同一批文件的两种视图，不能合并后重复上传。
+  const items = Array.from(transfer?.items || []).filter(item => item.kind === "file");
+  const files = items.map(item => item.getAsFile()).filter(Boolean);
+  return files.length ? files : Array.from(transfer?.files || []);
+}
+
+function isTransferredImage(file) {
+  return file.type?.startsWith("image/") || inputFileKind(file) === "image";
+}
+
+function nameClipboardImage(file, index) {
+  const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" }[file.type];
+  if (!ext || /\.[^.]+$/.test(file.name || "")) return file;
+  return new File([file], `clipboard-${Date.now()}-${index + 1}.${ext}`,
+                  { type: file.type, lastModified: file.lastModified });
+}
+
+function uploadTransferredFiles(files, upload) {
+  if (!files.length || !state.user?.id) return;
+  if (files.every(isTransferredImage) && state.multimodal?.image !== true) {
+    toast("图片输入已关闭，请先勾选「图片」后再拖入或粘贴", "err"); return;
   }
-  renderAttachBar();
+  upload(files);
+}
+
+function bindAttachmentInput(zoneSelector, inputSelector, upload) {
+  const zone = $(zoneSelector), input = $(inputSelector);
+  let depth = 0;
+  const reset = () => { depth = 0; zone.classList.remove("file-drop-active"); };
+  zone.addEventListener("dragenter", event => {
+    if (!state.user?.id || !transferHasFiles(event.dataTransfer)) return;
+    event.preventDefault(); depth++;
+    zone.classList.add("file-drop-active");
+  });
+  zone.addEventListener("dragover", event => {
+    if (!state.user?.id || !transferHasFiles(event.dataTransfer)) return;
+    event.preventDefault(); event.dataTransfer.dropEffect = "copy";
+  });
+  zone.addEventListener("dragleave", () => {
+    depth = Math.max(0, depth - 1);
+    if (!depth) reset();
+  });
+  zone.addEventListener("drop", event => {
+    reset();
+    if (!transferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    uploadTransferredFiles(transferFiles(event.dataTransfer), upload);
+    input.focus();
+  });
+  input.addEventListener("paste", event => {
+    const images = transferFiles(event.clipboardData).filter(isTransferredImage);
+    if (!images.length) return; // 纯文本粘贴与输入法编辑保持浏览器默认行为。
+    // 图文混合时保留原生文字粘贴（含光标、选区、撤销），同时添加图片。
+    if (!event.clipboardData.getData("text/plain")) event.preventDefault();
+    uploadTransferredFiles(images.map(nameClipboardImage), upload);
+  });
+  document.addEventListener("drop", reset);
+  document.addEventListener("dragend", reset);
+  document.addEventListener("dragleave", event => {
+    if (event.clientX <= 0 || event.clientY <= 0
+        || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight) reset();
+  });
+  window.addEventListener("blur", reset);
+}
+
+function guardAttachmentNavigation(event) {
+  // 文件落在输入区外时也不让浏览器直接打开文件；文字/链接拖拽不拦截。
+  if (!transferHasFiles(event.dataTransfer) || event.defaultPrevented) return;
+  event.preventDefault();
+  if (event.type === "dragover") event.dataTransfer.dropEffect = "none";
 }
 
 function sendChat() {
   const input = $("#chat-input");
   const text = input.value.trim();
-  const files = state.pendingFiles.filter(f => f.status === "ok");
   if (state.streaming) return;
-  if (state.pendingFiles.some(f => f.status === "uploading")) {
-    toast("附件还在解析中，稍候再发送"); return;
-  }
+  if (!validatePendingAttachments(state.pendingFiles)) return;
+  const files = state.pendingFiles.slice();
   if (!text && !files.length) return;
   ensureNotifyPermission();               // 用户手势内预请求通知授权
   input.value = "";
@@ -2321,16 +2533,22 @@ function sendChat() {
 /* 发送消息：opts.rewind=true 时不追加新用户消息（后端按 checkpoint 最后一条用户消息重新生成） */
 async function sendMessage(text, opts = {}) {
   if (!text.trim() || state.streaming) return;
+  const sendFiles = opts.files || [];                    // 本轮附件（已上传成功的）
+  if (sendFiles.some(f => f.kind && f.kind !== "text" && state.multimodal?.[f.kind] !== true)) {
+    toast("附件的输入形式已关闭，请启用或移除后发送", "err"); return;
+  }
   const streamSid = state.active;          // 流所属会话：期间用户可切换视图，patch/save 按此隔离
   const msgs = getMsgs();
   const sess = state.sessions.find(s => s.id === state.active);
-  const sendFiles = opts.files || [];                    // 本轮附件（已解析成功的）
   let sentForkInit = false;                              // 本轮是否携带分支初始历史（见 finally）
   const body = { session_id: state.active, message: text,
     retrieval_mode: state.retrievalMode || undefined,
     per_kb_k: state.perKbK || undefined, total_k: state.totalK || undefined,
     temperature: state.temperature,
-    parent_groups: state.parentGroups };
+    parent_groups: state.parentGroups,
+    multimodal: { image: state.multimodal?.image === true,
+                  audio: state.multimodal?.audio === true,
+                  video: state.multimodal?.video === true } };
   // 用户改过名的会话：首次服务端登记时用自定义名（后端只在首登写 title）
   if (sess && sess.title && sess.title !== "新会话") body.title = sess.title;
   if (sendFiles.length) body.attachments = sendFiles.map(f => f.file_id);
@@ -2339,7 +2557,7 @@ async function sendMessage(text, opts = {}) {
     body.rewind = true;                       // 消息列表里已去掉旧回复，后端负责回退
   } else {
     msgs.push({ role: "user", content: text,
-      files: sendFiles.map(f => ({ name: f.name })) });
+      files: sendFiles.map(f => ({ name: f.name, kind: f.kind || "text", mime_type: f.mime_type || "" })) });
     if (sess && sess.forked) {
       // 分支会话首次发送：服务端按 fork_from 从源会话 checkpoint 复制完整历史
       // （含附件全文）；history 仅作复制不可用时的纯文本兜底。
@@ -2397,6 +2615,7 @@ async function sendMessage(text, opts = {}) {
     if (!asst.content) asst.content = "出错了：" + e.message;
   } finally {
     asst._streaming = false;
+    if (asst.reasoningState === "thinking") asst.reasoningState = "done";
     if (!asst._done) asst.interrupted = true;   // SSE 未正常收尾（断连/异常）→ 可续写
     state.streaming = false;
     $("#send-btn").disabled = false;
@@ -2512,8 +2731,25 @@ function regenerateLast() {
   sendMessage(prev.content, { rewind: true });
 }
 
+/* 重试只撤回失败尝试已发出的后缀；后端字符数按 Unicode 码点计数。 */
+function trimStreamSuffix(text, chars) {
+  const count = Number(chars);
+  if (!Number.isSafeInteger(count) || count <= 0) return text || "";
+  return Array.from(text || "").slice(0, -count).join("");
+}
+
 function handleChatEvent(ev, asst, stepByTrace) {
   switch (ev.type) {
+    case "stream_reset":
+      if (!ev.token_event || ev.token_event === "token")
+        asst.content = trimStreamSuffix(asst.content, ev.token_chars);
+      if (!ev.reasoning_event || ev.reasoning_event === "reasoning") {
+        asst.reasoning = trimStreamSuffix(asst.reasoning, ev.reasoning_chars);
+        if (!asst.reasoning) asst.reasoningState = "discarded";
+      } else if (ev.reasoning_event === "routing_reasoning") {
+        asst.routeThinking = trimStreamSuffix(asst.routeThinking, ev.reasoning_chars);
+      }
+      break;
     case "token":
       asst.content += ev.content || "";
       resolveRetrySteps(asst);          // 有内容流回 = 重试成功，倒计时步骤收尾
@@ -4113,6 +4349,9 @@ $("#chat-input").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 160) + "px";
 });
+bindAttachmentInput("#composer", "#chat-input", uploadChatFiles);
+document.addEventListener("dragover", guardAttachmentNavigation);
+document.addEventListener("drop", guardAttachmentNavigation);
 $("#kb-create-btn").onclick = openCreateKB;
 $("#kb-refresh-btn").onclick = loadKBs;
 $("#llm-fetch-models").onclick = fetchLLMModels;
@@ -4284,43 +4523,19 @@ state.bs = {
   evidence: [], tools: [],
   replayed: false,                          // 当前流内容来自历史回放（只读）
 };
-state.bsFiles = [];   // 发起面板待发附件（{name,status,file_id?}），随发起消耗
+state.bsFiles = [];   // 三团队共用待发附件（{name,kind,mime_type,status,file_id?}），随发起消耗
 
-/* ---------- 发起面板附件：复用主链路 /chat/files 上传解析 ----------
-   后端把文本暂存 _CHAT_FILES 返回 file_id；发起时随 body.attachments
-   传入，由后端展开为 [附件：名] 块拼进议题。样式复用 chat 的 .att-chip。 */
+/* ---------- 三团队附件：复用 /chat/files，正文与媒体引用由后端按开关解析 ---------- */
 function bsRenderFiles() {
-  $("#bs-attach-bar").innerHTML = (state.bsFiles || []).map((f, i) => {
-    const cls = f.status === "ok" ? "ok" : f.status === "err" ? "err" : "";
-    const mark = f.status === "ok" ? "✓" : f.status === "err" ? "✕" : "…";
-    return `<span class="att-chip ${cls}" title="${esc(f.error || f.name)}">${mark} ${esc(f.name)}<span class="x" data-bsf="${i}" title="移除">✕</span></span>`;
-  }).join("");
-  $$("#bs-attach-bar [data-bsf]").forEach(el => el.onclick = () => {
-    state.bsFiles.splice(+el.dataset.bsf, 1);
-    bsRenderFiles();
+  $("#bs-attach-bar").innerHTML = (state.bsFiles || []).map((f, i) => attachmentChip(f, i, "data-bsf")).join("");
+  $$("#bs-attach-bar [data-bsf]").forEach(el => {
+    el.onclick = () => { state.bsFiles.splice(+el.dataset.bsf, 1); bsRenderFiles(); };
+    el.onkeydown = event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); el.onclick(); } };
   });
 }
 
 async function uploadBsFiles(fileList) {
-  const fresh = [...fileList].map(f => ({ name: f.name, status: "uploading" }));
-  state.bsFiles.push(...fresh);
-  bsRenderFiles();
-  try {
-    const fd = new FormData();
-    [...fileList].forEach(f => fd.append("files", f, f.name));
-    // 后端按上传顺序逐文件返回：成功含 file_id，失败含 error
-    const r = await api("/api/v1/chat/files", { method: "POST", body: fd });
-    (r.files || []).forEach((res, i) => {
-      const item = fresh[i];
-      if (!item) return;
-      if (res.file_id) { item.status = "ok"; item.file_id = res.file_id; }
-      else { item.status = "err"; item.error = res.error || "解析失败"; }
-    });
-  } catch (e) {
-    fresh.forEach(f => { f.status = "err"; f.error = e.message; });
-    toast("附件上传失败：" + e.message, "err");
-  }
-  bsRenderFiles();
+  return uploadConversationFiles(fileList, "bsFiles", bsRenderFiles);
 }
 
 /* ---------- 启动面板 ---------- */
@@ -4405,8 +4620,7 @@ async function bsStart() {
   if (state.bs.running) return;
   const topic = $("#bs-topic").value.trim();
   if (!topic) return toast("请先输入科研议题", "err");
-  if ((state.bsFiles || []).some(f => f.status === "uploading"))
-    return toast("附件还在解析中，稍候再开始", "err");
+  if (!validatePendingAttachments(state.bsFiles || [])) return;
   const ROLES = state.bs.team === "seminar" ? SEM_ROLES
               : state.bs.team === "deep_research" ? DR_ROLES : BS_ROLES;
   const roles = $$("#bs-roles input[data-bs-role]:checked").map(cb => {
@@ -4432,6 +4646,7 @@ async function bsStart() {
 /* 发起与重跑共用的启动器：重跑传已有 session_id——后端检测到同 session
    重跑会自动清旧 checkpoint、复位会话状态（api 层 run_graph 的重跑分支） */
 async function bsLaunch(topic, roles, sid, maxRounds, tokenBudget) {
+  if (!validatePendingAttachments(state.bsFiles || [])) return;
   ensureNotifyPermission();               // 长任务开场：预请求通知授权（用户手势内）
   bsPinned = true;
   state.bs = { running: true, sid, abort: new AbortController(),
@@ -4456,12 +4671,12 @@ async function bsLaunch(topic, roles, sid, maxRounds, tokenBudget) {
   bsRenderTopic(topic);              // 对话区顶部展示本场议题（用户第一个提问）
   bsStatus("主持人解析议题中…");
 
-  const atts = (state.bsFiles || []).filter(f => f.status === "ok")
-                                 .map(f => f.file_id);
+  const atts = (state.bsFiles || []).map(f => f.file_id);
   state.bsFiles = [];                      // 附件随本场消耗（file_id 为服务端进程内暂存）
   bsRenderFiles();
-  const body = { session_id: sid, topic, token_budget: tokenBudget, roles };
-  if (atts.length) body.attachments = atts;   // 后端展开为 [附件：名] 块拼进议题
+  const body = { session_id: sid, topic, token_budget: tokenBudget, roles,
+                 multimodal: multimodalInputOptions() };
+  if (atts.length) body.attachments = atts;
   if (state.bs.team === "debate") body.max_rounds = maxRounds;   // 辩论轮数：争鸣社专属（溯源社章节数由后端配置决定）
   const endpoint = bsApi("/stream");
   try {
@@ -4558,6 +4773,18 @@ const bsLiveOf = agent => (state.bs.live || {})[agent];
 function bsHandleEvent(ev) {
   const suffix = ev.type.replace(/^(bs_|sem_|dr_)/, "");   // bs_/sem_/dr_ 三前缀统一分发
   switch (suffix) {
+    case "stream_reset": {
+      const item = bsLiveOf(ev.agent);
+      if (item && item.streaming) {
+        if (!ev.token_event || /^(bs_|sem_|dr_)?token$/.test(ev.token_event))
+          item.content = trimStreamSuffix(item.content, ev.token_chars);
+        if (!ev.reasoning_event || /^(bs_|sem_|dr_)?reasoning$/.test(ev.reasoning_event))
+          item.reasoning = trimStreamSuffix(item.reasoning, ev.reasoning_chars);
+        item.resetPending = true;
+        bsScheduleFlush(item);
+      }
+      break;
+    }
     case "prepare":
       if (ev.topic_restatement !== undefined) {
         bsStatus(`议题已解析（${ev.directive_count || 0} 份差异化调研指令），角色并行调研中…`);
@@ -4902,11 +5129,13 @@ function bsScheduleFlush(item) {
   if (item._raf) return;
   item._raf = requestAnimationFrame(() => {
     item._raf = 0;
-    if (item.content) item.bodyEl.innerHTML = md(item.content);
-    if (item.reasoning) {
+    if (item.content || item.resetPending) item.bodyEl.innerHTML = md(item.content);
+    if (item.reasoning || item.resetPending) {
       item.reasonEl.textContent = item.reasoning;
+      item.reasonWrap.hidden = !item.reasoning;
       item.reasonEl.scrollTop = item.reasonEl.scrollHeight;
     }
+    item.resetPending = false;
     bsScroll();
   });
 }
@@ -5328,6 +5557,23 @@ function bsQAHint() {
     : "点名角色（如「创新者」「批评者」「方法论专家」「实践者」「撰稿人」）由该角色作答；未点名由主持人回答";
 }
 
+function bsHandleAskEvent(ev, turn) {
+  if (ev.type === "ask_start") {
+    turn.agent = ev.agent; turn.model = ev.model || "";
+    bsRenderQA();
+  } else if (ev.type === "stream_reset") {
+    if (!ev.token_event || ev.token_event === "token")
+      turn.a = trimStreamSuffix(turn.a, ev.token_chars);
+    bsFlushQA(turn);
+  } else if (ev.type === "token") {
+    turn.a += ev.content;
+    bsFlushQA(turn);
+  } else if (ev.type === "error") {
+    turn.a = "出错了：" + ev.error;
+    bsFlushQA(turn);
+  }
+}
+
 async function bsAsk() {
   if (state.bs.running) return toast("场次进行中，结束后再追问", "err");
   const q = $("#bs-qa-input").value.trim();
@@ -5343,7 +5589,7 @@ async function bsAsk() {
     const base = bsApi("");
     const res = await fetch(store.base +
       `${base}/${encodeURIComponent(state.bs.sid)}/ask`, {
-      method: "POST", headers, body: JSON.stringify({ question: q }) });
+      method: "POST", headers, body: JSON.stringify({ question: q, multimodal: multimodalInputOptions() }) });
     if (!res.ok) throw new Error("HTTP " + res.status + "：" + await res.text());
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -5359,16 +5605,7 @@ async function bsAsk() {
           if (!line.startsWith("data: ")) continue;
           let ev;
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-          if (ev.type === "ask_start") {
-            turn.agent = ev.agent; turn.model = ev.model || "";
-            bsRenderQA();
-          } else if (ev.type === "token") {
-            turn.a += ev.content;
-            bsFlushQA(turn);
-          } else if (ev.type === "error") {
-            turn.a = "出错了：" + ev.error;
-            bsFlushQA(turn);
-          }
+          bsHandleAskEvent(ev, turn);
         }
       }
     }
@@ -5400,6 +5637,7 @@ $("#bs-file").onchange = function () {
   if (this.files.length) uploadBsFiles(this.files);
   this.value = "";                     // 清空选择，允许再次上传同名文件
 };
+bindAttachmentInput("#bs-setup", "#bs-topic", uploadBsFiles);
 $("#bs-plan-copy").onclick = () => copyText(state.bs.plan || "", "方案已复制");
 $("#bs-plan-export").onclick = () => bsDownload(
   "brainstorm-" + (state.bs.sid || "proposal") + ".md", state.bs.plan || "");
@@ -5457,7 +5695,7 @@ $("#bs-rerun-writer").onclick = async () => {
   bsSyncRerun();
   bsStatus("执笔人重写中：沿用本场中间产物，仅重新成稿…");
   try {
-    await bsStream(sid, bsApi("/rerun-writer"), { session_id: sid });
+    await bsStream(sid, bsApi("/rerun-writer"), { session_id: sid, multimodal: multimodalInputOptions() });
     bsStatus("执笔人重跑完成：成稿已更新", "ok");
   } catch (e) {
     toast("执笔人重跑失败：" + e.message, "err");

@@ -110,24 +110,21 @@ def test_retries_exhausted_raises():
 
 
 # ---------- astream ----------
-def test_astream_retries_whole_stream():
-    """流式中断：整轮重试，第二次完整输出。
-
-    已 yield 给调用方的半截内容无法收回（异步生成器语义），
-    前端会短暂看到重复开头——这是整轮重试的预期代价。
-    """
+def test_astream_raises_without_silently_appending_a_retry():
+    """流失败原样上抛；轮次协调层撤回旧输出后才能重试。"""
     flaky = FlakyModel(httpx.RemoteProtocolError("broken"), fail_times=1)
     model = _wrap(flaky)
 
+    chunks = []
+
     async def collect():
-        chunks = []
         async for c in model.astream([HumanMessage(content="hi")]):
             chunks.append(str(c.content))
-        return chunks
 
-    chunks = asyncio.run(collect())
-    assert chunks == ["半截内容", "ok"]         # 首次半截 + 重试后的完整结果
-    assert flaky.calls == 2                     # 重试确实发生
+    with pytest.raises(httpx.RemoteProtocolError, match="broken"):
+        asyncio.run(collect())
+    assert chunks == ["半截内容"]
+    assert flaky.calls == 1                     # wrapper 不拼接跨轮流分片
 
 
 def test_bind_tools_keeps_retry():

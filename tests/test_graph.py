@@ -636,3 +636,93 @@ def test_supervisor_excludes_archive_kbs():
     assert {k.name for k in with_archive} >= {"普通资料库", "辩论式agent纪要"}
     other_team = kb_service.list_queryable_kbs("u1", team="seminar")
     assert {k.name for k in other_team} == {"普通资料库"}   # 别的团队也看不到本场沉淀库
+
+
+def test_supervisor_emits_search_queries():
+    """路由输出 query_zh/query_en：清洗后落 state（retrieve 多路检索用）。"""
+    from app.graph.nodes import supervisor_node
+
+    ctx, _ = _make_ctx(
+        "答案",
+        '{"needs_retrieval": true, "kbs": [{"name": "测试库", "scope": "public"}],'
+        ' "query_zh": "  量子  纠缠  ", "query_en": "quantum entanglement"}')
+    ctx.kb_service.create_kb("测试库", "public", "u1", ["量子纠缠"])
+    state = {"user_id": "u1", "session_id": "sq-1", "temperature": None,
+             "messages": [HumanMessage(content="量子纠缠是什么")]}
+    out = _run(supervisor_node(ctx, state))
+    assert out["needs_retrieval"] is True
+    assert out["search_queries"] == ["量子 纠缠", "quantum entanglement"]
+
+
+def test_supervisor_missing_query_fields_falls_back():
+    """路由没给改写字段（模型漏输出/旧行为）：search_queries 为空，
+    检索侧回退原始 query。"""
+    from app.graph.nodes import supervisor_node
+
+    ctx, _ = _make_ctx(
+        "答案", '{"needs_retrieval": true, "kbs": [{"name": "测试库", "scope": "public"}]}')
+    ctx.kb_service.create_kb("测试库", "public", "u1", ["x"])
+    state = {"user_id": "u1", "session_id": "sq-2", "temperature": None,
+             "messages": [HumanMessage(content="查一下")]}
+    out = _run(supervisor_node(ctx, state))
+    assert out["search_queries"] == []
+
+
+class _StubKbService:
+    """记录检索调用的假库服务：每个查询返回带查询名的唯一命中。"""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def list_kbs(self, uid):
+        from types import SimpleNamespace
+        return [SimpleNamespace(kb_id="kb1", name="库一", scope="public",
+                                description="")]
+
+    def kb_queryable(self, kb, uid):
+        return True
+
+    def search(self, kb_id, query, k, user_id, mode):
+        self.calls.append(query)
+        return [{"id": f"{kb_id}-{query}", "text": f"text-{query}",
+                 "kb_name": "库一", "scope": "public", "score": 1.0}]
+
+
+def _retrieve_state(**extra):
+    state = {"user_id": "u1", "query": "原始问题", "selected_kb_ids": ["kb1"],
+             "parent_groups": 0, "total_k": 5, "per_kb_k": 2,
+             "retrieval_mode": "vector",
+             "messages": [HumanMessage(id="m1", content="原始问题")]}
+    state.update(extra)
+    return state
+
+
+def test_retrieve_multi_query_rrf_fusion():
+    """多查询召回：中/英改写各检一路，查询间 RRF 融合（两路结果都进检索块）。"""
+    from app.graph.nodes import retrieve_node
+
+    ctx, _ = _make_ctx("答案", '{"needs_retrieval": false, "kbs": []}')
+    stub = _StubKbService()
+    ctx.kb_service = stub
+
+    out = _run(retrieve_node(ctx, _retrieve_state(
+        search_queries=["中文改写", "english rewrite"])))
+    assert set(stub.calls) == {"中文改写", "english rewrite"}   # 两路都检索
+    ids = [h["id"] for h in out["retrievals"]]
+    assert "kb1-中文改写" in ids and "kb1-english rewrite" in ids
+    patch = out["messages"][0]
+    assert "text-中文改写" in patch.content
+    assert "text-english rewrite" in patch.content
+
+
+def test_retrieve_falls_back_to_raw_query():
+    """search_queries 为空：回退原始 query 单路检索（与旧行为一致）。"""
+    from app.graph.nodes import retrieve_node
+
+    ctx, _ = _make_ctx("答案", '{"needs_retrieval": false, "kbs": []}')
+    stub = _StubKbService()
+    ctx.kb_service = stub
+
+    out = _run(retrieve_node(ctx, _retrieve_state(search_queries=[])))
+    assert stub.calls == ["原始问题"]
+    assert [h["id"] for h in out["retrievals"]] == ["kb1-原始问题"]

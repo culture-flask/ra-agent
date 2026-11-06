@@ -1,4 +1,4 @@
-"""generate 原生路径推理捕获：双方言优先级与降级行为。
+"""LangChain 流式适配器：双方言推理捕获与降级行为。
 
 覆盖 nodes._native_round 的字段提取约定：
 - reasoning_content 优先（DeepSeek 系方言），命中即不再看 reasoning
@@ -9,7 +9,7 @@ import asyncio
 from types import SimpleNamespace
 
 from app.core.events import clear_event_sink, set_event_sink
-from app.graph.nodes import _native_round
+from app.graph.native_llm import native_round as _native_round
 
 # 与 test_graph 相同的常驻循环约定
 _loop = asyncio.new_event_loop()
@@ -26,6 +26,13 @@ CFG = SimpleNamespace(api_key="k", base_url="http://t/v1", model_id="m")
 class _Stream:
     def __init__(self, chunks):
         self._chunks = chunks
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.close()
 
     def __aiter__(self):
         self._it = iter(self._chunks)
@@ -33,12 +40,26 @@ class _Stream:
 
     async def __anext__(self):
         try:
-            return next(self._it)
+            chunk = next(self._it)
         except StopIteration:
             raise StopAsyncIteration
+        if isinstance(chunk, BaseException):
+            raise chunk
+        return _wire(chunk)
 
     async def close(self):
-        pass
+        self.closed = True
+
+
+def _wire(value):
+    """SDK 传输替身返回原始协议字典，交由真实 ChatOpenAI 转换。"""
+    if isinstance(value, SimpleNamespace):
+        return {key: _wire(item) for key, item in vars(value).items()}
+    if isinstance(value, dict):
+        return {key: _wire(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_wire(item) for item in value]
+    return value
 
 
 def _install_stream(monkeypatch, chunks):
@@ -212,4 +233,56 @@ def test_normal_finish_no_retry(monkeypatch):
 
     assert calls["n"] == 1
     assert resp.content == "完整"
+
+
+def test_real_langchain_conversion_and_callback_keep_reasoning(monkeypatch):
+    """真实 bind_tools/astream/回调链保留网关推理字段，不伪造转换后消息。"""
+    from langchain_core.callbacks import AsyncCallbackHandler
+    from langchain_core.messages import HumanMessage
+
+    from app.abstractions.reasoning import ReasoningChatOpenAI
+
+    received = []
+
+    class Capture(AsyncCallbackHandler):
+        async def on_llm_new_token(self, token, *, chunk=None, **kwargs):
+            received.append((token, dict(chunk.message.additional_kwargs)))
+
+    stream = _Stream([
+        {"choices": [{"index": 0, "delta": {"role": "assistant",
+            "reasoning": [{"text": "模型思考"}]}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"content": "答案"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0,
+            "id": "call-search", "type": "function", "function": {
+                "name": "search", "arguments": '{"q":"论文"}'}}]},
+            "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 2,
+            "total_tokens": 7}},
+    ])
+    calls = _install_multi_streams(monkeypatch, [stream])
+    model = ReasoningChatOpenAI(api_key="k", base_url="http://t/v1", model="m",
+                                temperature=0.3, max_retries=0)
+    bound = model.bind_tools([{"name": "search", "description": "检索",
+                              "parameters": {"type": "object", "properties": {
+                                  "q": {"type": "string"}}}}])
+
+    async def collect():
+        chunks = []
+        async for chunk in bound.astream([HumanMessage(content="研究问题")],
+                                        config={"callbacks": [Capture()],
+                                                "metadata": {"session_id": "wire-test"}}):
+            chunks.append(chunk)
+        return chunks
+
+    chunks = _run(collect())
+    assert calls["n"] == 1 and stream.closed
+    assert any(extra.get("reasoning_content") == "模型思考" for _, extra in received)
+    assert any(token == "答案" for token, _ in received)
+    full = chunks[0]
+    for chunk in chunks[1:]:
+        full += chunk
+    assert full.content == "答案"
+    assert full.tool_calls[0]["name"] == "search"
+    assert full.tool_calls[0]["args"] == {"q": "论文"}
+    assert full.usage_metadata["total_tokens"] == 7
 

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     llm_retry_base_delay: float = 1.0       # 首次重试基础等待秒数，之后 2 倍递增
     llm_context_window: int = 256000        # 上下文窗口兜底值（token）：探测与用户设置均缺失时使用，80% 触发自动压缩
     retrieval_mode: str = "hybrid"          # 检索模式：vector（纯向量）| hybrid（向量+BM25）
+    chunk_method: str = "fixed"             # 切分策略：fixed（定长窗口）| hierarchical（层级递归+上下文头）
     retrieval_per_kb_k: int = 3             # 对话 RAG：每个知识库检索几条
     retrieval_total_k: int = 5              # 对话 RAG：所有库合并后总共取几条
     retrieval_parent_groups: int = 3        # 聚合返回：展开的父块数（0=关闭，全返回小 chunk）
@@ -126,6 +127,7 @@ class Settings(BaseSettings):
                 "llm_retry_base_delay": raw.get("llm", {}).get("retry", {}).get("base_delay", 1.0),
                 "llm_context_window": raw.get("llm", {}).get("context_window", 256000),
                 "retrieval_mode": raw.get("retrieval", {}).get("mode", "hybrid"),
+                "chunk_method": raw.get("chunking", {}).get("method", "fixed"),
                 "retrieval_per_kb_k": raw.get("retrieval", {}).get("per_kb_k", 3),
                 "retrieval_total_k": raw.get("retrieval", {}).get("total_k", 5),
                 "retrieval_parent_groups": raw.get("retrieval", {}).get("parent_groups", 3),

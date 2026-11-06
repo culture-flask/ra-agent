@@ -17,6 +17,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.chat import _ATT_MARK, _CHAT_FILES
+from app.api.input_media import (
+    MultimodalOptions, ensure_checkpoint_owner, prepare_attachments, reserve_session,
+)
+from app.core.message_content import hydrate_messages
 from app.core.cancel import clear_stop, request_stop
 from app.core.db import SessionLocal
 from app.core.deps import get_current_user
@@ -26,6 +30,7 @@ from app.core.team_ctx import set_agent_team
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.graph.agent_runtime import effective_cfg as _effective_cfg, role_cfg as _role_cfg
+from app.graph.agent_runtime import role_run_config
 from app.graph.native_llm import native_round
 from app.graph.deep_research import (DR_ROLE_IDS, make_write_frame_node,
                                      publish_node)
@@ -40,13 +45,14 @@ router = APIRouter(prefix="/api/v1/deep-research", tags=["deep_research"],
 
 
 class DeepResearchRequest(BaseModel):
-    session_id: str = Field(min_length=1)     # 建议 dr_ 前缀
+    session_id: str = Field(min_length=1, max_length=64)     # 建议 dr_ 前缀
     topic: str = Field(min_length=1, max_length=8000)
     mode: str = "full"                        # full（含审稿闭环）| quick（跳过审稿）
     recency: str = "两年"                      # 时效窗口，注入 scout 提示词
     token_budget: int | None = Field(None, ge=10_000, le=100_000_000)
     roles: list[dict] | None = None
-    attachments: list[str] = []
+    attachments: list[str] = Field(default_factory=list, max_length=8)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
 
 
 def _sse(payload: dict) -> str:
@@ -85,16 +91,12 @@ def _resolve_roles(raw: list[dict] | None, settings) -> list[dict]:
 
 
 def _initial_state(req: DeepResearchRequest, user_id: str, settings,
-                   roles: list[dict]) -> dict:
-    topic = req.topic
-    if req.attachments:
-        blocks = [f"[附件：{att['filename']}]\n{att['text']}"
-                  for fid in req.attachments
-                  if (att := _CHAT_FILES.get(fid))]
-        if blocks:
-            topic = topic + _ATT_MARK + "\n\n".join(blocks)
+                   roles: list[dict], media_service=None) -> dict:
+    topic, media = prepare_attachments(req.topic, req.attachments, user_id,
+        req.multimodal, _CHAT_FILES, media_service)
     mode = "quick" if str(req.mode).lower() == "quick" else "full"
     return {
+        "input_media": media, "multimodal": req.multimodal.model_dump(),
         "user_id": user_id, "session_id": req.session_id, "topic": topic,
         "roles": roles, "mode": mode, "recency": str(req.recency)[:20],
         "token_budget": int(req.token_budget
@@ -112,18 +114,8 @@ def _initial_state(req: DeepResearchRequest, user_id: str, settings,
 
 def _register_session(user_id: str, req: DeepResearchRequest,
                       roles: list) -> None:
-    with SessionLocal() as db:
-        row = db.get(BrainstormSession, req.session_id)
-        if row is None:
-            db.add(BrainstormSession(
-                session_id=req.session_id, user_id=user_id,
-                topic=req.topic[:2000], status="running",
-                roles=roles, team="deep_research"))       # ← 差异点
-        else:
-            row.status = "running"
-            row.final_proposal = ""
-            row.updated_at = utcnow()
-        db.commit()
+    reserve_session(user_id, req.session_id, team="deep_research",
+                    topic=req.topic, roles=roles)
 
 
 def _finish_session(user_id: str, session_id: str, result: dict) -> None:
@@ -198,10 +190,19 @@ async def dr_stream(req: DeepResearchRequest, request: Request,
     set_agent_team("deep_research")   # 团队身份：只检索普通库 + 本队沉淀库
     uid = user.id
     graph = request.app.state.deep_research_graph
+    await ensure_checkpoint_owner(
+        graph, {"configurable": {"thread_id": req.session_id}}, uid)
     settings = request.app.state.settings
+    roles = _resolve_roles(req.roles, settings)
+    initial = await run_in_threadpool(_initial_state, req, uid, settings, roles,
+                                     request.app.state.multimodal_service)
+    await run_in_threadpool(_register_session, uid, req, roles)
     sink: asyncio.Queue = asyncio.Queue()
     # 章节循环 × 审稿循环，递归深度高于前两支团队，上限相应放宽
     config = {"configurable": {"thread_id": req.session_id},
+              "tags": ["team:deep_research"],
+              "metadata": {"team": "deep_research", "user_id": uid,
+                           "session_id": req.session_id},
               "recursion_limit": 400}
 
     async def run_graph():
@@ -213,10 +214,7 @@ async def dr_stream(req: DeepResearchRequest, request: Request,
             except Exception:
                 pass
             agent_trace.delete(req.session_id)      # 重跑：旧轨迹档案一并清掉
-            roles = _resolve_roles(req.roles, settings)
-            await run_in_threadpool(_register_session, uid, req, roles)
-            result = await graph.ainvoke(
-                _initial_state(req, uid, settings, roles), config=config)
+            result = await graph.ainvoke(initial, config=config)
             await run_in_threadpool(_finish_session, uid, req.session_id, result)
             if not result.get("stopped"):
                 await run_in_threadpool(_archive_report_to_kb, uid,
@@ -259,7 +257,8 @@ async def dr_stream(req: DeepResearchRequest, request: Request,
 
 
 class StopRequest(BaseModel):
-    session_id: str
+    session_id: str = Field(min_length=1, max_length=64)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
 
 
 @router.post("/stop")
@@ -299,6 +298,8 @@ async def session_detail(session_id: str, request: Request,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not session owner")
+    if row.team != "deep_research":
+        raise HTTPException(status_code=404, detail="not found in this team")
 
     graph = request.app.state.deep_research_graph
     snap = await aget_state_retry(graph, {"configurable": {"thread_id": session_id}})
@@ -329,6 +330,7 @@ async def session_detail(session_id: str, request: Request,
 
 class DRAskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=8000)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
 
 
 def _pick_agent(question: str) -> str:
@@ -360,6 +362,8 @@ async def dr_ask(session_id: str, req: DRAskRequest,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not session owner")
+    if row.team != "deep_research":
+        raise HTTPException(status_code=404, detail="not found in this team")
 
     graph = request.app.state.deep_research_graph
     ctx = request.app.state.workflow_ctx
@@ -374,6 +378,10 @@ async def dr_ask(session_id: str, req: DRAskRequest,
     report = values.get("final_report") or row.final_proposal
 
     agent_id = _pick_agent(req.question)
+    config = role_run_config(
+        {"configurable": {"thread_id": session_id}},
+        {"session_id": session_id, "user_id": user.id},
+        agent_id, "dr_", phase="ask")
     from app.graph.prompts.deep_research import CHAIR_QA_SYSTEM, ROLE_ORIENTATION
     if agent_id == "chair":
         cfg = _effective_cfg(ctx, user.id)
@@ -399,6 +407,11 @@ async def dr_ask(session_id: str, req: DRAskRequest,
                f"成稿（节选）：{str(report)[:2000]}")
     temperature = 0.3
     msgs = [SystemMessage(content=system), HumanMessage(content=req.question)]
+    media = values.get("input_media") or []
+    if media:
+        msgs[-1] = HumanMessage(content=[{"type": "text", "text": req.question}, *media])
+    msgs = await run_in_threadpool(hydrate_messages, msgs,
+        request.app.state.multimodal_service, user.id, req.multimodal.model_dump())
     sink: asyncio.Queue = asyncio.Queue()
 
     async def run_ask():
@@ -406,7 +419,7 @@ async def dr_ask(session_id: str, req: DRAskRequest,
         try:
             await native_round(cfg, msgs, None, temperature, session_id,
                                token_event="token",
-                               reasoning_event="ask_reasoning")
+                               reasoning_event="ask_reasoning", config=config)
             await sink.put({"type": "__done__"})
         except Exception as e:
             logger.warning("deep_research ask failed: %s", e)
@@ -465,12 +478,17 @@ async def deep_research_rerun_writer(req: StopRequest, request: Request,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != uid:
         raise HTTPException(status_code=403, detail="not session owner")
+    if row.team != "deep_research":
+        raise HTTPException(status_code=404, detail="not found in this team")
     if row.status == "running":
         raise HTTPException(status_code=409, detail="场次进行中，稍后再试")
     topic = row.topic
 
     graph = request.app.state.deep_research_graph
-    config = {"configurable": {"thread_id": sid}}
+    config = role_run_config(
+        {"configurable": {"thread_id": sid}},
+        {"session_id": sid, "user_id": uid},
+        "writer", "dr_", phase="rerun_writer")
     snap = await aget_state_retry(graph, config)
     values = dict((snap.values or {}) if snap else {})
     if not (values.get("chapters") or values.get("outline")):
@@ -484,9 +502,9 @@ async def deep_research_rerun_writer(req: StopRequest, request: Request,
         set_event_sink(sink)
         clear_stop(sid)
         try:
-            state = {**values, "stopped": False}
+            state = {**values, "stopped": False, "multimodal": req.multimodal.model_dump()}
             ctx = request.app.state.workflow_ctx
-            update_frame = await make_write_frame_node(ctx)(state)
+            update_frame = await make_write_frame_node(ctx)(state, config=config)
             merged = {**values, **update_frame}
             update_pub = await publish_node(merged)      # 纯代码装配（引用去重）
             merged.update(update_pub)

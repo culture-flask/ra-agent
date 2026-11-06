@@ -7,16 +7,21 @@
 """
 
 import asyncio
+import inspect
+import time
 from dataclasses import dataclass, replace
+from typing import Any
 
 import httpx
-from langchain_openai import ChatOpenAI
+from langchain_core.runnables import RunnableConfig, RunnableSerializable
+from pydantic import Field
 from sqlalchemy import select
 
 from app.core.crypto import SecretCrypto, mask_secret
 from app.core.db import SessionLocal
 from app.core.logging import get_logger
 from app.models import UserLLMConfig
+from app.abstractions.reasoning import ReasoningChatOpenAI
 
 logger = get_logger("llm_retry")
 
@@ -69,42 +74,62 @@ def _is_retryable(exc: BaseException) -> bool:
     return any(k in name for k in ("timeout", "connect", "network", "protocol"))
 
 
-class RetryableChatModel:
-    """给 ChatModel 包一层指数退避重试（每次重试记日志，可观测）。
+def model_call(model, method: str, messages, config=None, **kwargs):
+    """透传标准 config；兼容没有 config 参数的离线假模型。"""
+    call = getattr(model, method)
+    if config is not None:
+        try:
+            parameters = inspect.signature(call).parameters
+            accepts_config = "config" in parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
+        except (ValueError, TypeError):
+            accepts_config = True
+        if accepts_config:
+            kwargs["config"] = config
+    return call(messages, **kwargs)
 
-    - 重试条件：429 限流 / 5xx / 网络超时与断连；其余异常直接抛
-      （429 额度用尽 insufficient_quota 除外——重试无意义，直接抛）
-    - 退避：1s → 2s → 4s → 8s → 16s（共 5 次）
-    - astream：整轮重试——流中断后从开头重新完整生成
-      （已推给前端的半截内容会短暂重复，属预期行为）
+
+class RetryableChatModel(RunnableSerializable[Any, Any]):
+    """标准 Runnable 委托：完整调用重试，流式重试交给可撤回的轮次协调器。
+
+    已输出的流分片不能在这里无声拼接重试；否则正文和工具 JSON 会跨轮污染。
+    with_config / bind / batch / astream_events 等使用 Runnable 标准协议。
     """
 
+    model: Any = Field(exclude=True)
+    retry_max_retries: int = 5
+    retry_base_delay: float = 1.0
+    label: str = "chat"
+
     def __init__(self, model, max_retries: int = 5, base_delay: float = 1.0,
-                 label: str = ""):
-        self._model = model
-        self._max_retries = max_retries
-        self._base_delay = base_delay
-        self._label = label or getattr(model, "model_name", None) or "chat"
+                 label: str = "", **kwargs):
+        super().__init__(model=model, retry_max_retries=max_retries,
+                         retry_base_delay=base_delay,
+                         label=label or getattr(model, "model_name", None) or "chat",
+                         **kwargs)
 
     @property
     def model_name(self) -> str:
         """透传底层模型名（追踪/日志用）。"""
-        return self._label
+        return self.label
 
     @property
     def temperature(self) -> float:
         """透传底层生成温度（调试/测试用）。"""
-        return getattr(self._model, "temperature", DEFAULT_TEMPERATURE)
+        return getattr(self.model, "temperature", DEFAULT_TEMPERATURE)
 
-    def bind_tools(self, schemas):
+    def bind_tools(self, schemas, **kwargs):
         """绑定 MCP 工具后仍保留重试能力（generate ⇄ tool 循环的第二次生成）。"""
-        bound = self._model.bind_tools(schemas)
-        return RetryableChatModel(bound, self._max_retries, self._base_delay,
-                                  self._label)
+        bound = self.model.bind_tools(schemas, **kwargs)
+        return RetryableChatModel(bound, self.retry_max_retries, self.retry_base_delay,
+                                  self.label)
+
+    def with_structured_output(self, *args, **kwargs):
+        return self.model.with_structured_output(*args, **kwargs)
 
     def _backoff(self, attempt: int) -> float:
         """指数退避：1s → 2s → 4s → 8s → 16s → 32s → 64s → 128s → 256s。"""
-        return self._base_delay * (2 ** (attempt - 1))
+        return self.retry_base_delay * (2 ** (attempt - 1))
 
     async def _retry(self, call):
         attempt = 0
@@ -113,33 +138,35 @@ class RetryableChatModel:
                 return await call()
             except Exception as e:
                 attempt += 1
-                if attempt > self._max_retries or not _is_retryable(e):
+                if attempt > self.retry_max_retries or not _is_retryable(e):
                     raise
                 delay = self._backoff(attempt)
                 logger.warning(
                     "llm call failed (attempt %d/%d) model=%s: %s; retry in %.1fs",
-                    attempt, self._max_retries, self._label, e, delay)
+                    attempt, self.retry_max_retries, self.label, e, delay)
                 await asyncio.sleep(delay)
 
-    async def ainvoke(self, messages, **kwargs):
-        return await self._retry(lambda: self._model.ainvoke(messages, **kwargs))
-
-    async def astream(self, messages, **kwargs):
+    def invoke(self, messages, config: RunnableConfig | None = None, **kwargs):
         attempt = 0
         while True:
             try:
-                async for chunk in self._model.astream(messages, **kwargs):
-                    yield chunk
-                return
+                return model_call(self.model, "invoke", messages, config, **kwargs)
             except Exception as e:
                 attempt += 1
-                if attempt > self._max_retries or not _is_retryable(e):
+                if attempt > self.retry_max_retries or not _is_retryable(e):
                     raise
-                delay = self._backoff(attempt)
-                logger.warning(
-                    "llm stream broken (attempt %d/%d) model=%s: %s; retry in %.1fs",
-                    attempt, self._max_retries, self._label, e, delay)
-                await asyncio.sleep(delay)
+                time.sleep(self._backoff(attempt))
+
+    async def ainvoke(self, messages, config: RunnableConfig | None = None, **kwargs):
+        return await self._retry(
+            lambda: model_call(self.model, "ainvoke", messages, config, **kwargs))
+
+    def stream(self, messages, config: RunnableConfig | None = None, **kwargs):
+        yield from model_call(self.model, "stream", messages, config, **kwargs)
+
+    async def astream(self, messages, config: RunnableConfig | None = None, **kwargs):
+        async for chunk in model_call(self.model, "astream", messages, config, **kwargs):
+            yield chunk
 
 
 # 各平台 /models 响应里常见的上下文窗口字段名（按优先级尝试）
@@ -183,8 +210,8 @@ class LLMFactory:
     """OpenAI 协议兼容多家厂商：base_url 可定制即接入 qwen/deepseek/ollama...。"""
 
     @staticmethod
-    def build(cfg: LLMConfig) -> ChatOpenAI:
-        return ChatOpenAI(
+    def build(cfg: LLMConfig) -> ReasoningChatOpenAI:
+        return ReasoningChatOpenAI(
             model=cfg.model_id,
             api_key=cfg.api_key,
             base_url=cfg.base_url,
@@ -192,8 +219,10 @@ class LLMFactory:
                          else DEFAULT_TEMPERATURE),
             streaming=True,
             stream_usage=True,  # 流式响应末块携带真实 token 用量（上下文占用展示用）
-            request_timeout=60,   # 连续 60s 无数据视为卡死，抛错而不是无限等
-            max_retries=0,        # 关闭 SDK 内部静默重试，统一走外层 RetryableChatModel（可观测）
+            use_responses_api=False,  # 兼容端点使用 Chat Completions；不误切 Responses
+            request_timeout=180,  # 保持迁移前生成流的等待上限，容纳较长推理阶段
+            http_socket_options=(),  # 保留原 SDK 对 HTTP(S)_PROXY / NO_PROXY 的处理
+            max_retries=0,        # 由调用层控制重试与流事件撤回，避免嵌套重试
         )
 
 class LLMService:
@@ -238,7 +267,8 @@ class LLMService:
         """构建用户生效模型；temperature 非 None 时覆盖（按轮次可调，0 也有效）。"""
         cfg = self.get_user_config(user_id) or self._system
         if temperature is not None:
-            temperature = max(0, min(2.0, float(temperature)))   # 范围约束 0~2.0
+            # 与现有对话原生路径和按轮参数边界一致，迁移不改变调用温度。
+            temperature = max(-2.0, min(2.0, float(temperature)))
             cfg = replace(cfg, temperature=temperature)
         model = LLMFactory.build(cfg)
         return RetryableChatModel(model, max_retries=self._retry_max,

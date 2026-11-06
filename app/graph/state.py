@@ -7,12 +7,16 @@ from langgraph.graph.message import add_messages
 class AgentState(TypedDict, total=False):
     """LangGraph 图状态"""
     user_id: str
+    multimodal: dict[str, bool]          # 本轮发送许可，缺省所有模态关闭
     session_id: str
     query: str                              # 用户本次提问
     messages: Annotated[list[BaseMessage], add_messages]   # 对话历史（自动追加）
     retrievals: list[dict]                  # 检索结果（带 scope 标签）
     needs_retrieval: bool                   # supervisor 的路由决策（LLM 意图判断）
     selected_kb_ids: list[str]              # LLM 按名称选中的知识库 id（仅可见库）
+    # 路由改写后的检索词（中文/英文各一条）：retrieve 多路召回 + 查询间 RRF 融合。
+    # 每轮由 supervisor 覆盖写；空列表 = 回退用原始 query 单路检索
+    search_queries: list[str]
     answer: str                             # 最终答复
     memory: dict                            # 长期记忆（用户级，跨会话）
     new_memories: list[dict]                # 本次抽取待审核的记忆

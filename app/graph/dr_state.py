@@ -28,6 +28,8 @@ class DeepResearchState(TypedDict, total=False):
     """深度调研图状态。"""
     # ---- 会话身份 ----
     user_id: str
+    multimodal: dict[str, bool]          # 本轮发送许可，缺省所有模态关闭
+    input_media: list[dict]               # 用户上传的持久 media_ref；模型前展开
     session_id: str                       # 建议 dr_ 前缀，与 bs_/sem_/主对话隔离
     topic: str
     roles: list[dict]                     # 含 config_id / model_id 可选（同前两支）

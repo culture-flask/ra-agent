@@ -37,6 +37,8 @@ class BrainstormState(TypedDict, total=False):
     """头脑风暴图状态。"""
     # 会话身份
     user_id: str
+    multimodal: dict[str, bool]          # 本轮发送许可，缺省所有模态关闭
+    input_media: list[dict]               # 用户上传的持久 media_ref；模型前展开
     session_id: str                       # 建议前端用 bs_ 前缀，与主对话 thread 空间隔离
     topic: str                            # 用户议题（含附件展开文本）
     roles: list[dict]                     # [{"id","name","temperature","config_id"?,"model_id"?}, ...]

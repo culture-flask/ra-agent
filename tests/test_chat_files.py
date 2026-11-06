@@ -29,9 +29,9 @@ def test_upload_files_mixed(auth_factory):
 
 def test_initial_state_merges_attachments():
     """附件全文拼进本轮用户消息（进 checkpoint），query 保持原始问题。"""
-    _CHAT_FILES["f1"] = {"filename": "note.txt", "text": "文件正文ABC"}
+    _CHAT_FILES["f1"] = {"filename": "note.txt", "text": "文件正文ABC", "user_id": "u1"}
     req = ChatRequest(session_id="s", message="总结一下",
-                      attachments=["f1", "ghost"])     # ghost：未知 id 忽略
+                      attachments=["f1"])
     state = _initial_state(req, "u1")
     msg = state["messages"][-1]
     assert msg["content"].startswith("总结一下")        # 问题在前（标题提取用）
@@ -41,7 +41,7 @@ def test_initial_state_merges_attachments():
 
 def test_rewind_does_not_append_or_merge():
     """rewind 场景：不追加消息也不拼附件（checkpoint 里已含上次的完整文本）。"""
-    _CHAT_FILES["f2"] = {"filename": "a.md", "text": "X"}
+    _CHAT_FILES["f2"] = {"filename": "a.md", "text": "X", "user_id": "u1"}
     req = ChatRequest(session_id="s", message="重答", attachments=["f2"])
     state = _initial_state(req, "u1", append_message=False)
     assert state["messages"] == []

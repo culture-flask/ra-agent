@@ -29,6 +29,7 @@ import asyncio
 import json
 import re
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import Send
 from langgraph.graph import END, START, StateGraph
 
@@ -239,7 +240,7 @@ def _role_map(state: SeminarState) -> dict:
 # ---------- Phase 0：开题 ----------
 
 def make_curate_node(ctx: WorkflowContext):
-    async def curate_node(state: SeminarState) -> dict:
+    async def curate_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """主席规划全场：领域定位 + 邻近领域选定 + 双重差异化任务单。
 
         解析失败 → 通用任务单 + 角色默认取向。
@@ -253,7 +254,8 @@ def make_curate_node(ctx: WorkflowContext):
             text, used = await _llm_text(
                 ctx, state,
                 CURATE_PROMPT.format(topic=state["topic"]),
-                "请规划议程并输出 JSON。", temperature=0.2, prefix="sem_")
+                "请规划议程并输出 JSON。", temperature=0.2, prefix="sem_",
+                config=config, agent_id="chair")
             data = _loads_fuzzy(text) or {}
             positioning = str(data.get("field_positioning", ""))[:500]
             adjacent = str(data.get("adjacent_field", ""))[:300]
@@ -276,7 +278,7 @@ def make_curate_node(ctx: WorkflowContext):
 # ---------- Phase 1：并行独立研读 ----------
 
 def make_read_node(ctx: WorkflowContext, role_id: str):
-    async def read_node(state: SeminarState) -> dict:
+    async def read_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         cfg = _role_cfg(ctx, state, role_id)
         emit("sem_agent_start", {"agent": role_id, "phase": "read",
                                  "model": getattr(cfg, "model_id", "") or ""})
@@ -339,7 +341,7 @@ def make_read_node(ctx: WorkflowContext, role_id: str):
             content, used, stopped = await _agent_speak(
                 ctx, state, role_id, system, human,
                 float(role.get("temperature", 0.5)), tools, loop_max,
-                cfg=cfg, prefix="sem_")
+                cfg=cfg, prefix="sem_", config=config)
         except Exception as e:
             logger.warning("sem read %s failed: %s", role_id, e)
             fail_reason = _short_reason(e)
@@ -369,7 +371,7 @@ def make_read_node(ctx: WorkflowContext, role_id: str):
 # ---------- Phase 2：议程循环（汇报 → 全员问答 → 洞见采集） ----------
 
 def make_present_node(ctx: WorkflowContext):
-    async def present_node(state: SeminarState) -> dict:
+    async def present_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """当前议程学者汇报。agenda_index 单写者递增（本节点）。"""
         if is_stopped(state["session_id"]):
             return {"stopped": True}
@@ -399,7 +401,7 @@ def make_present_node(ctx: WorkflowContext):
             content, used, stopped = await _agent_speak(
                 ctx, state, rid, system, human,
                 float(role.get("temperature", 0.5)), None, 1,
-                cfg=cfg, prefix="sem_")          # 汇报用已研读的材料，不再调工具
+                cfg=cfg, prefix="sem_", config=config)  # 汇报用研读材料，不再调工具
         except Exception as e:
             logger.warning("sem present %s failed: %s", rid, e)
             fail_reason = _short_reason(e)
@@ -417,7 +419,7 @@ def make_present_node(ctx: WorkflowContext):
 
 
 def make_qa_node(ctx: WorkflowContext):
-    async def qa_node(state: SeminarState) -> dict:
+    async def qa_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """全员承接式问答 + 主席采集洞见。
 
         节点内部循环（非图级循环）：askers 逐个提问、汇报人逐一回应——
@@ -465,7 +467,7 @@ def make_qa_node(ctx: WorkflowContext):
                 question, used, stopped = await _agent_speak(
                     ctx, state, asker, ask_sys, ask_human,
                     float(arole.get("temperature", 0.5)), None, 1,
-                    cfg=acfg, prefix="sem_")
+                    cfg=acfg, prefix="sem_", config=config)
             except Exception as e:
                 logger.warning("sem ask %s failed: %s", asker, e)
                 question, used, stopped = (
@@ -495,7 +497,7 @@ def make_qa_node(ctx: WorkflowContext):
                 answer, used, stopped = await _agent_speak(
                     ctx, state, presenter, ans_sys, ans_human,
                     float(prole.get("temperature", 0.5)), None, 1,
-                    cfg=pcfg, prefix="sem_")
+                    cfg=pcfg, prefix="sem_", config=config)
             except Exception as e:
                 logger.warning("sem answer %s failed: %s", presenter, e)
                 answer, used, stopped = (
@@ -519,7 +521,8 @@ def make_qa_node(ctx: WorkflowContext):
                 CHAIR_INSIGHT_PROMPT.format(presenter=prole["name"],
                                             presentation=presentation[:1500],
                                             qa_pairs=qa_pairs[:8000]),
-                "请提取洞见并输出 JSON。", temperature=0.2, prefix="sem_")
+                "请提取洞见并输出 JSON。", temperature=0.2, prefix="sem_",
+                config=config, agent_id="chair")
             used_total += used
             data = _loads_fuzzy(text) or {}
             if isinstance(data.get("insights"), list):
@@ -544,7 +547,7 @@ def make_qa_node(ctx: WorkflowContext):
 # ---------- Phase 3：构想工作坊 ----------
 
 def make_propose_node(ctx: WorkflowContext, role_id: str):
-    async def propose_node(state: SeminarState) -> dict:
+    async def propose_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """各学者基于洞见池+自己的笔记提出构想卡（JSON 数组输出）。"""
         # 并行 fan-out 节点（编排纪律）：绝不写单值 channel（stopped）——
         # 四路同时返回会 InvalidUpdateError。停止语义走 is_stopped 注册表，
@@ -573,7 +576,7 @@ def make_propose_node(ctx: WorkflowContext, role_id: str):
             text, used, stopped = await _agent_speak(
                 ctx, state, role_id, system, human,
                 float(role.get("temperature", 0.5)), None, 1,
-                cfg=cfg, prefix="sem_")
+                cfg=cfg, prefix="sem_", config=config)
         except Exception as e:
             logger.warning("sem propose %s failed: %s", role_id, e)
             text, used, stopped = "", 0, False
@@ -595,7 +598,7 @@ def make_propose_node(ctx: WorkflowContext, role_id: str):
 
 
 def make_merge_node(ctx: WorkflowContext):
-    async def merge_node(state: SeminarState) -> dict:
+    async def merge_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """主席定稿：去重 + 统一编号。失败 → 代码兜底（按到达序编号）。"""
         raw = [c for c in state.get("idea_cards") or [] if not c.get("builds_on")]
         cards: list[dict] = []
@@ -605,7 +608,8 @@ def make_merge_node(ctx: WorkflowContext):
                 [{"i": i, **c} for i, c in enumerate(raw)], ensure_ascii=False)
             text, used = await _llm_text(
                 ctx, state, MERGE_PROMPT.format(cards=cards_json[:60000]),
-                "请合并定稿并输出 JSON。", temperature=0.2, prefix="sem_")
+                "请合并定稿并输出 JSON。", temperature=0.2, prefix="sem_",
+                config=config, agent_id="chair")
             data = _loads_fuzzy(text) or {}
             if isinstance(data.get("merged_cards"), list):
                 for c in data["merged_cards"]:
@@ -630,7 +634,7 @@ def make_merge_node(ctx: WorkflowContext):
 
 
 def make_improve_node(ctx: WorkflowContext, role_id: str):
-    async def improve_node(state: SeminarState) -> dict:
+    async def improve_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """建构轮：各学者必须改进至少一张**他人的**卡（builds_on 谱系）。"""
         # 同 propose：并行节点不写单值 channel（stopped）
         if is_stopped(state["session_id"]):
@@ -654,7 +658,7 @@ def make_improve_node(ctx: WorkflowContext, role_id: str):
             text, used, stopped = await _agent_speak(
                 ctx, state, role_id, system, human,
                 float(role.get("temperature", 0.5)), None, 1,
-                cfg=cfg, prefix="sem_")
+                cfg=cfg, prefix="sem_", config=config)
         except Exception as e:
             logger.warning("sem improve %s failed: %s", role_id, e)
             text, used, stopped = "", 0, False
@@ -681,7 +685,7 @@ def make_improve_node(ctx: WorkflowContext, role_id: str):
 
 
 def make_panel_node(ctx: WorkflowContext):
-    async def panel_node(state: SeminarState) -> dict:
+    async def panel_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """主席公布参评卡：原卡 + 改进卡合并定稿（merge 同款，兜底代码编号）。"""
         originals = state.get("card_registry") or []
         improved = [c for c in state.get("idea_cards") or [] if c.get("builds_on")]
@@ -693,7 +697,7 @@ def make_panel_node(ctx: WorkflowContext):
             text, used = await _llm_text(
                 ctx, state, MERGE_PROMPT.format(cards=cards_json[:60000]),
                 "请合并定稿全部卡片并输出 JSON。", temperature=0.2,
-                prefix="sem_")
+                prefix="sem_", config=config, agent_id="chair")
             data = _loads_fuzzy(text) or {}
             if isinstance(data.get("merged_cards"), list):
                 for c in data["merged_cards"]:
@@ -723,7 +727,7 @@ def make_panel_node(ctx: WorkflowContext):
 # ---------- Phase 4：评议会 ----------
 
 def make_score_node(ctx: WorkflowContext, role_id: str):
-    async def score_node(state: SeminarState) -> dict:
+    async def score_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """各学者对全部卡片独立打分（并行 fan-out，互不可见）。"""
         # 同 propose：并行节点不写单值 channel（stopped）
         if is_stopped(state["session_id"]):
@@ -743,7 +747,7 @@ def make_score_node(ctx: WorkflowContext, role_id: str):
             text, used, stopped = await _agent_speak(
                 ctx, state, role_id, system, human,
                 float(role.get("temperature", 0.4)), None, 1,
-                cfg=cfg, prefix="sem_")
+                cfg=cfg, prefix="sem_", config=config)
         except Exception as e:
             logger.warning("sem score %s failed: %s", role_id, e)
             text, used, stopped = "", 0, False
@@ -849,7 +853,7 @@ def _fallback_report(state: SeminarState) -> str:
 
 
 def make_rapporteur_node(ctx: WorkflowContext):
-    async def rapporteur_node(state: SeminarState) -> dict:
+    async def rapporteur_node(state: SeminarState, config: RunnableConfig = None) -> dict:
         """执笔人成稿。纪律与争鸣社 synthesis 一致：
         用户停止 → 汇编降级稿；预算熔断不阻断执笔（截断只影响前面阶段）。"""
         sid = state["session_id"]
@@ -897,7 +901,7 @@ def make_rapporteur_node(ctx: WorkflowContext):
             content, used, _ = await _agent_speak(
                 ctx, state, "rapporteur", system,
                 "请按固定骨架撰写会讲报告；完成后可保存文档/导出引文。",
-                0.4, doc_tools, 3, cfg=cfg, prefix="sem_")
+                0.4, doc_tools, 3, cfg=cfg, prefix="sem_", config=config)
             if not content.strip():
                 raise RuntimeError("empty report")
         except Exception as e:

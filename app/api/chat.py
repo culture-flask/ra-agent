@@ -6,8 +6,15 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import RemoveMessage
-from pydantic import BaseModel, Field
+from langchain_core.runnables import RunnableConfig
+from pydantic import BaseModel, Field, field_validator
 
+from app.api.input_media import (
+    MultimodalOptions, ensure_checkpoint_owner, ensure_session_owner,
+    prepare_attachments, reserve_session,
+)
+from app.core.message_content import text_content
+from app.services.multimodal import detect_media_kind
 from app.core.cancel import clear_stop, request_stop
 from app.core.db import SessionLocal
 from app.core.deps import get_current_user
@@ -44,7 +51,7 @@ class ForkFrom(BaseModel):
 
 class ChatRequest(BaseModel):
     # 归属用户取自 Bearer token，请求体不再携带 user_id
-    session_id: str = "s1"
+    session_id: str = Field("s1", min_length=1, max_length=36)
     message: str = Field(min_length=1)
     # 分支会话：服务端从源会话 checkpoint 复制的纯文本兜底（复制不可用时）
     history: list[dict] = Field(default_factory=list)
@@ -63,14 +70,26 @@ class ChatRequest(BaseModel):
     # 聚合返回：展开的父块数（0=关闭，全返回小 chunk）；None = 全局默认
     parent_groups: int | None = None
     # 对话附件：/chat/files 上传解析后返回的 file_id 列表，内容拼进本轮用户消息
-    attachments: list[str] = []
+    attachments: list[str] = Field(default_factory=list, max_length=8)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
     # 会话标题：本地已改名的会话首次登记时用（None=自动取首条消息截断）
     title: str | None = None
+
+    @field_validator("history")
+    @classmethod
+    def text_only_history(cls, value):
+        if len(value) > 100:
+            raise ValueError("history 最多 100 条")
+        for item in value:
+            if item.get("role") not in ("user", "assistant") or not isinstance(item.get("content", ""), str):
+                raise ValueError("history 仅接受 user/assistant 文本；媒体须通过附件上传或服务端分支复制")
+        return value
 
 
 def _initial_state(req: ChatRequest, user_id: str,
                    append_message: bool = True,
-                   base_messages: list | None = None) -> dict:
+                   base_messages: list | None = None,
+                   media_service=None) -> dict:
     """组装图初始状态。
 
     - user_id 来自鉴权依赖（token 注入），非客户端可指定
@@ -87,27 +106,24 @@ def _initial_state(req: ChatRequest, user_id: str,
         messages = [{"role": m.get("role", "user"), "content": m.get("content", "")}
                     for m in req.history]
     message = req.message
-    if append_message and req.attachments:
-        blocks = []
-        for fid in req.attachments:
-            att = _CHAT_FILES.get(fid)
-            if att:
-                blocks.append(f"[附件：{att['filename']}]\n{att['text']}")
-        if blocks:
-            # 问题在前便于提取会话标题；标记分隔附件块，历史读取时可拆出附件名
-            message = message + _ATT_MARK + "\n\n".join(blocks)
+    media = []
     if append_message:
-        messages.append({"role": "user", "content": message})
+        message, media = prepare_attachments(message, req.attachments, user_id,
+            req.multimodal, _CHAT_FILES, media_service)
+        content = [{"type": "text", "text": message}, *media] if media else message
+        messages.append({"role": "user", "content": content})
     return {
         "user_id": user_id,
         "session_id": req.session_id,
         "query": req.message,
+        "multimodal": req.multimodal.model_dump(),
         "messages": messages,
         # 每轮对话重置检索状态：checkpointer 会保留上一轮的 retrievals，
         # 不显式清空会让上一轮的知识库结果泄漏进本轮的系统提示词
         "retrievals": [],
         "needs_retrieval": False,
         "selected_kb_ids": [],
+        "search_queries": [],                 # 路由改写检索词：每轮由 supervisor 覆盖
         "retrieval_mode": req.retrieval_mode or "",
         "per_kb_k": req.per_kb_k or 0,
         "total_k": req.total_k or 0,
@@ -130,21 +146,14 @@ def _register_conversation(user_id: str, session_id: str, title: str) -> None:
 
     title 只在首次登记时落（首条用户消息截断），之后仅刷新 updated_at。
     """
-    with SessionLocal() as db:
-        row = db.get(Conversation, session_id)
-        if row is None:
-            db.add(Conversation(session_id=session_id, user_id=user_id,
-                                title=(title or "新会话")[:128]))
-        else:
-            row.updated_at = utcnow()
-        db.commit()
+    reserve_session(user_id, session_id, title=title)
 
 
 def _conv_title(messages: list) -> str:
     """从图状态消息里取首条用户消息生成会话标题（与前端截断规则一致）。"""
     for m in messages:
         if getattr(m, "type", "") == "human":
-            text = str(getattr(m, "content", "")).strip().replace("\n", " ")
+            text = text_content(getattr(m, "content", "")).strip().replace("\n", " ")
             return text[:24] + "…" if len(text) > 24 else text
     return "新会话"
 
@@ -155,7 +164,8 @@ _BG_TASKS: set = set()
 
 
 def _spawn_memory_pipeline(app, uid: str, result: dict,
-                           temperature=None) -> None:
+                           temperature=None,
+                           config: RunnableConfig | None = None) -> None:
     """答案生成完（SSE 已推 done）之后，在后台任务补跑记忆抽取/落库。
 
     此前 extract/save 是图的两个节点，graph.ainvoke 要等它们做完才返回——
@@ -167,13 +177,25 @@ def _spawn_memory_pipeline(app, uid: str, result: dict,
     if ctx is None or ctx.memory_service is None:
         return
 
+    # 独立后台任务不继承已结束图的流 writer/callback；保留请求标记供模型追踪。
+    background_config: RunnableConfig = {
+        "tags": list(dict.fromkeys([*((config or {}).get("tags") or []),
+                                    "nostream", "background:memory"])),
+        "metadata": {**((config or {}).get("metadata") or {}),
+                     "user_id": uid, "phase": "memory"},
+    }
+    thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
+    if thread_id:
+        background_config["metadata"]["session_id"] = thread_id
+
     async def _pipeline():
         state = {"user_id": uid,
                  "messages": result.get("messages", []),
                  "temperature": temperature}
-        out = await extract_memory_node(ctx, state)
+        clear_event_sink()
+        out = await extract_memory_node(ctx, state, config=background_config)
         state.update(out)
-        await save_memory_node(ctx, state)
+        await save_memory_node(ctx, state, config=background_config)
 
     try:
         task = asyncio.create_task(_pipeline())
@@ -184,29 +206,40 @@ def _spawn_memory_pipeline(app, uid: str, result: dict,
 
 
 @router.post("/chat/files")
-async def upload_chat_files(files: list[UploadFile] = File(...)):
-    """批量上传对话附件：解析出纯文本暂存服务端，返回 file_id。
+async def upload_chat_files(request: Request, files: list[UploadFile] = File(...),
+                            user: User = Depends(get_current_user)):
+    """批量上传对话附件：解析文档或规范化媒体，返回 file_id。
 
-    附件与知识库入库无关（不向量化、不持久化）——只把文本拼进发送消息的
-    用户消息里，供 LLM 阅读；进程内暂存，重启即失。逐文件返回成功/失败，
+    附件与知识库入库无关，不进行向量化。文档文本拼入用户消息；媒体
+    保存按用户隔离的持久引用，在模型调用前编码。
+    文档暂存重启会丢失；媒体可跨重启读取。逐文件返回成功/失败，
     单个文件解析失败不影响其余。
     """
+    if len(files) > 8:
+        raise HTTPException(400, "每批最多上传 8 个附件")
+    service = request.app.state.multimodal_service
     out = []
     for f in files:
         name = f.filename or "upload.bin"
         try:
-            content = await f.read()
+            content = await f.read(_ATTACHMENT_MAX_BYTES + 1)
             if not content:
                 raise ValueError("空文件")
             if len(content) > _ATTACHMENT_MAX_BYTES:
                 raise ValueError("文件超过 20MB 上限")
+            if detect_media_kind(name, f.content_type, content):
+                metadata = await run_in_threadpool(service.register, user.id, name,
+                                                  content, f.content_type)
+                out.append(metadata)
+                continue
             text = await run_in_threadpool(parse_file, name, content)
             text = text[:_ATTACHMENT_MAX_CHARS]           # 超长截断
             file_id = uuid.uuid4().hex[:12]
-            _CHAT_FILES[file_id] = {"filename": name, "text": text}
+            _CHAT_FILES[file_id] = {"filename": name, "text": text, "user_id": user.id}
             while len(_CHAT_FILES) > _CHAT_FILES_MAX:     # FIFO 淘汰
                 _CHAT_FILES.pop(next(iter(_CHAT_FILES)))
-            out.append({"file_id": file_id, "filename": name, "chars": len(text)})
+            out.append({"file_id": file_id, "filename": name, "chars": len(text),
+                        "kind": "text", "mime_type": f.content_type or "text/plain"})
         except ValueError as e:
             out.append({"filename": name, "error": str(e)})
     return {"files": out}
@@ -285,19 +318,19 @@ async def _copy_fork_messages(graph, req: ChatRequest, uid: str) -> list | None:
 
 
 async def _prepare_initial_state(graph, req: ChatRequest, uid: str,
-                                 config: dict) -> dict:
+                                 config: dict, media_service=None) -> dict:
     """组装初始状态：分支首请求优先从源会话 checkpoint 复制完整历史。
 
     本会话（thread）已有消息说明是重复/重试请求——直接续用已有状态，
     不注入任何历史，防止消息与 checkpoint 里的副本叠加。
     """
     if req.fork_from is None:
-        return _initial_state(req, uid)
+        return _initial_state(req, uid, media_service=media_service)
     snap = await graph.aget_state(config)
     if (snap.values or {}).get("messages"):
-        return _initial_state(req, uid, base_messages=[])
+        return _initial_state(req, uid, base_messages=[], media_service=media_service)
     return _initial_state(req, uid,
-                          base_messages=await _copy_fork_messages(graph, req, uid))
+                          base_messages=await _copy_fork_messages(graph, req, uid), media_service=media_service)
 
 
 def _sse(payload: dict) -> str:
@@ -309,14 +342,12 @@ async def chat_context(session_id: str, request: Request,
                        user: User = Depends(get_current_user)):
     """当前会话上下文占用（打开/切换会话时前端拉取；对话中由 SSE context 事件刷新）。
 
-    会话已登记且不属于当前用户 → 403（未登记视为首轮进行中，放行返回空占用）。
+    会话登记或遗留 checkpoint 属于他人 → 403；全新会话返回空占用。
     """
-    with SessionLocal() as db:
-        row = db.get(Conversation, session_id)
-    if row is not None and row.user_id != user.id:
-        raise HTTPException(status_code=403, detail="not conversation owner")
+    await run_in_threadpool(ensure_session_owner, user.id, session_id)
     graph = request.app.state.graph
     config = {"configurable": {"thread_id": session_id}}
+    await ensure_checkpoint_owner(graph, config, user.id)
     svc = request.app.state.llm_service
     if hasattr(svc, "context_window_for"):
         # 可能触发同步 httpx /models 探测，放线程池避免阻塞事件循环
@@ -331,17 +362,16 @@ class StopRequest(BaseModel):
 
 
 @router.post("/chat/stop")
-async def chat_stop(req: StopRequest, user: User = Depends(get_current_user)):
+async def chat_stop(req: StopRequest, request: Request,
+                    user: User = Depends(get_current_user)):
     """用户请求终止【自己的】会话当前生成：只设标记，generate 节点在下一个
     token 边界优雅退出（已生成的部分答复保留并写入 checkpoint）。
 
-    属主校验：登记行存在且属于他人 → 403。行不存在（首轮对话尚未登记，
-    见 conversations 登记时机）放行——停止标记本身无害，登记提前后豁口闭合。
+    属主校验覆盖普通/团队登记及遗留 checkpoint，防止跨入口设置停止标记。
     """
-    with SessionLocal() as db:
-        row = db.get(Conversation, req.session_id)
-        if row is not None and row.user_id != user.id:
-            raise HTTPException(status_code=403, detail="not conversation owner")
+    await run_in_threadpool(ensure_session_owner, user.id, req.session_id)
+    await ensure_checkpoint_owner(request.app.state.graph,
+        {"configurable": {"thread_id": req.session_id}}, user.id)
     request_stop(req.session_id)
     return {"stopped": True, "session_id": req.session_id}
 
@@ -357,15 +387,23 @@ async def chat(req: ChatRequest, request: Request,
     set_agent_team(None)     # 普通对话：原生工具也检索不到多 agent 沉淀库
     uid = user.id
     graph = request.app.state.graph
+    media_service = request.app.state.multimodal_service
+    await ensure_checkpoint_owner(
+        graph, {"configurable": {"thread_id": req.session_id}}, uid)
+    if not req.rewind:
+        await run_in_threadpool(prepare_attachments, req.message, req.attachments,
+                               uid, req.multimodal, _CHAT_FILES, media_service)
+    await run_in_threadpool(_register_conversation, uid, req.session_id,
+                           req.title or req.message[:24])
     clear_stop(req.session_id)                 # 上一轮残留的停止标记不带入本轮
     config = {"configurable": {"thread_id": req.session_id},   # 会话级隔离
               "recursion_limit": 100}
     if req.rewind:
         rewound = await _rewind_to_last_user(graph, config)
         # 无 checkpoint 历史（新 thread）时无法回退 → 按普通提问追加消息
-        initial = _initial_state(req, uid, append_message=not rewound)
+        initial = _initial_state(req, uid, append_message=not rewound, media_service=media_service)
     else:
-        initial = await _prepare_initial_state(graph, req, uid, config)
+        initial = await _prepare_initial_state(graph, req, uid, config, media_service=media_service)
     result = await graph.ainvoke(initial, config=config)
     # 登记/刷新会话（跨设备同步会话列表）
     try:
@@ -376,7 +414,7 @@ async def chat(req: ChatRequest, request: Request,
         logger.warning("conversation register failed: %s", e)
     # 记忆管线后台补跑（不阻塞响应返回）
     _spawn_memory_pipeline(request.app, uid, result,
-                           temperature=req.temperature)
+                           temperature=req.temperature, config=config)
     return {
         "answer": result.get("answer", ""),
         "retrievals": result.get("retrievals", []),
@@ -396,6 +434,14 @@ async def chat_stream(req: ChatRequest, request: Request,
     set_agent_team(None)     # 普通对话：原生工具也检索不到多 agent 沉淀库
     uid = user.id
     graph = request.app.state.graph
+    media_service = request.app.state.multimodal_service
+    await ensure_checkpoint_owner(
+        graph, {"configurable": {"thread_id": req.session_id}}, uid)
+    if not req.rewind:
+        await run_in_threadpool(prepare_attachments, req.message, req.attachments,
+                               uid, req.multimodal, _CHAT_FILES, media_service)
+    await run_in_threadpool(_register_conversation, uid, req.session_id,
+                           req.title or req.message[:24])
     sink: asyncio.Queue = asyncio.Queue()
     config = {"configurable": {"thread_id": req.session_id},   # 会话级隔离
               "recursion_limit": 100}
@@ -407,9 +453,9 @@ async def chat_stream(req: ChatRequest, request: Request,
             if req.rewind:
                 rewound = await _rewind_to_last_user(graph, config)
                 # 无 checkpoint 历史（新 thread）时无法回退 → 按普通提问追加消息
-                initial = _initial_state(req, uid, append_message=not rewound)
+                initial = _initial_state(req, uid, append_message=not rewound, media_service=media_service)
             else:
-                initial = await _prepare_initial_state(graph, req, uid, config)
+                initial = await _prepare_initial_state(graph, req, uid, config, media_service=media_service)
             result = await graph.ainvoke(initial, config=config)
             # 登记/刷新会话（跨设备同步会话列表；失败不影响对话）
             try:
@@ -433,9 +479,9 @@ async def chat_stream(req: ChatRequest, request: Request,
             await sink.put({"type": "__done__"})
             # done 已推给前端，记忆抽取在独立后台任务补跑——
             # 本任务随后被 event_gen 结束/取消也不影响它（独立 Task），
-            # 其 emit 落入已无人消费的队列，无害。
+            # 后台入口会清除旧事件队列，并用独立 nostream 配置调用模型。
             _spawn_memory_pipeline(request.app, uid, result,
-                                   temperature=req.temperature)
+                                   temperature=req.temperature, config=config)
         except Exception as e:
             from app.abstractions.llm import _is_quota_exhausted
             msg = str(e)

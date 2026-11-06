@@ -3,6 +3,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 import asyncio
 
 from psycopg import OperationalError
+from langchain_core.runnables import RunnableConfig
 
 
 async def aget_state_retry(graph, config: dict, attempts: int = 3):
@@ -61,12 +62,23 @@ async def _build_checkpointer(database_url: str) -> AsyncPostgresSaver:
 async def build_graph(ctx: WorkflowContext) -> StateGraph:
     builder = StateGraph(AgentState)
 
-    async def _load_memory(s): return await load_memory_node(ctx, s)
-    async def _compact(s): return await compact_node(ctx, s)
-    async def _supervisor(s): return await supervisor_node(ctx, s)
-    async def _retrieve(s): return await retrieve_node(ctx, s)
-    async def _generate(s): return await generate_node(ctx, s)
-    async def _tool_executor(s): return await tool_executor_node(ctx, s)
+    async def _load_memory(s, config: RunnableConfig):
+        return await load_memory_node(ctx, s, config=config)
+
+    async def _compact(s, config: RunnableConfig):
+        return await compact_node(ctx, s, config=config)
+
+    async def _supervisor(s, config: RunnableConfig):
+        return await supervisor_node(ctx, s, config=config)
+
+    async def _retrieve(s, config: RunnableConfig):
+        return await retrieve_node(ctx, s, config=config)
+
+    async def _generate(s, config: RunnableConfig):
+        return await generate_node(ctx, s, config=config)
+
+    async def _tool_executor(s, config: RunnableConfig):
+        return await tool_executor_node(ctx, s, config=config)
 
     builder.add_node("load_memory", _load_memory)
     builder.add_node("compact", _compact)

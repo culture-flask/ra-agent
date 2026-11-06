@@ -17,6 +17,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.chat import _ATT_MARK, _CHAT_FILES
+from app.api.input_media import (
+    MultimodalOptions, ensure_checkpoint_owner, prepare_attachments, reserve_session,
+)
+from app.core.message_content import hydrate_messages
 from app.core.cancel import clear_stop, request_stop
 from app.core.db import SessionLocal
 from app.core.deps import get_current_user
@@ -26,6 +30,7 @@ from app.core.team_ctx import set_agent_team
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.graph.agent_runtime import effective_cfg as _effective_cfg, role_cfg as _role_cfg
+from app.graph.agent_runtime import role_run_config
 from app.graph.native_llm import native_round
 from app.graph.seminar import (SCHOLAR_IDS, _cards_digest, _insight_digest,
                                _notes_digest, SCHOLAR_ORIENTATION,
@@ -41,11 +46,12 @@ router = APIRouter(prefix="/api/v1/seminar", tags=["seminar"],
 
 
 class SeminarRequest(BaseModel):
-    session_id: str = Field(min_length=1)     # 建议 sem_ 前缀
+    session_id: str = Field(min_length=1, max_length=64)     # 建议 sem_ 前缀
     topic: str = Field(min_length=1, max_length=8000)
     token_budget: int | None = Field(None, ge=10_000, le=100_000_000)
     roles: list[dict] | None = None          # 与会学者子集（id 限四学者）
-    attachments: list[str] = []
+    attachments: list[str] = Field(default_factory=list, max_length=8)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
 
 
 def _sse(payload: dict) -> str:
@@ -84,15 +90,11 @@ def _resolve_roles(raw: list[dict] | None, settings) -> list[dict]:
 
 
 def _initial_state(req: SeminarRequest, user_id: str, settings,
-                   roles: list[dict]) -> dict:
-    topic = req.topic
-    if req.attachments:
-        blocks = [f"[附件：{att['filename']}]\n{att['text']}"
-                  for fid in req.attachments
-                  if (att := _CHAT_FILES.get(fid))]
-        if blocks:
-            topic = topic + _ATT_MARK + "\n\n".join(blocks)
+                   roles: list[dict], media_service=None) -> dict:
+    topic, media = prepare_attachments(req.topic, req.attachments, user_id,
+        req.multimodal, _CHAT_FILES, media_service)
     return {
+        "input_media": media, "multimodal": req.multimodal.model_dump(),
         "user_id": user_id, "session_id": req.session_id, "topic": topic,
         "roles": roles,
         "token_budget": int(req.token_budget
@@ -106,18 +108,8 @@ def _initial_state(req: SeminarRequest, user_id: str, settings,
 
 
 def _register_session(user_id: str, req: SeminarRequest, roles: list) -> None:
-    with SessionLocal() as db:
-        row = db.get(BrainstormSession, req.session_id)
-        if row is None:
-            db.add(BrainstormSession(
-                session_id=req.session_id, user_id=user_id,
-                topic=req.topic[:2000], status="running",
-                roles=roles, team="seminar"))          # ← 差异点
-        else:
-            row.status = "running"
-            row.final_proposal = ""
-            row.updated_at = utcnow()
-        db.commit()
+    reserve_session(user_id, req.session_id, team="seminar",
+                    topic=req.topic, roles=roles)
 
 
 def _finish_session(user_id: str, session_id: str, result: dict) -> None:
@@ -192,9 +184,18 @@ async def seminar_stream(req: SeminarRequest, request: Request,
     set_agent_team("seminar")    # 团队身份：只检索普通库 + 本队沉淀库
     uid = user.id
     graph = request.app.state.seminar_graph
+    await ensure_checkpoint_owner(
+        graph, {"configurable": {"thread_id": req.session_id}}, uid)
     settings = request.app.state.settings
+    roles = _resolve_roles(req.roles, settings)
+    initial = await run_in_threadpool(_initial_state, req, uid, settings, roles,
+                                     request.app.state.multimodal_service)
+    await run_in_threadpool(_register_session, uid, req, roles)
     sink: asyncio.Queue = asyncio.Queue()
     config = {"configurable": {"thread_id": req.session_id},
+              "tags": ["team:seminar"],
+              "metadata": {"team": "seminar", "user_id": uid,
+                           "session_id": req.session_id},
               "recursion_limit": 200}
 
     async def run_graph():
@@ -206,10 +207,7 @@ async def seminar_stream(req: SeminarRequest, request: Request,
             except Exception:
                 pass
             agent_trace.delete(req.session_id)      # 重跑：旧轨迹档案一并清掉
-            roles = _resolve_roles(req.roles, settings)
-            await run_in_threadpool(_register_session, uid, req, roles)
-            result = await graph.ainvoke(
-                _initial_state(req, uid, settings, roles), config=config)
+            result = await graph.ainvoke(initial, config=config)
             await run_in_threadpool(_finish_session, uid, req.session_id, result)
             if not result.get("stopped"):
                 await run_in_threadpool(_archive_report_to_kb, uid,
@@ -252,7 +250,8 @@ async def seminar_stream(req: SeminarRequest, request: Request,
 
 
 class StopRequest(BaseModel):
-    session_id: str
+    session_id: str = Field(min_length=1, max_length=64)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
 
 
 @router.post("/stop")
@@ -292,6 +291,8 @@ async def session_detail(session_id: str, request: Request,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not seminar owner")
+    if row.team != "seminar":
+        raise HTTPException(status_code=404, detail="not found in this team")
 
     graph = request.app.state.seminar_graph
     snap = await aget_state_retry(graph, {"configurable": {"thread_id": session_id}})
@@ -315,6 +316,7 @@ async def session_detail(session_id: str, request: Request,
 
 class SeminarAskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=8000)
+    multimodal: MultimodalOptions = Field(default_factory=MultimodalOptions)
 
 
 # 触发词 → 角色别名表：问题文本中最早命中的学者被唤起；未命中 → 主席
@@ -357,6 +359,8 @@ async def seminar_ask(session_id: str, req: SeminarAskRequest,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != user.id:
         raise HTTPException(status_code=403, detail="not seminar owner")
+    if row.team != "seminar":
+        raise HTTPException(status_code=404, detail="not found in this team")
 
     graph = request.app.state.seminar_graph
     ctx = request.app.state.workflow_ctx
@@ -373,6 +377,10 @@ async def seminar_ask(session_id: str, req: SeminarAskRequest,
     proposal = values.get("final_proposal") or row.final_proposal
 
     agent_id = _pick_agent(req.question, roles)
+    config = role_run_config(
+        {"configurable": {"thread_id": session_id}},
+        {"session_id": session_id, "user_id": user.id},
+        agent_id, "sem_", phase="ask")
     is_scholar = agent_id in SCHOLAR_IDS
     role = next((r for r in roles if r.get("id") == agent_id), {}) \
         if is_scholar else {}
@@ -407,6 +415,11 @@ async def seminar_ask(session_id: str, req: SeminarAskRequest,
     msgs = [SystemMessage(content=system),
             HumanMessage(content=req.question)]
     sid = session_id
+    media = values.get("input_media") or []
+    if media:
+        msgs[-1] = HumanMessage(content=[{"type": "text", "text": req.question}, *media])
+    msgs = await run_in_threadpool(hydrate_messages, msgs,
+        request.app.state.multimodal_service, user.id, req.multimodal.model_dump())
     sink: asyncio.Queue = asyncio.Queue()
 
     async def run_ask():
@@ -414,7 +427,8 @@ async def seminar_ask(session_id: str, req: SeminarAskRequest,
         try:
             resp, _usage, stopped = await native_round(
                 cfg, msgs, None, temperature, sid,
-                token_event="token", reasoning_event="ask_reasoning")
+                token_event="token", reasoning_event="ask_reasoning",
+                config=config)
             await sink.put({"type": "__done__"})
         except Exception as e:
             logger.warning("seminar ask failed: %s", e)
@@ -471,12 +485,17 @@ async def seminar_rerun_writer(req: StopRequest, request: Request,
         raise HTTPException(status_code=404, detail="not found")
     if row.user_id != uid:
         raise HTTPException(status_code=403, detail="not seminar owner")
+    if row.team != "seminar":
+        raise HTTPException(status_code=404, detail="not found in this team")
     if row.status == "running":
         raise HTTPException(status_code=409, detail="场次进行中，稍后再试")
     topic = row.topic
 
     graph = request.app.state.seminar_graph
-    config = {"configurable": {"thread_id": sid}}
+    config = role_run_config(
+        {"configurable": {"thread_id": sid}},
+        {"session_id": sid, "user_id": uid},
+        "rapporteur", "sem_", phase="rerun_writer")
     snap = await aget_state_retry(graph, config)
     values = dict((snap.values or {}) if snap else {})
     if not (values.get("reading_notes") or values.get("qa_transcript")
@@ -491,9 +510,9 @@ async def seminar_rerun_writer(req: StopRequest, request: Request,
         set_event_sink(sink)
         clear_stop(sid)
         try:
-            state = {**values, "stopped": False}
+            state = {**values, "stopped": False, "multimodal": req.multimodal.model_dump()}
             rapporteur = make_rapporteur_node(request.app.state.workflow_ctx)
-            update = await rapporteur(state)
+            update = await rapporteur(state, config=config)
             merged = {**values, **update}
             await run_in_threadpool(_finish_session, uid, sid, merged)
             if not merged.get("stopped"):

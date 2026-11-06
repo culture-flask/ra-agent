@@ -15,15 +15,34 @@
 import asyncio
 import json
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.config import merge_configs
 
-from app.core.cancel import is_stopped
 from app.core.events import emit
 from app.core.logging import get_logger
-from app.graph.native_llm import native_round, retry_event_name, to_openai_tools
+from app.core.message_content import hydrate_messages, text_content
+from app.graph.native_llm import native_round, retry_event_name
 from app.graph.nodes import WorkflowContext
 
 logger = get_logger("agent_runtime")
+
+
+async def input_messages(ctx: WorkflowContext, state: dict, messages):
+    """给本轮用户消息附上原始媒体引用，再按开关展开为模型输入。"""
+    media = state.get("input_media") or []
+    if media:
+        messages = [message.model_copy(deep=True) for message in messages]
+        last = next((message for message in reversed(messages)
+                     if getattr(message, "type", "") == "human"), None)
+        if last is not None:
+            content = last.content
+            blocks = ([{"type": "text", "text": content}] if isinstance(content, str)
+                      else list(content))
+            last.content = blocks + media
+    return await asyncio.to_thread(
+        hydrate_messages, messages, getattr(ctx, "multimodal_service", None),
+        state["user_id"], state.get("multimodal"))
 
 
 async def _persist_usage(state: dict, cfg, usage: dict | None) -> None:
@@ -31,7 +50,7 @@ async def _persist_usage(state: dict, cfg, usage: dict | None) -> None:
     同粒度），供 /usage/summary 报表——团队调用此前不入报表。
 
     best-effort：线程池异步写，失败只记日志，绝不影响研讨/辩论流程；
-    usage=None（langchain 回退路径拿不到用量）静默跳过。"""
+    供应商未提供 usage 时静默跳过。"""
     if not usage or not int(usage.get("total_tokens") or 0):
         return
 
@@ -56,8 +75,8 @@ async def _persist_usage(state: dict, cfg, usage: dict | None) -> None:
 
 
 def effective_cfg(ctx: WorkflowContext, user_id: str):
-    """生效 LLM 配置（用户配置 > 系统默认）；测试假服务无此方法 → None
-    → 各帮助函数回退 langchain 路径。与主图 _native_cfg 同语义。"""
+    """生效 LLM 配置（用户配置 > 系统默认）；测试假服务无此方法 → None，
+    改由 get_chat_model 提供模型给同一流协调器。"""
     getter = getattr(ctx.llm_service, "effective_config", None)
     if not callable(getter):
         return None
@@ -95,12 +114,32 @@ def role_cfg(ctx: WorkflowContext, state: dict, agent_id: str):
     return cfg
 
 
+def role_run_config(config: RunnableConfig | None, state: dict,
+                    agent_id: str, prefix: str = "bs_",
+                    phase: str = "") -> RunnableConfig:
+    """合并团队/角色标记，保留图注入的 callbacks、tags 与 metadata。"""
+    team = {"bs_": "debate", "sem_": "seminar",
+            "dr_": "deep_research"}.get(prefix, prefix.rstrip("_"))
+    phase = phase or str(((config or {}).get("metadata") or {})
+                        .get("langgraph_node") or "")
+    metadata = {"team": team, "agent": agent_id,
+                "session_id": state.get("session_id", ""),
+                "user_id": state.get("user_id", "")}
+    tags = [f"team:{team}", f"agent:{agent_id}"]
+    if phase:
+        metadata["phase"] = phase
+        tags.append(f"phase:{phase}")
+    return merge_configs(config, {"tags": tags, "metadata": metadata})
+
+
 async def llm_text(ctx: WorkflowContext, state: dict,
                    system_prompt: str, human_content: str,
                    temperature: float = 0.2,
                    prefix: str = "bs_",
                    emit_retry: bool = False,
-                   emit_extra: dict | None = None) -> tuple[str, int]:
+                   emit_extra: dict | None = None,
+                   config: RunnableConfig | None = None,
+                   agent_id: str = "control", cfg=None) -> tuple[str, int]:
     """控制类 LLM 调用（prepare / curate / moderator / merge）：不向前端
     流式透传，只需最终文本。返回 (文本, token用量)。失败上抛，由调用方降级。
 
@@ -109,83 +148,73 @@ async def llm_text(ctx: WorkflowContext, state: dict,
     sid = state["session_id"]
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    payload = [SystemMessage(content=system_prompt),
-               HumanMessage(content=human_content)]
-    cfg = effective_cfg(ctx, state["user_id"])
-    if cfg is not None:
-        # 空完成防御（与 agent_speak / generate 同纪律）：部分网关偶发
-        # "连上了但零内容"的完成。控制类调用若静默返回空串，下游会把失败
-        # 当正常——实例：溯源社撰写人拿到空 JSON → 引言/结论全空 → 整场
-        # 报告降级成汇编稿。指数退避整轮重试，耗尽仍空交由调用方兜底。
-        EMPTY_RETRY_MAX = 2
-        used = 0
-        resp = None
-        for attempt in range(EMPTY_RETRY_MAX + 1):
-            resp, usage, stopped = await native_round(
-                cfg, payload, None, temperature, sid,
-                token_event=f"{prefix}internal",
-                reasoning_event=f"{prefix}internal",
-                stream_events=False,
-                emit_retry=emit_retry, emit_extra=emit_extra)
-            used += int((usage or {}).get("total_tokens") or 0)
-            await _persist_usage(state, cfg, usage)
-            if stopped:
-                raise RuntimeError("stopped")
-            if str(resp.content or "").strip():
-                return str(resp.content), used
-            if attempt < EMPTY_RETRY_MAX:
-                delay = 0.5 * (2 ** attempt)
-                logger.warning("llm_text empty completion (attempt %d/%d) "
-                               "model=%s", attempt + 1, EMPTY_RETRY_MAX,
-                               cfg.model_id)
-                if emit_retry:            # 空完成重试同样让前端看到
-                    emit(retry_event_name(f"{prefix}x"),
-                         {"attempt": attempt + 1, "max": EMPTY_RETRY_MAX,
-                          "delay": round(delay, 1),
-                          "error": "输出为空，自动重试",
-                          **(emit_extra or {})})
-                await asyncio.sleep(delay)
-        return str(resp.content or ""), used
-    # 回退路径：测试假服务（与主图 generate 的回退条件一致）
-    import asyncio as _asyncio
-    model = await _asyncio.to_thread(ctx.llm_service.get_chat_model,
-                                     state["user_id"], temperature=temperature)
-    resp = await model.ainvoke(payload)
-    return str(resp.content or ""), 0
-
-
-async def _langchain_stream(model, msgs, sid: str, extra: dict, prefix: str):
-    """langchain 回退路径的一轮流式（镜像主图 _langchain_round，
-    事件换 f"{prefix}token" 并带 extra 字段）。"""
+    payload = await input_messages(ctx, state, [SystemMessage(content=system_prompt),
+                                               HumanMessage(content=human_content)])
+    if cfg is None:
+        cfg = effective_cfg(ctx, state["user_id"])
+    model = None
+    if cfg is None:
+        model = await asyncio.to_thread(ctx.llm_service.get_chat_model,
+                                        state["user_id"], temperature=temperature)
+    call_config = role_run_config(config, state, agent_id, prefix)
+    # 控制调用不向消息流公开正文；回调和追踪仍由标准模型执行。
+    call_config = merge_configs(call_config, {"tags": ["nostream"]})
+    # 空完成防御（与 agent_speak / generate 同纪律）：部分网关偶发
+    # "连上了但零内容"的完成。控制类调用若静默返回空串，下游会把失败
+    # 当正常——实例：溯源社撰写人拿到空 JSON → 引言/结论全空 → 整场
+    # 报告降级成汇编稿。指数退避整轮重试，耗尽仍空交由调用方兜底。
+    EMPTY_RETRY_MAX = 2
+    used = 0
     resp = None
-    stopped = False
-    async for chunk in model.astream(msgs):
-        if is_stopped(sid):                    # 用户点了停止：保留已生成部分
-            stopped = True
-            break
-        resp = chunk if resp is None else resp + chunk
-        text = chunk.content
-        if isinstance(text, str) and text:
-            emit(f"{prefix}token", {"content": text, **extra})
-        elif isinstance(text, list):
-            for part in text:
-                if isinstance(part, dict) and part.get("text"):
-                    emit(f"{prefix}token", {"content": part["text"], **extra})
-    if resp is None:
-        resp = AIMessage(content="")
-    return resp, None, stopped
+    for attempt in range(EMPTY_RETRY_MAX + 1):
+        resp, usage, stopped = await native_round(
+            cfg, payload, None, temperature, sid,
+            token_event=f"{prefix}internal",
+            reasoning_event=f"{prefix}internal",
+            stream_events=False,
+            emit_retry=emit_retry, emit_extra=emit_extra,
+            config=call_config, model=model)
+        used += int((usage or {}).get("total_tokens") or 0)
+        await _persist_usage(state, cfg, usage)
+        if stopped:
+            raise RuntimeError("stopped")
+        if text_content(resp.content).strip():
+            return text_content(resp.content), used
+        if attempt < EMPTY_RETRY_MAX:
+            delay = 0.5 * (2 ** attempt)
+            logger.warning("llm_text empty completion (attempt %d/%d) "
+                           "model=%s", attempt + 1, EMPTY_RETRY_MAX,
+                           getattr(cfg, "model_id", "chat"))
+            if emit_retry:            # 空完成重试同样让前端看到
+                emit(retry_event_name(f"{prefix}x"),
+                     {"attempt": attempt + 1, "max": EMPTY_RETRY_MAX,
+                      "delay": round(delay, 1),
+                      "error": "输出为空，自动重试",
+                      **(emit_extra or {})})
+            await asyncio.sleep(delay)
+    return text_content(resp.content), used
+
+
+async def _langchain_stream(model, msgs, sid: str, extra: dict, prefix: str,
+                            config: RunnableConfig | None = None):
+    """测试模型与真实模型复用相同的分片聚合、停止和重试协调器。"""
+    return await native_round(
+        None, msgs, None, getattr(model, "temperature", 0.3), sid,
+        token_event=f"{prefix}token", reasoning_event=f"{prefix}reasoning",
+        emit_extra=extra, config=config, model=model)
 
 
 async def agent_speak(ctx: WorkflowContext, state: dict,
                       agent_id: str, system_prompt: str, human_content: str,
                       temperature: float, tools: list | None,
                       tool_loop_max: int,
-                      cfg=None, prefix: str = "bs_") -> tuple[str, int, bool]:
+                      cfg=None, prefix: str = "bs_",
+                      config: RunnableConfig | None = None) -> tuple[str, int, bool]:
     """一个 agent 的一次流式发言（含 generate⇄tool_executor 式子循环）。
 
     返回 (发言全文, 累计token, stopped)。所有事件带 extra 字段。
-    - 原生路径：native_round（思考捕获 + 末块权威用量），工具需转原生格式；
-    - 回退路径：langchain astream + bind_tools；
+    - 标准模型流：native_round 保留思考分片、工具分片与末块权威用量；
+    - 测试假模型复用同一协调器；
     - 工具子循环上限 tool_loop_max，防止无限调研不发言/不收敛；
     - 工具预算耗尽仍想调工具 → 追加一轮无工具调用强制产出（强制收尾轮）；
     - 空完成（零内容零工具调用）指数退避重试（与主图 generate 同语义）；
@@ -195,7 +224,8 @@ async def agent_speak(ctx: WorkflowContext, state: dict,
     try:
         return await _agent_speak_impl(ctx, state, agent_id, system_prompt,
                                        human_content, temperature, tools,
-                                       tool_loop_max, cfg=cfg, prefix=prefix)
+                                       tool_loop_max, cfg=cfg, prefix=prefix,
+                                       config=config)
     except Exception as e:
         emit(f"{prefix}agent_fail", {"agent": agent_id,
                                      "error": short_reason(e)})
@@ -206,17 +236,18 @@ async def _agent_speak_impl(ctx: WorkflowContext, state: dict,
                             agent_id: str, system_prompt: str,
                             human_content: str, temperature: float,
                             tools: list | None, tool_loop_max: int,
-                            cfg=None, prefix: str = "bs_") -> tuple[str, int, bool]:
+                            cfg=None, prefix: str = "bs_",
+                            config: RunnableConfig | None = None) -> tuple[str, int, bool]:
     """agent_speak 的实现体（失败事件包装见 agent_speak）。"""
     uid, sid = state["user_id"], state["session_id"]
     if cfg is None:                         # 调用方未解析（测试/内部兜底）
         cfg = role_cfg(ctx, state, agent_id)
     extra = {"agent": agent_id}
-    native_tools = to_openai_tools(tools) if (tools and cfg is not None) else None
+    call_config = role_run_config(config, state, agent_id, prefix)
     from langchain_core.messages import SystemMessage, HumanMessage
 
-    msgs = [SystemMessage(content=system_prompt),
-            HumanMessage(content=human_content)]
+    msgs = await input_messages(ctx, state, [SystemMessage(content=system_prompt),
+                                            HumanMessage(content=human_content)])
     used = 0
     resp = None
     EMPTY_RETRY_MAX = 2                     # 空完成防御（与主图 generate 同语义）
@@ -237,10 +268,10 @@ async def _agent_speak_impl(ctx: WorkflowContext, state: dict,
         if cfg is not None:
             resp, usage, stopped = await native_round(
                 cfg, msgs,
-                None if last_round else native_tools, temperature, sid,
+                None if last_round else tools, temperature, sid,
                 token_event=f"{prefix}token",
                 reasoning_event=f"{prefix}reasoning",
-                emit_extra=extra)
+                emit_extra=extra, config=call_config)
         else:
             model = await asyncio.to_thread(ctx.llm_service.get_chat_model,
                                             uid, temperature=temperature)
@@ -248,11 +279,12 @@ async def _agent_speak_impl(ctx: WorkflowContext, state: dict,
             if eff_tools:
                 model = model.bind_tools(eff_tools)
             resp, usage, stopped = await _langchain_stream(model, msgs, sid,
-                                                           extra, prefix)
+                                                           extra, prefix,
+                                                           config=call_config)
         round_idx += 1
         used += int((usage or {}).get("total_tokens") or 0)
         await _persist_usage(state, cfg, usage)
-        text_out = str(resp.content or "")
+        text_out = text_content(resp.content)
         calls = getattr(resp, "tool_calls", None)
         if stopped:
             return text_out, used, stopped
@@ -295,7 +327,7 @@ async def _agent_speak_impl(ctx: WorkflowContext, state: dict,
                        agent_id, empty_retried, EMPTY_RETRY_MAX)
         await asyncio.sleep(0.5 * 2 ** (empty_retried - 1))
         round_idx -= 1                          # 重做当前轮（收尾轮重试仍不带工具）
-    return str(resp.content or ""), used, False
+    return text_content(resp.content), used, False
 
 
 def short_reason(e: Exception) -> str:

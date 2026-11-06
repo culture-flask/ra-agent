@@ -54,10 +54,11 @@ def make_pdf_pages(texts: list[str]) -> bytes:
 # 数据库也必须指向专用测试库，绝不能清空开发库（否则跑一次测试就删一次真实知识库）：
 #   docker exec ra-postgres psql -U ra -d ra_agent -c "CREATE DATABASE ra_agent_test OWNER ra"
 #   DATABASE_URL=postgresql+psycopg://ra:ra@localhost:5432/ra_agent_test .venv/bin/alembic upgrade head
-os.environ["DATABASE_URL"] = "postgresql+psycopg://ra:ra@localhost:5432/ra_agent_test"
+os.environ["DATABASE_URL"] = os.environ.get(
+    "RA_TEST_DATABASE_URL", "postgresql+psycopg://ra:ra@localhost:5432/ra_agent_test")
 os.environ["EMBEDDING_DEFAULT_PROVIDER"] = "local"
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="ra-test-data-")
-os.environ["CHROMA_DIR"] = tempfile.mkdtemp(prefix="ra-test-chroma-")
+os.environ["CHROMA_PERSIST_DIR"] = tempfile.mkdtemp(prefix="ra-test-chroma-")
 # 重排默认走远端端点（config/settings.yaml），测试必须离线确定性 → 关闭
 os.environ["RETRIEVAL_RERANK_ENABLED"] = "false"
 
@@ -110,7 +111,7 @@ def clean_db():
     """每个测试前清空 users/kbs 表，保证注册/建库类测试可重复运行。
 
     autouse=True：所有测试自动使用，无需在测试函数里显式声明。
-    这是"测试可重复"的最简单方案；更完整的"每个测试事务回滚"技术在第 7 天讲。
+    这是"测试可重复"的最简单方案；
     """
     with engine.begin() as conn:          # 事务：DELETE 执行后自动提交
         conn.execute(text("DELETE FROM llm_usage"))

@@ -37,6 +37,7 @@ from app.mcp.host import MCPHost
 from app.models import BrainstormSession, Conversation, Feedback, LLMUsage, Memory
 from app.services.kb_service import KBService
 from app.services.memory_service import MemoryService
+from app.services.multimodal import MultimodalService
 from app.api.memories import router as memories_router
 from app.settings import BASE_DIR, Settings
 
@@ -163,7 +164,10 @@ async def lifespan(app: FastAPI):
     await mcp_adapter.ensure_catalog()         # 启动时 tools/list 动态发现
     logger.info("发现 %d 个 MCP 工具", len(mcp_host.tools or []))
 
-    ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer, memory_service)
+    multimodal_service = MultimodalService(Path(settings.data_dir) / "chat_media")
+    app.state.multimodal_service = multimodal_service
+    ctx = WorkflowContext(settings, llm_service, kb_service, mcp_adapter, tracer,
+                          memory_service, multimodal_service=multimodal_service)
     app.state.workflow_ctx = ctx                  # API 层后台记忆管线复用同一编排上下文
     app.state.graph = await build_graph(ctx)      # async：内部建 AsyncPostgresSaver
     app.state.brainstorm_graph = await build_brainstorm_graph(ctx)   # 争鸣社子图（独立 checkpointer）

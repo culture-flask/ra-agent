@@ -20,7 +20,7 @@ asyncio.set_event_loop(_loop)
 
 
 def _ensure_user(user_id: str):
-    """memories.user_id 有外键指向 users，写记忆前先建用户（第 5 天同款）。"""
+    """memories.user_id 有外键指向 users，写记忆前先建用户。"""
     with SessionLocal() as db:
         if not db.get(User, user_id):
             db.add(User(id=user_id, username=user_id, password_hash="x"))
@@ -34,7 +34,7 @@ def _run(coro):
 class ScriptedModel:
     """脚本化假模型：依次返回预置消息；可记录收到的 system 提示词。
 
-    注意：responses 必须共享列表（不拷贝）——第 6 天踩过的坑：
+    注意：responses 必须共享列表（不拷贝）：
     拷贝后每次 get_chat_model 都从第一条开始弹，后面的节点拿到错误消息。
     """
 

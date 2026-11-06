@@ -3,6 +3,7 @@ agent 标注 + 倒计时秒数）；agent_speak 重试耗尽 → agent_fail 事�
 
 import asyncio
 import httpx
+import pytest
 from types import SimpleNamespace
 
 from app.core.events import clear_event_sink, set_event_sink
@@ -20,9 +21,9 @@ async def _nosleep(_):
     return None
 
 
-def _chunk(content="", reasoning=None, finish=None, usage=None):
+def _chunk(content="", reasoning=None, finish=None, usage=None, tool_calls=None):
     delta = SimpleNamespace(content=content, reasoning_content=reasoning,
-                            tool_calls=None)
+                            tool_calls=tool_calls)
     choice = SimpleNamespace(delta=delta, finish_reason=finish)
     return SimpleNamespace(choices=[choice], usage=usage)
 
@@ -32,6 +33,13 @@ class _FlakyStream:
 
     def __init__(self, chunks, fail_times):
         self._chunks, self._fail_times = list(chunks), fail_times
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.close()
 
     def __aiter__(self):
         self._it = iter(self._chunks)
@@ -42,12 +50,44 @@ class _FlakyStream:
             self._fail_times -= 1
             raise httpx.ReadTimeout("read timed out")
         try:
-            return next(self._it)
+            chunk = next(self._it)
         except StopIteration:
             raise StopAsyncIteration
+        if isinstance(chunk, BaseException):
+            raise chunk
+        return _wire(chunk)
 
     async def close(self):
-        pass
+        self.closed = True
+
+
+def _wire(value):
+    if isinstance(value, SimpleNamespace):
+        return {key: _wire(item) for key, item in vars(value).items()}
+    if isinstance(value, dict):
+        return {key: _wire(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_wire(item) for item in value]
+    return value
+
+
+def _install_streams(monkeypatch, streams):
+    """各尝试使用独立 wire 流，可在若干 delta 后断开。"""
+    import openai
+    calls = {"n": 0}
+
+    class _Completions:
+        async def create(self, **kwargs):
+            stream = streams[min(calls["n"], len(streams) - 1)]
+            calls["n"] += 1
+            return stream
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _Client)
+    return calls
 
 
 def _install_flaky(monkeypatch, chunks, fail_times):
@@ -130,6 +170,71 @@ def test_retry_event_prefix_and_agent(monkeypatch):
     assert retries[0]["agent"] == "innovator"
 
 
+@pytest.mark.parametrize("prefix", ["", "bs_", "sem_", "dr_"])
+def test_retry_resets_attempt_and_isolates_tools_and_last_usage(monkeypatch, prefix):
+    """失败尝试的正文/推理可撤回，半截工具参数与用量不污染成功尝试。"""
+    monkeypatch.setattr(asyncio, "sleep", _nosleep)
+    failed = _FlakyStream([
+        _chunk("失败😀", reasoning="错误🧪", usage={"prompt_tokens": 100,
+               "completion_tokens": 50, "total_tokens": 150}),
+        _chunk(tool_calls=[{"index": 0, "id": "failed-call", "type": "function",
+                            "function": {"name": "discard_me", "arguments": '{"bad":'}}]),
+        httpx.ReadTimeout("read timed out after partial output"),
+    ], 0)
+    successful = _FlakyStream([
+        _chunk("新答案", reasoning="新思路", usage={"prompt_tokens": 1,
+               "completion_tokens": 1, "total_tokens": 2}),
+        _chunk(tool_calls=[{"index": 0, "id": "successful-call", "type": "function",
+                            "function": {"name": "search", "arguments": '{"q":'}}]),
+        _chunk(tool_calls=[{"index": 0, "function": {"arguments": '"论文"}'}}],
+               finish="tool_calls", usage={"prompt_tokens": 8, "completion_tokens": 3,
+                    "total_tokens": 11, "prompt_tokens_details": {"cached_tokens": 2},
+                    "completion_tokens_details": {"reasoning_tokens": 2}}),
+    ], 0)
+    calls = _install_streams(monkeypatch, [failed, successful])
+    sink = asyncio.Queue()
+    set_event_sink(sink)
+    try:
+        resp, usage, stopped = _run(native_round(
+            CFG, [], [{"type": "function", "function": {"name": "search",
+                "description": "检索", "parameters": {"type": "object",
+                    "properties": {"q": {"type": "string"}}}}}], 0.3, "retry-isolation",
+            token_event=prefix + "token", reasoning_event=prefix + "reasoning",
+            emit_extra={"agent": "researcher"} if prefix else None))
+    finally:
+        clear_event_sink()
+
+    assert calls["n"] == 2 and not stopped
+    assert failed.closed and successful.closed
+    assert resp.content == "新答案"
+    assert len(resp.tool_calls) == 1
+    assert resp.tool_calls[0]["name"] == "search"
+    assert resp.tool_calls[0]["args"] == {"q": "论文"}
+    assert resp.tool_calls[0]["id"] == "successful-call"
+    assert usage == {"input_tokens": 8, "output_tokens": 3,
+                     "total_tokens": 11, "cached_tokens": 2}
+    assert resp.usage_metadata["output_token_details"]["reasoning"] == 2
+
+    events = _drain(sink)
+    resets = [ev for ev in events if ev["type"] == prefix + "stream_reset"]
+    assert len(resets) == 1
+    reset = resets[0]
+    assert reset["token_event"] == prefix + "token"
+    assert reset["reasoning_event"] == prefix + "reasoning"
+    assert reset["token_chars"] == len("失败😀")
+    assert reset["reasoning_chars"] == len("错误🧪")
+    if prefix:
+        assert reset["agent"] == "researcher"
+    tokens = [ev for ev in events if ev["type"] == prefix + "token"]
+    reasoning = [ev for ev in events if ev["type"] == prefix + "reasoning"]
+    assert [ev["content"] for ev in tokens] == ["失败😀", "新答案"]
+    assert [ev["content"] for ev in reasoning] == ["错误🧪", "新思路"]
+    assert reset["previous_attempt_id"] == tokens[0]["attempt_id"] == reasoning[0]["attempt_id"]
+    assert reset["attempt_id"] == tokens[1]["attempt_id"] == reasoning[1]["attempt_id"]
+    assert reset["attempt_id"] != reset["previous_attempt_id"]
+    assert events.index(tokens[0]) < events.index(reset) < events.index(tokens[1])
+
+
 def test_truncation_retry_emits_event(monkeypatch):
     """截断重试（无 finish_reason/usage）也发 retry 事件。"""
     monkeypatch.setattr(asyncio, "sleep", _nosleep)
@@ -142,8 +247,13 @@ def test_truncation_retry_emits_event(monkeypatch):
         clear_event_sink()
     assert calls["n"] == 2                       # 截断后整轮重试了一次
     assert resp.content == "半截"                # 重试仍截断 → 接受部分内容
-    retries = [e for e in _drain(sink) if e["type"] == "retry"]
+    events = _drain(sink)
+    retries = [e for e in events if e["type"] == "retry"]
     assert len(retries) == 1 and "截断" in retries[0]["error"]
+    resets = [e for e in events if e["type"] == "stream_reset"]
+    assert len(resets) == 1
+    assert resets[0]["token_chars"] == len("半截")
+    assert resets[0]["reasoning_chars"] == 0
 
 
 def test_agent_speak_emits_agent_fail(monkeypatch):
@@ -185,7 +295,7 @@ def test_control_calls_do_not_emit_retry(monkeypatch):
                           stream_events=False))
     finally:
         clear_event_sink()
-    assert all(e["type"] != "bs_retry" for e in _drain(sink))
+    assert not _drain(sink)
 
 
 def test_llm_text_emits_retry_for_writer(monkeypatch):

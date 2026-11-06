@@ -20,6 +20,7 @@ from app.api.chat import _ATT_MARK
 from app.core.db import SessionLocal
 from app.core.deps import get_current_user
 from app.core.logging import get_logger
+from app.core.message_content import media_files, text_content
 from app.graph.nodes import _RET_MARK
 from app.models import Conversation, User
 
@@ -42,7 +43,7 @@ def _split_attachments(content) -> tuple[str, list[str]]:
     （«检索结果» 标记）追加在整条消息末尾——回放时一并剔除检索块；
     无标记的老消息原样返回。
     """
-    text = content if isinstance(content, str) else str(content or "")
+    text = text_content(content)
     if _RET_MARK in text:                     # 检索块在末尾：先截掉再拆附件
         text = text.split(_RET_MARK)[0].rstrip()
     if _ATT_MARK not in text:
@@ -54,12 +55,7 @@ def _split_attachments(content) -> tuple[str, list[str]]:
 
 def _content_text(content) -> str:
     """消息 content 统一为纯文本（多模态 list 取各 text 部分拼接）。"""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(p.get("text", "") for p in content
-                       if isinstance(p, dict))
-    return str(content or "")
+    return text_content(content)
 
 
 @router.get("")
@@ -100,8 +96,9 @@ async def conversation_messages(session_id: str, request: Request,
         if t == "human":
             question, names = _split_attachments(getattr(m, "content", ""))
             msg = {"role": "user", "content": question}
-            if names:
-                msg["files"] = [{"name": n} for n in names]
+            files = [{"name": n} for n in names] + media_files(getattr(m, "content", ""))
+            if files:
+                msg["files"] = files
             out.append(msg)
         elif t == "ai":
             text = _content_text(getattr(m, "content", ""))

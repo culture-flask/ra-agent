@@ -100,9 +100,6 @@ def _native_tool_specs() -> list[dict]:
             "name": "search_knowledge_base",
             "description": (
                 "在当前用户的知识库中按任意检索词做混合检索（向量+BM25）。"
-                "与被动等系统注入的检索结果不同，本工具让你主动用自己关心的角度"
-                "查证知识库内容——头脑风暴调研/辩论时应优先用它查知识库，"
-                "知识库没有的再用联网/学术检索工具。"
                 "可选 kb_name 限定单个知识库；缺省搜索全部可见库。"),
             "parameters": {
                 "type": "object",

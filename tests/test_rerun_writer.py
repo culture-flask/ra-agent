@@ -57,8 +57,9 @@ def test_debate_rerun_writer_happy_path(auth_factory, monkeypatch):
     graph = _fake_graph(state)
     calls = {}
 
-    async def fake_synthesis(ctx, st):
+    async def fake_synthesis(ctx, st, config=None):
         calls["state"] = st
+        calls["config"] = config
         return {"final_proposal": "NEW PROPOSAL", "token_budget_used": 5}
 
     archived = []
@@ -77,6 +78,8 @@ def test_debate_rerun_writer_happy_path(auth_factory, monkeypatch):
     # 节点收到 checkpoint 恢复的状态，且停止标记被复位
     assert calls["state"]["stopped"] is False
     assert calls["state"]["positions"][0]["agent_name"] == "A"
+    assert calls["config"]["configurable"]["thread_id"] == "bs-rw-1"
+    assert calls["config"]["metadata"]["agent"] == "writer"
     # 落库：成稿更新 + 状态 done
     row = _row("bs-rw-1")
     assert row.status == "done" and row.final_proposal == "NEW PROPOSAL"
@@ -118,8 +121,9 @@ def test_seminar_rerun_writer(auth_factory, monkeypatch):
     calls = {}
 
     def fake_rapporteur(ctx):
-        async def _node(st):
+        async def _node(st, config=None):
             calls["state"] = st
+            calls["config"] = config
             return {"final_proposal": "SEM NEW", "token_budget_used": 3}
         return _node
 
@@ -134,6 +138,8 @@ def test_seminar_rerun_writer(auth_factory, monkeypatch):
         r = _post(c, h1, "sem-rw-1", "seminar")
     assert r.status_code == 200
     assert calls["state"]["stopped"] is False
+    assert calls["config"]["configurable"]["thread_id"] == "sem-rw-1"
+    assert calls["config"]["metadata"]["agent"] == "rapporteur"
     row = _row("sem-rw-1")
     assert row.status == "done" and row.final_proposal == "SEM NEW"
     assert graph.updated[1] == "rapporteur"
@@ -150,8 +156,9 @@ def test_deep_research_rerun_writer(auth_factory, monkeypatch):
     calls = {}
 
     def fake_frame(ctx):
-        async def _node(st):
+        async def _node(st, config=None):
             calls["frame_state"] = st
+            calls["config"] = config
             return {"toc": "目录", "introduction": "引言", "conclusion": "结论"}
         return _node
 
@@ -173,6 +180,8 @@ def test_deep_research_rerun_writer(auth_factory, monkeypatch):
     # publish 收到 write_frame 的产出（章节 + 引言/结论装配）
     assert calls["publish_state"]["toc"] == "目录"
     assert calls["publish_state"]["chapters"][0]["title"] == "背景"
+    assert calls["config"]["configurable"]["thread_id"] == "dr-rw-1"
+    assert calls["config"]["metadata"]["agent"] == "writer"
     row = _row("dr-rw-1")
     assert row.status == "done" and row.final_proposal == "REPORT"
     assert graph.updated[1] == "publish"

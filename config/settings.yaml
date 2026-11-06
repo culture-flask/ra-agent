@@ -40,6 +40,9 @@ llm:
     gemini:      { base_url: https://generativelanguage.googleapis.com/v1beta/openai, listable: true }
     ollama:      { base_url: http://localhost:11434/v1, listable: true }
 
+chunking:
+  method: fixed  # 切分策略：fixed（定长窗口 1000 字/150 重叠）| hierarchical（段落→标点逐级退让，300~600 字/50 重叠，块首带标题+章节头）
+
 retrieval:
   mode: hybrid  # 对话检索模式：vector（纯向量）| hybrid（向量 + BM25 混合），可在前端切换
   per_kb_k: 10   # 对话 RAG：每个知识库检索几条（前端可调，1~20）

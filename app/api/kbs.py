@@ -234,7 +234,7 @@ async def upload_documents(kb_id: str, request: Request,
     其他）-> status=ready|failed（>=1 个成功即 ready）。
     轮询 GET /kbs/{kb_id}/ingest 看逐文件进度与错误明细。
     用 FastAPI BackgroundTasks（响应返回后由框架可靠执行，测试可预期）；
-    生产环境可换成 Celery/ARQ Worker（第 10 天）。
+    生产环境可换成 Celery/ARQ Worker。
     """
     kb = await _get_kb(request, kb_id)
     if kb.status == "indexing":

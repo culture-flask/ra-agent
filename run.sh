@@ -11,6 +11,8 @@
 set -uo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 与虚拟环境内安装的命令保持一致，供音视频处理等子进程使用。
+export PATH="$APP_DIR/.venv/bin:$PATH"
 LOG_FILE="/tmp/ra-agent.log"
 PORT=8000
 MATCH="uvicorn app.main:app"   # 进程匹配串（不含 run.sh 自身）
